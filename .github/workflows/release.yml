@@ -37,6 +37,11 @@ jobs:
           registry-url: 'https://registry.npmjs.org/'
 
       - name: Install dependencies
+        env:
+          # GitHub-hosted runners default NODE_ENV=production, which makes
+          # `npm ci` skip devDependencies (jest, typescript, @types/*, etc).
+          # Force development so typecheck + tests have the toolchain they need.
+          NODE_ENV: development
         run: npm ci
 
       - name: Verify tag matches package.json version
