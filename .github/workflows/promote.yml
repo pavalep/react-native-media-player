@@ -45,8 +45,10 @@ jobs:
           # Strip leading 'v' if user typed it
           VERSION="${VERSION#v}"
           echo "Promoting ${PKG}@${VERSION} from staging → latest"
-          # Confirm the version is published with the staging tag
-          STAGING_VER=$(npm view "${PKG}@staging" version --registry https://registry.npmjs.org/ 2>&1 || true)
+          # Confirm the version is published with the staging tag.
+          # stderr is suppressed (2>/dev/null) to drop deprecation warnings
+          # that would otherwise corrupt the captured version string.
+          STAGING_VER=$(npm view "${PKG}@staging" version --registry https://registry.npmjs.org/ --silent 2>/dev/null || true)
           echo "npm staging tag currently points at: ${STAGING_VER}"
           if [ "$STAGING_VER" != "$VERSION" ]; then
             echo "::error::Version ${VERSION} is not the current @staging (got ${STAGING_VER}). Aborting."
