@@ -18,7 +18,7 @@ on:
 # mutations under the staging flow. NO NPM_TOKEN secret is required.
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -31,6 +31,13 @@ jobs:
       url: https://www.npmjs.com/package/@simba-dev/react-native-media-player
 
     steps:
+      # Checkout so the `gh` CLI has a git repo context for tag/release lookups.
+      # Uses the default branch (no `ref:`) since this is a workflow_dispatch.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
