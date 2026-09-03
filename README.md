@@ -4,6 +4,24 @@ React Native video & audio player powered by [libmpv](https://mpv.io/), with fir
 
 ![Simba Player hero image — Android video player UI mockup](https://raw.githubusercontent.com/pavalep/react-native-media-player/main/assets/hero.svg)
 
+<p align="left">
+  <a href="https://www.npmjs.com/package/@simba-dev/react-native-media-player"><img alt="npm version" src="https://img.shields.io/npm/v/@simba-dev/react-native-media-player?color=cb3837&label=npm&logo=npm" /></a>
+  <a href="https://github.com/pavalep/react-native-media-player/releases"><img alt="GitHub release" src="https://img.shields.io/github/v/release/pavalep/react-native-media-player?include_prereleases&sort=semver" /></a>
+  <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/pavalep/react-native-media-player?color=blue" /></a>
+  <a href="https://www.npmjs.com/package/@simba-dev/react-native-media-player"><img alt="npm downloads" src="https://img.shields.io/npm/dm/@simba-dev/react-native-media-player" /></a>
+  <a href="https://github.com/pavalep/react-native-media-player/tags"><img alt="GitHub tags" src="https://img.shields.io/github/tag-date/pavalep/react-native-media-player?label=latest%20tag&sort=semver" /></a>
+</p>
+
+<p align="left">
+  <a href="https://github.com/pavalep/react-native-media-player/releases">📦 Releases</a>
+  &nbsp;·&nbsp;
+  <a href="./CHANGELOG.md">📝 CHANGELOG</a>
+  &nbsp;·&nbsp;
+  <a href="https://www.npmjs.com/package/@simba-dev/react-native-media-player">📦 npm package</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/pavalep/react-native-media-player/tags">🏷️ Tags</a>
+</p>
+
 ## Table of contents
 
 1. [What is `@simba-dev/react-native-media-player`?](#what-is-simbareact-native-media-player)
@@ -529,4 +547,4 @@ Consumers are responsible for ensuring their app's license obligations are met w
 
 ---
 
-**Status:** V12 — Phase 32 (Module documentation) complete. See [SIMBA_PLAYER_MODULE_V12_SPECIFICATION.md](file:///x:/Development/SIMBA/MOBILE_APP_REACT_NATIVE/md/SIMBA_PLAYER_MODULE_V12_SPECIFICATION.md) for the full roadmap.
+**Status:** V12 — latest published version is **1.0.2** on [npmjs](https://www.npmjs.com/package/@simba-dev/react-native-media-player) and [GitHub Releases](https://github.com/pavalep/react-native-media-player/releases). See [CHANGELOG.md](./CHANGELOG.md) for the full per-version notes.
