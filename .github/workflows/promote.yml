@@ -28,7 +28,8 @@ jobs:
         with:
           # Trusted publishing requires npm CLI >= 11.5.1 + Node >= 22.14.
           node-version: 24
-          registry-url: 'https://registry.npmjs.org/'
+          # registry-url omitted — see release.yml for rationale.
+          # Without it, npm CLI uses OIDC for auth when available.
 
       - name: Verify staging version exists
         shell: bash

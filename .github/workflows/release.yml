@@ -36,7 +36,15 @@ jobs:
           # Node 24 ships the newest npm CLI by default.
           node-version: 24
           cache: npm
-          registry-url: 'https://registry.npmjs.org/'
+          # NOTE: registry-url intentionally omitted. setup-node writes a
+          # .npmrc containing `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
+          # when registry-url is set, which causes npm CLI to skip its built-in
+          # OIDC auth exchange (npm instead treats ${NODE_AUTH_TOKEN} as the
+          # bearer token — but with trusted publishing no token is set, so
+          # the publish ends up unauthenticated → 404 from the registry).
+          # See https://github.com/changesets/changesets/issues/1914
+          # Without registry-url, npm CLI detects the GitHub Actions OIDC
+          # environment and uses it for authentication directly.
 
       - name: Install dependencies
         env:
