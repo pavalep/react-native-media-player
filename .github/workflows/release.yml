@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'   # matches v1.0.0, v1.2.3, etc.
+
+# Required for OIDC-based npm provenance (the modern path).
+# If you only use the NPM_TOKEN secret, you can remove `id-token: write`.
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false   # never cancel a release mid-flight
+
+jobs:
+  release:
+    name: Publish to npm + create GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history for changelog/release-notes
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          # registry-url enables OIDC + provenance when paired with `id-token: write`.
+          # Falls back to NODE_AUTH_TOKEN (NPM_TOKEN secret) when provenance is disabled.
+          registry-url: 'https://registry.npmjs.org/'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify tag matches package.json version
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          echo "tag version    = v${TAG_VERSION}"
+          echo "package version = ${PKG_VERSION}"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Git tag v${TAG_VERSION} does not match package.json version ${PKG_VERSION}."
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test -- --ci
+
+      - name: Verify package contents (dry-run)
+        run: npm pack --dry-run
+
+      # ---- publish ---------------------------------------------------------
+      #
+      # This workflow supports two authentication modes:
+      #
+      # 1) OIDC + provenance (recommended, modern):
+      #      - Requires `permissions: id-token: write` (set above).
+      #      - Requires the npmjs org to allow trusted publishing
+      #        (https://docs.npmjs.com/trusted-publishers).
+      #      - The `--provenance` flag attaches a GitHub Actions OIDC
+      #        attestation, proving the package was built from this
+      #        commit on github.com.
+      #      - NO NPM_TOKEN secret needed.
+      #
+      # 2) Classic NPM_TOKEN (fallback):
+      #      - Set a `NPM_TOKEN` repo secret with a granular access
+      #        token that has Bypass 2FA + read+publish on @simba-dev.
+      #      - Drop the `--provenance` flag below.
+      #
+      # We default to (1). If your org isn't configured for trusted
+      # publishing yet, comment out the `--provenance` flag and add
+      # an `NPM_TOKEN` secret at
+      # https://github.com/${{ github.repository }}/settings/secrets/actions
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          # NODE_AUTH_TOKEN is auto-populated by setup-node from
+          # OIDC when registry-url is set, OR from NPM_TOKEN secret.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # ---- github release --------------------------------------------------
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,40 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Calcutta"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "automated"
+    groups:
+      react-native:
+        patterns:
+          - "react-native"
+          - "@react-native/*"
+      testing:
+        patterns:
+          - "jest"
+          - "@types/jest"
+          - "@testing-library/*"
+    commit-message:
+      prefix: "chore(deps)"
+    # Don't auto-bump react-native minor versions — those need
+    # manual review for bridgeless-mode compatibility.
+    ignore:
+      - dependency-name: "react-native"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "ci"
+      - "automated"
+    commit-message:
+      prefix: "ci(actions)"
