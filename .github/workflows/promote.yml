@@ -12,6 +12,14 @@ on:
 # manual approval by an environment reviewer (configured at
 # https://github.com/pavalep/react-native-media-player/settings/environments).
 # This ensures a real human (you) confirms before staging becomes latest.
+#
+# OIDC trusted publishing is used (same as release.yml). The trusted publisher
+# on npmjs is configured for "npm stage publish", which covers `npm dist-tag`
+# mutations under the staging flow. NO NPM_TOKEN secret is required.
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   promote:
@@ -23,13 +31,11 @@ jobs:
       url: https://www.npmjs.com/package/@simba-dev/react-native-media-player
 
     steps:
-      - name: Setup Node.js 24
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          # Trusted publishing requires npm CLI >= 11.5.1 + Node >= 22.14.
-          node-version: 24
-          # registry-url omitted — see release.yml for rationale.
-          # Without it, npm CLI uses OIDC for auth when available.
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Verify staging version exists
         shell: bash
@@ -49,13 +55,10 @@ jobs:
           # Save resolved version for the next step
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
-      # OIDC trusted publishing isn't supported for `npm dist-tag` —
-      # dist-tag mutations still need a token. We use the same NPM_TOKEN
-      # secret as a fallback (fine here because the promotion step is
-      # already gated by a human + environment approval).
+      # OIDC trusted publishing for the dist-tag flip.
+      # No NPM_TOKEN secret required — npm uses the GitHub Actions OIDC token
+      # minted by the `id-token: write` permission above.
       - name: Promote staging → latest
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm dist-tag add "@simba-dev/react-native-media-player@${VERSION}" latest
 
       - name: Publish the draft GitHub Release
