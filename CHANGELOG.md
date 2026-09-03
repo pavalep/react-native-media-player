@@ -4,6 +4,29 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-09-03
+
+### Added
+
+- **GitHub Actions CI/CD pipeline.** Two workflows under `.github/workflows/`:
+  - `ci.yml` — runs `npm ci` + `tsc --noEmit` + `npm run lint` + `jest` on a Node 20/22 matrix for every push to `main` and every PR. Concurrency-grouped to cancel stale runs. Coverage uploaded as artifact.
+  - `release.yml` — on `v*.*.*` tag push: verifies the git tag matches `package.json` version, runs typecheck + lint + jest + `npm pack --dry-run`, then publishes to npm with `--provenance` (OIDC attestation from GitHub Actions) and auto-creates a GitHub Release with auto-generated notes.
+- **Dependabot** (`.github/dependabot.yml`) — weekly npm + GitHub Actions dependency updates, grouped (react-native, testing) with semver guards on react-native minor bumps (bridgeless-mode compat).
+
+### Fixed
+
+- **`tsconfig.json`** — exclude `src/README.example.tsx` from `tsc --noEmit`. The file is example-code-only, intentionally excluded from the npm tarball via `package.json` `files`, but `tsc` was picking it up via `include: ["src/**/*"]` and failing on 20 errors (`Cannot find module 'react'`, missing `children` prop, etc.).
+- **`README.md`** — added CI + Release workflow status badges; updated the bottom Status line to point at GitHub Releases + CHANGELOG instead of the broken link to the consumer-app spec doc.
+
+### Changed
+
+- **Node CI matrix** bumped from `[18, 20]` to `[20, 22]` — Node 18 reached EOL April 2025 and Node 20 is deprecated on GitHub Actions runners as of Sept 2025.
+- **`package-lock.json`** committed (594 KB) so `npm ci` can resolve pinned versions in CI.
+
+### Migration from 1.0.2
+
+No code changes. CI/CD infrastructure only. Consumers who installed 1.0.2 see no behavioral difference.
+
 ## [1.0.2] - 2026-09-03
 
 ### Fixed
