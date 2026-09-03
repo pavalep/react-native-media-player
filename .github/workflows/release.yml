@@ -36,9 +36,7 @@ jobs:
           # Trusted publishing requires npm >= 11.5 + Node >= 22.14.
           # docs example uses Node 24 (the runner-default).
           node-version: '24'
-          # Per docs: never use caching in release builds.
-          # Cached `.npmrc`/package-lock state can leak into publish steps.
-          cache: false
+          # Caching omitted on purpose for release builds (per docs).
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
