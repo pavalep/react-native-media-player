@@ -92,14 +92,14 @@ jobs:
       # to this exact commit + workflow run, viewable on npmjs.com under
       # the version's "Provenance" tab.
       - name: Publish to npm (staging tag)
+        # OIDC trusted publishing. Per https://docs.npmjs.com/trusted-publishers
+        # and actions/setup-node docs: with `registry-url` set + npm >= 11.5,
+        # npm automatically exchanges the GitHub Actions OIDC token for an
+        # npm auth token. NO NPM_TOKEN env var should be present on this step —
+        # if `NPM_TOKEN` (or NODE_AUTH_TOKEN) is exported (even empty), npm
+        # treats it as the configured bearer token and short-circuits OIDC,
+        # which is why a previous run failed with ENEEDAUTH.
         run: npm publish --provenance --access public --tag=staging
-        env:
-          # Use OIDC token from GitHub Actions (not a long-lived secret).
-          # setup-node with registry-url configured the .npmrc to point at
-          # registry.npmjs.org and uses NPM_TOKEN if set; we explicitly
-          # unset NPM_TOKEN / NODE_AUTH_TOKEN so OIDC fallback fires.
-          NPM_TOKEN: ''
-          NODE_AUTH_TOKEN: ''
 
       # ---- github release (draft, awaiting promote) ----------------------
       # Mark the release as a draft so consumers don't see "Latest"
