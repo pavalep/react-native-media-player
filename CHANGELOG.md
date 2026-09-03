@@ -79,18 +79,18 @@ a fresh baseline with no legacy.
 
 ### Migration from V11
 
-If you're upgrading from `@simba/player` (V11) or any in-house inline-mount
+If you're upgrading from `@simba-dev/player` (V11) or any in-house inline-mount
 implementation, see [DEVELOPER_MIGRATION.md](./DEVELOPER_MIGRATION.md).
 Short version:
 
 ```tsx
 // V11 (removed)
-import { VideoHost } from '@simba/player';
+import { VideoHost } from '@simba-dev/player';
 <VideoHost uri={uri} />
 
 // V12 (current)
-import { PlayerProvider, PlayerSurface } from '@simba/react-native-media-player';
-import { open } from '@simba/react-native-media-player/services';
+import { PlayerProvider, PlayerSurface } from '@simba-dev/react-native-media-player';
+import { open } from '@simba-dev/react-native-media-player/services';
 
 open({ uri, title: 'episode 1' }); // launches the dedicated PlayerActivity
 // or render inline if you have your own UI host
