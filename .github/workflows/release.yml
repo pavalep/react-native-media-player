@@ -30,12 +30,16 @@ jobs:
         with:
           fetch-depth: 0  # full history for changelog/release-notes
 
-      - name: Setup Node.js 24
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
-          cache: npm
-          registry-url: 'https://registry.npmjs.org/'
+          # Trusted publishing requires npm >= 11.5 + Node >= 22.14.
+          # docs example uses Node 24 (the runner-default).
+          node-version: '24'
+          # Per docs: never use caching in release builds.
+          # Cached `.npmrc`/package-lock state can leak into publish steps.
+          cache: false
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
         env:
@@ -71,35 +75,30 @@ jobs:
 
       # ---- publish (staging tag only) ------------------------------------
       #
-      # Authentication: OIDC trusted publishing.
+      # Authentication: OIDC trusted publishing (no NPM_TOKEN secret).
       # Configured on npmjs.com at:
       #   https://www.npmjs.com/package/@simba-dev/react-native-media-player/settings
       #   → Trusted Publisher → GitHub Actions
       #   → Organization/user: pavalep
       #   → Repository: react-native-media-player
       #   → Workflow filename: release.yml
+      #   → Environment name: (blank)
       #
       # The trusted publisher is configured for "Staged publishing only"
-      # (the secure recommended setting), so this step publishes with
-      # --tag=staging. The version lands in npm under the "staging" tag.
-      # Consumers get it via:
+      # (the secure recommended setting), so we publish with --tag=staging.
+      # The version lands in npm under the "staging" tag. Consumers get it via:
       #   npm install @simba-dev/react-native-media-player@staging
       #
       # To promote staging → latest (production), trigger the
       # .github/workflows/promote.yml workflow from the Actions tab.
       #
-      # --provenance attaches a signed attestation linking the package
-      # to this exact commit + workflow run, viewable on npmjs.com under
-      # the version's "Provenance" tab.
+      # `--provenance` is intentionally OMITTED — provenance attestation is
+      # generated automatically by npm when publishing via trusted publishing
+      # (see https://docs.npmjs.com/trusted-publishers#automatic-provenance-generation).
+      # `--access public` is intentionally OMITTED — publishConfig.access=public
+      # in package.json already configures this.
       - name: Publish to npm (staging tag)
-        # OIDC trusted publishing. Per https://docs.npmjs.com/trusted-publishers
-        # and actions/setup-node docs: with `registry-url` set + npm >= 11.5,
-        # npm automatically exchanges the GitHub Actions OIDC token for an
-        # npm auth token. NO NPM_TOKEN env var should be present on this step —
-        # if `NPM_TOKEN` (or NODE_AUTH_TOKEN) is exported (even empty), npm
-        # treats it as the configured bearer token and short-circuits OIDC,
-        # which is why a previous run failed with ENEEDAUTH.
-        run: npm publish --provenance --access public --tag=staging
+        run: npm publish --tag=staging
 
       # ---- github release (draft, awaiting promote) ----------------------
       # Mark the release as a draft so consumers don't see "Latest"

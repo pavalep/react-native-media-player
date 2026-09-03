@@ -1,6 +1,6 @@
 {
   "name": "@simba-dev/react-native-media-player",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "React Native video/audio player powered by libmpv — Picture-in-Picture, MediaSession, custom RN UI. **V12.0.0 stable release** (2026-09-03) — see [`SIMBA_PLAYER_MODULE_V12_RELEASE_RUNBOOK.md`](file:///x:/Development/SIMBA/MOBILE_APP_REACT_NATIVE/md/SIMBA_PLAYER_MODULE_V12_RELEASE_RUNBOOK.md) for the tag + APK + NPM procedures. Published under the `@simba-dev` org (the bare `simba` org-name on npmjs was reserved at publication time).",
   "main": "src/index.ts",
   "types": "src/index.ts",
