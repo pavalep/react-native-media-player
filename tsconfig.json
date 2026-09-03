@@ -11,6 +11,7 @@
     "**/node_modules",
     "android",
     "**/*.test.ts",
-    "**/*.test.tsx"
+    "**/*.test.tsx",
+    "src/README.example.tsx"
   ]
 }
