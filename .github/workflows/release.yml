@@ -29,10 +29,12 @@ jobs:
         with:
           fetch-depth: 0  # full history for changelog/release-notes
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Trusted publishing requires npm CLI >= 11.5.1 + Node >= 22.14.
+          # Node 24 ships the newest npm CLI by default.
+          node-version: 24
           cache: npm
           registry-url: 'https://registry.npmjs.org/'
 
