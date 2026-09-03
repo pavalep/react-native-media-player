@@ -5,10 +5,11 @@ on:
     tags:
       - 'v*.*.*'   # matches v1.0.0, v1.2.3, etc.
 
-# OIDC trusted publishing is used for npm authentication (no long-lived tokens).
-# `id-token: write` lets the runner mint an OIDC token that npm verifies
-# against the trusted publisher config on npmjs.com.
+# OIDC trusted publishing per https://docs.npmjs.com/trusted-publishers
+# `id-token: write` is required to mint the OIDC token npm verifies.
 # `contents: write` is needed so the GitHub Release step can create releases.
+# NOTE: docs example uses `contents: read`, but we need `write` for
+# softprops/action-gh-release to create the draft release.
 permissions:
   contents: write
   id-token: write
@@ -32,19 +33,9 @@ jobs:
       - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          # Trusted publishing requires npm CLI >= 11.5.1 + Node >= 22.14.
-          # Node 24 ships the newest npm CLI by default.
           node-version: 24
           cache: npm
-          # NOTE: registry-url intentionally omitted. setup-node writes a
-          # .npmrc containing `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
-          # when registry-url is set, which causes npm CLI to skip its built-in
-          # OIDC auth exchange (npm instead treats ${NODE_AUTH_TOKEN} as the
-          # bearer token — but with trusted publishing no token is set, so
-          # the publish ends up unauthenticated → 404 from the registry).
-          # See https://github.com/changesets/changesets/issues/1914
-          # Without registry-url, npm CLI detects the GitHub Actions OIDC
-          # environment and uses it for authentication directly.
+          registry-url: 'https://registry.npmjs.org/'
 
       - name: Install dependencies
         env:
@@ -102,6 +93,13 @@ jobs:
       # the version's "Provenance" tab.
       - name: Publish to npm (staging tag)
         run: npm publish --provenance --access public --tag=staging
+        env:
+          # Use OIDC token from GitHub Actions (not a long-lived secret).
+          # setup-node with registry-url configured the .npmrc to point at
+          # registry.npmjs.org and uses NPM_TOKEN if set; we explicitly
+          # unset NPM_TOKEN / NODE_AUTH_TOKEN so OIDC fallback fires.
+          NPM_TOKEN: ''
+          NODE_AUTH_TOKEN: ''
 
       # ---- github release (draft, awaiting promote) ----------------------
       # Mark the release as a draft so consumers don't see "Latest"
