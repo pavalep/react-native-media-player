@@ -4,6 +4,31 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-09-03
+
+### Fixed
+
+- **README hero image.** Replaced the broken `coresg-normal.trae.ai` text-to-image
+  placeholder URL with a permanent `assets/hero.svg` in this repo, served via
+  the GitHub raw URL `https://raw.githubusercontent.com/pavalep/react-native-media-player/main/assets/hero.svg`.
+  Self-contained, no external dependencies, ~3 KB SVG that renders identically on
+  GitHub README preview + npmjs README renderer.
+
+### Added
+
+- `assets/hero.svg` — 1600×900 hand-crafted SVG mockup showing the Simba Player UI
+  on a phone-frame (dark theme, golden play button, skip-back/skip-forward,
+  scrubber with progress, time labels). Includes SIMBA PLAYER branding, the
+  "v12.0.2 · @simba-dev/react-native-media-player · MIT" footer chip, and
+  feature badges (PiP / MediaSession / Foreground svc / TypeScript) on the
+  top-right.
+- `package.json` `files` allow-list now includes `assets/` so the SVG is also
+  shipped in the npm tarball for consumers who want to inspect or reuse it.
+
+### Migration from 1.0.1
+
+No code changes. The new SVG just replaces a previously-broken image URL.
+
 ## [1.0.1] - 2026-09-03
 
 ### Fixed

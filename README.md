@@ -2,7 +2,7 @@
 
 React Native video & audio player powered by [libmpv](https://mpv.io/), with first-class **Picture-in-Picture**, **MediaSession**, **foreground service**, and a customizable TypeScript UI. Built for Android. Designed to be a drop-in replacement for `react-native-video` / `react-native-track-player` / `expo-av`.
 
-![Simba Player hero image — mobile video player UI on Android](https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=Modern%20Android%20mobile%20video%20player%20UI%20with%20dark%20theme%2C%20golden%20accent%20play%20button%20in%20center%2C%20scrubber%20bar%20at%20bottom%20showing%20progress%2C%20skip-back%20%2B%20skip-forward%20buttons%2C%20top%20bar%20with%20title%20and%20artist%2C%20clean%20modern%20flat%20design%2C%20simba%20branding%2C%20photorealistic%20render&image_size=landscape_16_9)
+![Simba Player hero image — Android video player UI mockup](https://raw.githubusercontent.com/pavalep/react-native-media-player/main/assets/hero.svg)
 
 ## Table of contents
 
