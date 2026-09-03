@@ -57,10 +57,16 @@ jobs:
           # Save resolved version for the next step
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
-      # OIDC trusted publishing for the dist-tag flip.
-      # No NPM_TOKEN secret required — npm uses the GitHub Actions OIDC token
-      # minted by the `id-token: write` permission above.
+      # The dist-tag mutation is metadata, not a publish operation, so it falls
+      # outside the trusted publisher's `npm publish` / `npm stage publish`
+      # permissions — OIDC can't flip the dist-tag yet.
+      # We use a granular access token with bypass-2FA enabled, stored as the
+      # `production` environment secret `NPM_TOKEN`. Bypass-2FA is required for
+      # CI automation; this capability is being deprecated Jan 2027 — by then
+      # we expect npm to extend trusted publishing to dist-tag mutations.
       - name: Promote staging → latest
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm dist-tag add "@simba-dev/react-native-media-player@${VERSION}" latest
 
       - name: Publish the draft GitHub Release
