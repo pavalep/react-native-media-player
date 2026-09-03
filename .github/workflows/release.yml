@@ -44,6 +44,21 @@ jobs:
           NODE_ENV: development
         run: npm ci
 
+      - name: Verify NPM_TOKEN secret is loaded
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN secret is NOT set. Add it at https://github.com/${{ github.repository }}/settings/secrets/actions"
+            exit 1
+          fi
+          echo "NPM_TOKEN is set (length=${#NPM_TOKEN}, prefix=${NPM_TOKEN:0:6}***)"
+          # Verify token works against the registry
+          npm whoami --registry https://registry.npmjs.org/ 2>&1 || {
+            echo "::error::npm whoami failed — token is invalid or doesn't have access to @simba-dev"
+            exit 1
+          }
+
       - name: Verify tag matches package.json version
         shell: bash
         run: |
@@ -92,11 +107,13 @@ jobs:
       # https://github.com/${{ github.repository }}/settings/secrets/actions
 
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        run: npm publish --access public
         env:
-          # NODE_AUTH_TOKEN is auto-populated by setup-node from
-          # OIDC when registry-url is set, OR from NPM_TOKEN secret.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # NOTE: --provenance requires OIDC + @simba-dev org to be configured
+        # for trusted publishing (https://docs.npmjs.com/trusted-publishers).
+        # Drop --provenance here and add the relevant setup steps once
+        # trusted publishing is enabled on the @simba-dev npmjs org.
 
       # ---- github release --------------------------------------------------
       - name: Create GitHub Release
