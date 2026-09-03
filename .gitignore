@@ -46,3 +46,13 @@ yarn-error.log
 # Test output
 coverage/
 junit.xml
+
+# Local-only secrets + auth (DO NOT commit)
+# .env holds NPM_TOKEN and similar env-borne secrets
+# .npmrc holds the npm CLI auth token (authToken = npm_xxxx) for
+# local publishing only. Token is also stored locally for `npm publish`
+# to find without an OTP prompt. Repo-level .npmrc (if added later for
+# registry config only) should be a separate file, e.g. .npmrc.registry,
+# and should NOT be gitignored.
+.env
+.npmrc
