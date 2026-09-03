@@ -55,4 +55,11 @@ junit.xml
 # registry config only) should be a separate file, e.g. .npmrc.registry,
 # and should NOT be gitignored.
 .env
+.env.*
 .npmrc
+.npmrc.*
+
+# Local secrets folder (recovery codes, etc.) — lives outside this repo
+# at ../secrets/, but ignore here too in case of accidental copy.
+../secrets/
+secrets/

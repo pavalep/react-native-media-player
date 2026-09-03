@@ -1,12 +1,14 @@
-name: Release
+name: Release (publish to staging)
 
 on:
   push:
     tags:
       - 'v*.*.*'   # matches v1.0.0, v1.2.3, etc.
 
-# Required for OIDC-based npm provenance (the modern path).
-# If you only use the NPM_TOKEN secret, you can remove `id-token: write`.
+# OIDC trusted publishing is used for npm authentication (no long-lived tokens).
+# `id-token: write` lets the runner mint an OIDC token that npm verifies
+# against the trusted publisher config on npmjs.com.
+# `contents: write` is needed so the GitHub Release step can create releases.
 permissions:
   contents: write
   id-token: write
@@ -16,8 +18,8 @@ concurrency:
   cancel-in-progress: false   # never cancel a release mid-flight
 
 jobs:
-  release:
-    name: Publish to npm + create GitHub Release
+  release-staging:
+    name: Publish to npm staging + create GitHub Release
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -32,8 +34,6 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          # registry-url enables OIDC + provenance when paired with `id-token: write`.
-          # Falls back to NODE_AUTH_TOKEN (NPM_TOKEN secret) when provenance is disabled.
           registry-url: 'https://registry.npmjs.org/'
 
       - name: Install dependencies
@@ -44,27 +44,12 @@ jobs:
           NODE_ENV: development
         run: npm ci
 
-      - name: Verify NPM_TOKEN secret is loaded
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "::error::NPM_TOKEN secret is NOT set. Add it at https://github.com/${{ github.repository }}/settings/secrets/actions"
-            exit 1
-          fi
-          echo "NPM_TOKEN is set (length=${#NPM_TOKEN}, prefix=${NPM_TOKEN:0:6}***)"
-          # Verify token works against the registry
-          npm whoami --registry https://registry.npmjs.org/ 2>&1 || {
-            echo "::error::npm whoami failed — token is invalid or doesn't have access to @simba-dev"
-            exit 1
-          }
-
       - name: Verify tag matches package.json version
         shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
           PKG_VERSION="$(node -p "require('./package.json').version")"
-          echo "tag version    = v${TAG_VERSION}"
+          echo "tag version     = v${TAG_VERSION}"
           echo "package version = ${PKG_VERSION}"
           if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
             echo "::error::Git tag v${TAG_VERSION} does not match package.json version ${PKG_VERSION}."
@@ -83,45 +68,42 @@ jobs:
       - name: Verify package contents (dry-run)
         run: npm pack --dry-run
 
-      # ---- publish ---------------------------------------------------------
+      # ---- publish (staging tag only) ------------------------------------
       #
-      # This workflow supports two authentication modes:
+      # Authentication: OIDC trusted publishing.
+      # Configured on npmjs.com at:
+      #   https://www.npmjs.com/package/@simba-dev/react-native-media-player/settings
+      #   → Trusted Publisher → GitHub Actions
+      #   → Organization/user: pavalep
+      #   → Repository: react-native-media-player
+      #   → Workflow filename: release.yml
       #
-      # 1) OIDC + provenance (recommended, modern):
-      #      - Requires `permissions: id-token: write` (set above).
-      #      - Requires the npmjs org to allow trusted publishing
-      #        (https://docs.npmjs.com/trusted-publishers).
-      #      - The `--provenance` flag attaches a GitHub Actions OIDC
-      #        attestation, proving the package was built from this
-      #        commit on github.com.
-      #      - NO NPM_TOKEN secret needed.
+      # The trusted publisher is configured for "Staged publishing only"
+      # (the secure recommended setting), so this step publishes with
+      # --tag=staging. The version lands in npm under the "staging" tag.
+      # Consumers get it via:
+      #   npm install @simba-dev/react-native-media-player@staging
       #
-      # 2) Classic NPM_TOKEN (fallback):
-      #      - Set a `NPM_TOKEN` repo secret with a granular access
-      #        token that has Bypass 2FA + read+publish on @simba-dev.
-      #      - Drop the `--provenance` flag below.
+      # To promote staging → latest (production), trigger the
+      # .github/workflows/promote.yml workflow from the Actions tab.
       #
-      # We default to (1). If your org isn't configured for trusted
-      # publishing yet, comment out the `--provenance` flag and add
-      # an `NPM_TOKEN` secret at
-      # https://github.com/${{ github.repository }}/settings/secrets/actions
+      # --provenance attaches a signed attestation linking the package
+      # to this exact commit + workflow run, viewable on npmjs.com under
+      # the version's "Provenance" tab.
+      - name: Publish to npm (staging tag)
+        run: npm publish --provenance --access public --tag=staging
 
-      - name: Publish to npm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        # NOTE: --provenance requires OIDC + @simba-dev org to be configured
-        # for trusted publishing (https://docs.npmjs.com/trusted-publishers).
-        # Drop --provenance here and add the relevant setup steps once
-        # trusted publishing is enabled on the @simba-dev npmjs org.
-
-      # ---- github release --------------------------------------------------
-      - name: Create GitHub Release
+      # ---- github release (draft, awaiting promote) ----------------------
+      # Mark the release as a draft so consumers don't see "Latest"
+      # pointing at it until promotion. Drafts can be edited/published
+      # from the GitHub UI after the promote workflow runs.
+      - name: Create draft GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           generate_release_notes: true
+          draft: true
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

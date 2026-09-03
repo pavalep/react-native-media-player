@@ -1,0 +1,77 @@
+name: Promote (staging → latest)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to promote (e.g. 1.0.3). Must already exist on npmjs with the staging tag.'
+        required: true
+        type: string
+
+# Promote is gated by a GitHub Environment called "production" so it requires
+# manual approval by an environment reviewer (configured at
+# https://github.com/pavalep/react-native-media-player/settings/environments).
+# This ensures a real human (you) confirms before staging becomes latest.
+
+jobs:
+  promote:
+    name: Promote version to latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: production
+      url: https://www.npmjs.com/package/@simba-dev/react-native-media-player
+
+    steps:
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org/'
+
+      - name: Verify staging version exists
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          PKG="@simba-dev/react-native-media-player"
+          # Strip leading 'v' if user typed it
+          VERSION="${VERSION#v}"
+          echo "Promoting ${PKG}@${VERSION} from staging → latest"
+          # Confirm the version is published with the staging tag
+          STAGING_VER=$(npm view "${PKG}@staging" version --registry https://registry.npmjs.org/ 2>&1 || true)
+          echo "npm staging tag currently points at: ${STAGING_VER}"
+          if [ "$STAGING_VER" != "$VERSION" ]; then
+            echo "::error::Version ${VERSION} is not the current @staging (got ${STAGING_VER}). Aborting."
+            exit 1
+          fi
+          # Save resolved version for the next step
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      # OIDC trusted publishing isn't supported for `npm dist-tag` —
+      # dist-tag mutations still need a token. We use the same NPM_TOKEN
+      # secret as a fallback (fine here because the promotion step is
+      # already gated by a human + environment approval).
+      - name: Promote staging → latest
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm dist-tag add "@simba-dev/react-native-media-player@${VERSION}" latest
+
+      - name: Publish the draft GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${VERSION#v}"
+          echo "Publishing draft release v${VERSION}"
+          # Find the draft release for this tag and publish it
+          gh release edit "v${VERSION}" --draft=false || {
+            echo "::error::Could not publish draft release v${VERSION}. Publish it manually from https://github.com/pavalep/react-native-media-player/releases"
+            exit 1
+          }
+
+      - name: Summary
+        run: |
+          echo "## Promoted to latest :rocket:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version**: v${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **npm**: https://www.npmjs.com/package/@simba-dev/react-native-media-player/v/${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **GitHub Release**: https://github.com/pavalep/react-native-media-player/releases/tag/v${VERSION}" >> "$GITHUB_STEP_SUMMARY"
