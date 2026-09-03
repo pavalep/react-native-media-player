@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Library manifest for react-native-media-player.
+
+  Phase 16: declares the MediaPlaybackService as a <service> so the
+  manifest merger in the consumer app picks it up automatically. The
+  consumer app must still declare the FOREGROUND_SERVICE permissions
+  in its own manifest (the V11 app already declares
+  FOREGROUND_SERVICE; FOREGROUND_SERVICE_MEDIA_PLAYBACK is API 34+).
+
+  The library does NOT declare an <application> — that lives in the
+  consumer app. The consumer's manifest merger will pull in the
+  library's <service> declaration and any future <activity> /
+  <receiver> components.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        MediaPlaybackService: persistent foreground service that
+        hosts the media-style notification for PlayerActivity. The
+        foregroundServiceType="mediaPlayback" attribute is required
+        on API 34+ (Android 14) for the system to allow the
+        startForeground call; pre-34 the type is implicit.
+
+        exported="false": the service is internal — only the app
+        itself can start/stop it. The notification PendingIntents
+        target it via the explicit class name.
+    -->
+    <application>
+        <service
+            android:name="com.simba.player.MediaPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!--
+            MediaButtonReceiver (Phase 20): routes the system's
+            MEDIA_BUTTON intent to the active MediaSessionCompat.
+            The system uses the receiver to find the session
+            token (via PendingIntent on the session activity) and
+            then delivers the media button event to the
+            MediaSessionCompat.Callback registered in
+            PlayerActivity.createMediaSession() (Phase 18).
+
+            This is the same FQN that the V11 MediaNotificationService
+            already uses in the consumer app's manifest. With
+            PlayerActivity's own MediaSession (Phase 15) the receiver
+            is shared between the V11 and V12 paths — Gradle's
+            manifest merger deduplicates.
+
+            exported="true" because the broadcast comes from the
+            system media controller (not the app's own process).
+        -->
+        <receiver
+            android:name="androidx.media.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

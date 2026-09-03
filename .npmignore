@@ -1,0 +1,41 @@
+# Files/dirs excluded from the published tarball (npm pack)
+# This file supplements package.json's `files` allow-list.
+# Anything not in `files` that npm tries to include via the
+# implicit `**/*` default is filtered out here.
+
+# Gradle build outputs (would bloat the tarball by ~400MB)
+android/.cxx/
+android/.gradle/
+android/build/
+build/
+.cxx/
+.gradle/
+
+# Test + verification files (kept in source for typecheck, not shipped)
+src/README.example.tsx
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+__tests__/
+coverage/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.log
+*.iml
+.idea/
+
+# Kotlin compiler + lint caches
+.kotlin/
+captures/
+local.properties
+
+# npm metadata that shouldn't ship
+.npmignore
+.eslintrc*
+.prettierrc*
+.editorconfig

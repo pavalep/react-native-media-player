@@ -1,0 +1,48 @@
+# Gradle / IDE / build outputs
+build/
+.gradle/
+.idea/
+.kotlin/
+captures/
+*.iml
+local.properties
+.cxx/
+
+# Android build intermediates
+android/build/
+android/app/build/
+android/.cxx/
+android/.gradle/
+
+# Native binaries (.so files) — too large for git history (~500MB total).
+# These ARE shipped in the npm tarball (see package.json `files` field +
+# .npmignore keeping `android/` in the published package) but live in
+# the release artifacts rather than the source repo. To re-distribute on
+# npm install, you'll add a postinstall hook later (Phase 49+); for now,
+# the binaries exist locally and the tarball will pick them up.
+android/src/main/jniLibs/
+
+# TypeScript build outputs
+src/lib/
+src/es/
+*.tsbuildinfo
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Node (when this directory hosts npm-side TS sources)
+node_modules/
+npm-debug.log*
+yarn-error.log
+.pnp/
+.pnp.js
+
+# Logs
+*.log
+
+# Test output
+coverage/
+junit.xml

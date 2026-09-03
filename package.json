@@ -1,0 +1,89 @@
+{
+  "name": "@simba/react-native-media-player",
+  "version": "1.0.0",
+  "description": "React Native video/audio player powered by libmpv — Picture-in-Picture, MediaSession, custom RN UI. **V12.0.0 stable release** (2026-09-03) — see [`SIMBA_PLAYER_MODULE_V12_RELEASE_RUNBOOK.md`](file:///x:/Development/SIMBA/MOBILE_APP_REACT_NATIVE/md/SIMBA_PLAYER_MODULE_V12_RELEASE_RUNBOOK.md) for the tag + APK + NPM procedures.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "react-native": "src/index.ts",
+  "files": [
+    "src/",
+    "!src/README.example.tsx",
+    "android/",
+    "android/build.gradle",
+    "android/consumer-rules.pro",
+    "android/src/main/AndroidManifest.xml",
+    "!android/.cxx/",
+    "!android/.gradle/",
+    "!android/build/",
+    "LICENSE",
+    "README.md",
+    "react-native.config.js",
+    "tsconfig.json",
+    "!.npmignore"
+  ],
+  "keywords": [
+    "react-native",
+    "react-native-media-player",
+    "video",
+    "audio",
+    "mpv",
+    "player",
+    "pip",
+    "picture-in-picture",
+    "media-session",
+    "foreground-service",
+    "android",
+    "simba"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "SIMBA Mobile Team",
+    "url": "https://github.com/pavalep"
+  },
+  "homepage": "https://github.com/pavalep/react-native-media-player#readme",
+  "private": false,
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "lint": "echo \"lint not configured yet\"",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "prepack": "npm run typecheck && npm run test"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-native": ">=0.76.0"
+  },
+  "devDependencies": {
+    "@react-native/typescript-config": "0.86.0",
+    "@testing-library/react-native": "^14.0.1",
+    "@types/jest": "^29.5.13",
+    "@types/react": "^19.2.0",
+    "@types/react-test-renderer": "^19.1.0",
+    "jest": "^29.6.3",
+    "react": "19.2.3",
+    "react-native": "0.86.0",
+    "react-test-renderer": "19.2.3",
+    "typescript": "5.5.4"
+  },
+  "codegenConfig": {
+    "name": "SimbaPlayerSpec",
+    "type": "modules",
+    "jsSrcsDir": "src"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pavalep/react-native-media-player"
+  },
+  "bugs": {
+    "url": "https://github.com/pavalep/react-native-media-player/issues"
+  }
+}

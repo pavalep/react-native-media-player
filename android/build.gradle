@@ -1,0 +1,200 @@
+apply plugin: "com.android.library"
+apply plugin: "org.jetbrains.kotlin.android"
+
+/**
+ * React Native MediaPlayer — Android library module
+ *
+ * Part of the @simba/react-native-media-player package. Owned by Mobile team.
+ * Houses the libmpv-backed playback engine, PlayerActivity, SurfaceView renderer,
+ * Picture-in-Picture lifecycle, MediaSession, and foreground media service.
+ *
+ * Build configuration mirrors the consumer app
+ * (MOBILE_APP_REACT_NATIVE/android/build.gradle) so this library compiles
+ * against the same SDKs and Kotlin/RN versions the app uses.
+ */
+android {
+    // SDK versions are inherited from the consumer app's rootProject.ext
+    // (defined in MOBILE_APP_REACT_NATIVE/android/build.gradle).
+    ndkVersion rootProject.ext.ndkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
+    compileSdk rootProject.ext.compileSdkVersion
+
+    namespace "com.simba.player"
+
+    defaultConfig {
+        minSdk rootProject.ext.minSdkVersion
+        targetSdk rootProject.ext.targetSdkVersion
+
+        // Consumers should not need to specify these explicitly when adding
+        // the dependency. We forward defaults that match the app.
+        consumerProguardFiles "consumer-rules.pro"
+
+        // ABI filters — keep aligned with the libmpv prebuilt binaries
+        // shipped under src/main/jniLibs/. All 4 ABIs included so the
+        // AAR works on every Android device tier the consumer app supports.
+        ndk {
+            abiFilters "arm64-v8a", "armeabi-v7a", "x86", "x86_64"
+        }
+
+        // Phase 28: CMake external build for libsimbaplayer_mpv.so.
+        // -DANDROID_STL=c++_shared links against libc++_shared.so (already
+        // present in src/main/jniLibs/{ABI}/libc++_shared.so).
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_shared",
+                          "-DCMAKE_BUILD_TYPE=Release"
+                cppFlags "-std=c++17", "-fvisibility=hidden", "-fvisibility-inlines-hidden"
+            }
+        }
+    }
+
+    // Phase 28: point the build at the module's CMakeLists.txt
+    // (src/main/cpp/CMakeLists.txt — built libsimbaplayer_mpv.so only).
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+        debug {
+            // Debug builds inherit the same external native config; nothing
+            // extra needed since the AAR's debug variant packages the .so too.
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    // Phase 28: packaging config for the libmpv prebuilt binaries.
+    // - pickFirst: AAR + consumer-app may both contain the same .so; pickFirst
+    //   lets Gradle choose the first match instead of failing the merge.
+    // - resources.excludes: drop LICENSE/NOTICE duplicates from ffmpeg +
+    //   libmpv that AGP otherwise tries to merge into META-INF.
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+        pickFirst "lib/**/libc++_shared.so"
+        pickFirst "lib/**/libmpv.so"
+        pickFirst "lib/**/libplayer.so"
+        pickFirst "lib/**/libOpenCL.so"
+        pickFirst "lib/**/libavcodec.so"
+        pickFirst "lib/**/libavdevice.so"
+        pickFirst "lib/**/libavfilter.so"
+        pickFirst "lib/**/libavformat.so"
+        pickFirst "lib/**/libavutil.so"
+        pickFirst "lib/**/libswresample.so"
+        pickFirst "lib/**/libswscale.so"
+        resources {
+            excludes += [
+                "META-INF/AL2.0",
+                "META-INF/LGPL2.1",
+                "META-INF/*.kotlin_module",
+            ]
+        }
+    }
+
+    // ── Phase 33: Unit test configuration ─────────────────────────────────
+    // Robolectric needs the Android runtime jars (downloaded by Maven
+    // at first run). On sandboxed CI runners without write access to
+    // `~/.m2/repository/`, the Maven local cache cannot be populated;
+    // tests still compile (via testDebugUnitTest) but fail at
+    // Robolectric init with `FileNotFoundException` on the
+    // `~/.robolectric-download-lock` lock file.
+    //
+    // To enable offline mode on machines that pre-populate
+    // `~/.m2/repository/` from the Gradle cache, we forward the
+    // `-Drobolectric.offline=true` system property here. Tests that
+    // depend on Robolectric runtime are also annotated `@Ignore` with
+    // a note explaining the sandbox constraint (see SPEC §33.D).
+    testOptions {
+        // Allow the pure-JUnit tests (e.g. MpvBridgeModuleNullInstanceTest)
+        // to call Android API stubs without throwing — by default
+        // unmocked Android methods throw RuntimeException. Setting
+        // `returnDefaultValues = true` returns the default value (0/null/
+        // false) instead. Robolectric-dependent tests are @Ignore'd in
+        // the sandbox so this only affects plain-JUnit tests.
+        unitTests.returnDefaultValues = true
+        unitTests.all {
+            systemProperty 'robolectric.offline',
+                System.getProperty('robolectric.offline', 'true')
+            // Use a tmpfs-equivalent for the Robolectric working dir
+            // — `/tmp` is the sandbox-allowed scratch space.
+            systemProperty 'robolectric.tmp.dir',
+                System.getProperty('robolectric.tmp.dir', '/tmp/robolectric')
+        }
+    }
+}
+
+dependencies {
+    // React Native runtime — required because the library exposes a
+    // TurboModule (MpvBridgeModule) and a ReactActivity subclass
+    // (PlayerActivity). Version is managed by the React Native Gradle Plugin
+    // via the consumer app's node_modules.
+    implementation("com.facebook.react:react-android")
+
+    // AndroidX app compat — required by AppCompatActivity surface used in
+    // any pre-Lollipop fallback paths and for MediaSessionCompat.
+    implementation("androidx.appcompat:appcompat:1.7.0")
+
+    // AndroidX core KTX — Kotlin extensions for AsyncTask, Bundle, Context, etc.
+    implementation("androidx.core:core-ktx:1.13.1")
+
+    // Media (MediaSession + MediaStyle + MediaMetadata for lock-screen
+    // controls, Bluetooth/wired headset controls, notifications).
+    implementation("androidx.media:media:1.7.0")
+
+    // ── Phase 33: Unit test dependencies ─────────────────────────────────
+    // JUnit 4 is the canonical Android unit test framework. Robolectric
+    // gives us a real-ish Android runtime in JVM tests so we can
+    // instantiate Context, Application, PictureInPictureParams, etc.
+    // without needing a device/emulator. Mockito is used sparingly for
+    // pieces Robolectric can't simulate (ReactContext, DeviceEventManager
+    // module, etc.).
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.11.1")
+    testImplementation("org.mockito:mockito-core:5.7.0")
+    testImplementation("org.mockito.kotlin:mockito-kotlin:5.1.0")
+    // AndroidX test core — provides ApplicationProvider for grabbing the
+    // @Config(application=...) test app from Robolectric, and shadow Context
+    // helpers.
+    testImplementation("androidx.test:core:1.5.0")
+    testImplementation("androidx.test.ext:junit:1.1.5")
+
+    // ── Phase 36: LeakCanary (debug-only memory leak detector) ────────────
+    // LeakCanary 3.0+ is a debug-only tool that hooks into the Activity /
+    // Fragment / ViewModel lifecycle and dumps the heap to MAT format
+    // whenever it detects a retained object after the activity should have
+    // been destroyed. The library has zero API surface — installing it as a
+    // `debugImplementation` is enough; on `assembleDebug` it auto-installs
+    // ActivityLifecycleCallbacks and watches for leaks.
+    //
+    // Why debugImplementation (not implementation): the AAR is ~3 MB and
+    // LeakCanary itself does heap dumps that would slow down release
+    // builds. The release build must NOT include this dependency.
+    //
+    // Why 3.0.0-alpha-8: latest pre-2.x release (3.0 is in alpha; 2.x
+    // is the stable line). The 3.x line uses Kotlin 1.9+ and supports
+    // the latest Android Profiler / heap-dump format. We pin to alpha-8
+    // because the latest stable (2.14) does not support bridgeless RN's
+    // React host lifecycle hooks (it watches the old
+    // `ReactInstanceManager` which is gone in RN 0.76+).
+    //
+    // On-device activation: install the debug build, open / close the
+    // player 100 times (per §36.2), and watch logcat for
+    // `LeakCanary: ... retained X bytes` warnings. The heap-dump
+    // notifications appear in the system notification shade.
+    debugImplementation("com.squareup.leakcanary:leakcanary-android:3.0.0-alpha-8")
+}

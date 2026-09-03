@@ -1,0 +1,16 @@
+{
+  "extends": "@react-native/typescript-config",
+  "compilerOptions": {
+    "rootDir": "src",
+    "noEmit": true,
+    "jsx": "react-native"
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "node_modules",
+    "**/node_modules",
+    "android",
+    "**/*.test.ts",
+    "**/*.test.tsx"
+  ]
+}

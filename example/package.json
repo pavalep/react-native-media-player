@@ -1,0 +1,33 @@
+{
+  "name": "@simba/react-native-media-player-example",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phase 40 example app — demonstrates every documented feature of @simba/react-native-media-player",
+  "scripts": {
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "start": "react-native start",
+    "test": "echo \"No tests in the example app — see ../src for unit tests\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "19.2.3",
+    "react-native": "0.86.0",
+    "@simba/react-native-media-player": "file:.."
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@babel/preset-env": "^7.25.3",
+    "@babel/runtime": "^7.25.0",
+    "@react-native/babel-preset": "0.86.0",
+    "@react-native/eslint-config": "0.86.0",
+    "@react-native/metro-config": "0.86.0",
+    "@react-native/typescript-config": "0.86.0",
+    "@types/react": "^19.2.0",
+    "@types/react-native": "^0.73.0",
+    "typescript": "5.5.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
