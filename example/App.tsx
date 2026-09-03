@@ -2,7 +2,7 @@
  * SIMBA Player — Example app entry point (Phase 40).
  *
  * Hosts 8 demo screens that exercise every documented feature of
- * `@simba/react-native-media-player`. Navigation is a tiny in-app
+ * `@simba-dev/react-native-media-player`. Navigation is a tiny in-app
  * state machine (no react-navigation dependency) so the example
  * app boots from `npx react-native run-android` without extra
  * packages.

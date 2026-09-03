@@ -1,6 +1,6 @@
 /**
  * Phase 40 example app — 8 demo screens that exercise every documented
- * feature of `@simba/react-native-media-player`. Each screen is a
+ * feature of `@simba-dev/react-native-media-player`. Each screen is a
  * standalone React component that demonstrates one spec deliverable.
  *
  * Screens:

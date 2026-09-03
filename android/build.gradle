@@ -4,7 +4,7 @@ apply plugin: "org.jetbrains.kotlin.android"
 /**
  * React Native MediaPlayer — Android library module
  *
- * Part of the @simba/react-native-media-player package. Owned by Mobile team.
+ * Part of the @simba-dev/react-native-media-player package. Owned by Mobile team.
  * Houses the libmpv-backed playback engine, PlayerActivity, SurfaceView renderer,
  * Picture-in-Picture lifecycle, MediaSession, and foreground media service.
  *

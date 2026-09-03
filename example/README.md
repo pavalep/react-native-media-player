@@ -1,7 +1,7 @@
 # SIMBA Player — Example App (Phase 40)
 
 A standalone React Native app demonstrating **every documented feature** of
-[`@simba/react-native-media-player`](../README.md). Use it as:
+[`@simba-dev/react-native-media-player`](../README.md). Use it as:
 
 - A **reference implementation** for how to wire the module into your app
 - A **visual test harness** for verifying changes to the module
@@ -35,7 +35,7 @@ V12 spec it proves out.
 
 - React Native dev environment (Node 18+, JDK 17, Android Studio with SDK 35+)
 - A device or emulator running Android 6.0+ (API 24+)
-- The `@simba/react-native-media-player` module checked out locally (this
+- The `@simba-dev/react-native-media-player` module checked out locally (this
   example uses `file:..` in `package.json` to resolve it directly)
 
 ### Install

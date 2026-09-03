@@ -1,8 +1,45 @@
 # Changelog
 
-All notable changes to `@simba/react-native-media-player` are documented here.
+All notable changes to `@simba-dev/react-native-media-player` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.0.1] - 2026-09-03
+
+### Fixed
+
+- **README + example references to `@simba/react-native-media-player` retargeted to
+  `@simba-dev/react-native-media-player`.** The bare `simba` org-name was unavailable
+  at V12.0.0 publication time (npmjs reserved-name policy), so we created the
+  `@simba-dev` org instead. The first published version (1.0.0) referred to the new
+  scope in `package.json` but referenced the old `simba` scope in the README's title,
+  TOC anchors, install command, custom-UI examples, API-reference table, the
+  `Config` examples, troubleshooting + limitations headers, contributing section,
+  Maven coordinates (in `android/build.gradle`), and all four example-app files.
+  This patch fixes those.
+
+### Files changed in 1.0.1
+
+- `README.md` — every section header, TOC anchor, install command, all import
+  examples, API-reference table, all bash code blocks
+- `example/App.tsx` + `example/src/screens/index.tsx` + `example/package.json` +
+  `example/README.md` — all references retargeted
+- `android/build.gradle` — Maven `group` + doc-header reference retargeted
+- `package.json` — `name` already correct in 1.0.0 (this is the prior fix); `version`
+  bumped to `1.0.1` for the patch
+- `CHANGELOG.md` — this entry
+
+### Migration from 1.0.0
+
+No code changes required. If you installed `1.0.0`, the install command still works:
+```
+npm install @simba-dev/react-native-media-player@1.0.0
+```
+But the README + npmjs page now correctly reference `@simba-dev/` everywhere; you
+may want to upgrade to `1.0.1` for the corrected docs:
+```
+npm install @simba-dev/react-native-media-player@latest
+```
 
 ## [1.0.0] - 2026-09-03
 

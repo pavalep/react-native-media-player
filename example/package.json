@@ -1,8 +1,8 @@
 {
-  "name": "@simba/react-native-media-player-example",
+  "name": "@simba-dev/react-native-media-player-example",
   "version": "0.1.0",
   "private": true,
-  "description": "Phase 40 example app — demonstrates every documented feature of @simba/react-native-media-player",
+  "description": "Phase 40 example app — demonstrates every documented feature of @simba-dev/react-native-media-player",
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",
@@ -13,7 +13,7 @@
   "dependencies": {
     "react": "19.2.3",
     "react-native": "0.86.0",
-    "@simba/react-native-media-player": "file:.."
+    "@simba-dev/react-native-media-player": "file:.."
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

@@ -1,4 +1,4 @@
-# @simba/react-native-media-player
+# @simba-dev/react-native-media-player
 
 React Native video & audio player powered by [libmpv](https://mpv.io/), with first-class **Picture-in-Picture**, **MediaSession**, **foreground service**, and a customizable TypeScript UI. Built for Android. Designed to be a drop-in replacement for `react-native-video` / `react-native-track-player` / `expo-av`.
 
@@ -6,7 +6,7 @@ React Native video & audio player powered by [libmpv](https://mpv.io/), with fir
 
 ## Table of contents
 
-1. [What is `@simba/react-native-media-player`?](#what-is-simbareact-native-media-player)
+1. [What is `@simba-dev/react-native-media-player`?](#what-is-simbareact-native-media-player)
 2. [Installation](#installation)
 3. [Basic usage](#basic-usage)
 4. [Custom UI](#custom-ui)
@@ -22,7 +22,7 @@ React Native video & audio player powered by [libmpv](https://mpv.io/), with fir
 
 ---
 
-## What is `@simba/react-native-media-player`?
+## What is `@simba-dev/react-native-media-player`?
 
 A standalone NPM package that gives your React Native Android app a unified **video + audio** playback engine backed by **libmpv**. The same engine, the same MediaSession, the same foreground service — for both video and audio playback.
 
@@ -39,7 +39,7 @@ A standalone NPM package that gives your React Native Android app a unified **vi
 ## Installation
 
 ```bash
-npm install @simba/react-native-media-player
+npm install @simba-dev/react-native-media-player
 ```
 
 Autolinking handles the rest — RN's `react-native config` will find the package via the shipped [`react-native.config.js`](./react-native.config.js) and register `com.simba.player.PlayerPackage` in your `MainApplication.kt` automatically on next build.
@@ -78,7 +78,7 @@ If you plan to use **background audio**, declare the foreground-service permissi
 For **API 33+** (Android 13+) the app must request `POST_NOTIFICATIONS` at runtime before the first media-style notification is shown. The bridge's `requestNotificationPermission()` helper does this:
 
 ```ts
-import { getMpvPlayerModule } from '@simba/react-native-media-player';
+import { getMpvPlayerModule } from '@simba-dev/react-native-media-player';
 getMpvPlayerModule().requestNotificationPermission?.(); // graceful no-op on older APIs
 ```
 
@@ -87,7 +87,7 @@ getMpvPlayerModule().requestNotificationPermission?.(); // graceful no-op on old
 ```tsx
 // App.tsx
 import React from 'react';
-import { PlayerProvider, PlayerRoot } from '@simba/react-native-media-player';
+import { PlayerProvider, PlayerRoot } from '@simba-dev/react-native-media-player';
 
 export default function App() {
   return (
@@ -130,7 +130,7 @@ import {
   PlayerRoot,
   usePlayer,
   useTheme,
-} from '@simba/react-native-media-player';
+} from '@simba-dev/react-native-media-player';
 
 function MyCustomControls() {
   const { state, commands } = usePlayer();
@@ -165,7 +165,7 @@ Skip `<PlayerRoot>` entirely and lay out your own tree:
 ```tsx
 import React from 'react';
 import { View } from 'react-native';
-import { PlayerProvider, PlayerSurface } from '@simba/react-native-media-player';
+import { PlayerProvider, PlayerSurface } from '@simba-dev/react-native-media-player';
 import { MyControls } from './MyControls';
 
 export default function App() {
@@ -210,7 +210,7 @@ Every field is optional and falls back to the defaults in [`DEFAULT_PLAYER_CONFI
 For minor overrides, spread the defaults:
 
 ```tsx
-import { DEFAULT_PLAYER_CONFIG } from '@simba/react-native-media-player';
+import { DEFAULT_PLAYER_CONFIG } from '@simba-dev/react-native-media-player';
 
 <PlayerProvider
   config={{
@@ -286,7 +286,7 @@ Every color in `<DefaultControls>` comes from the `PlayerTheme` slice of the con
 Read the theme from a custom component:
 
 ```tsx
-import { useTheme } from '@simba/react-native-media-player';
+import { useTheme } from '@simba-dev/react-native-media-player';
 
 const theme = useTheme();
 <View style={{ backgroundColor: theme.background }} />;
@@ -386,7 +386,7 @@ Make sure:
 Enable verbose logging from JavaScript:
 
 ```tsx
-import { setDebugLogging } from '@simba/react-native-media-player';
+import { setDebugLogging } from '@simba-dev/react-native-media-player';
 
 // Enable verbose logging (sets mpv msg-level=all + logs every bridge call)
 setDebugLogging(true);
@@ -416,7 +416,7 @@ The `[PlaybackTrace]` prefix tags every bridge call so you can trace end-to-end.
 To dump all currently-observed mpv properties to logcat (useful for debugging state divergence between native and JS):
 
 ```tsx
-import { dumpObservedProperties } from '@simba/react-native-media-player';
+import { dumpObservedProperties } from '@simba-dev/react-native-media-player';
 
 const count = dumpObservedProperties();
 console.log(`Dumped ${count} properties to logcat`);
@@ -455,7 +455,7 @@ On every React Native init, the bridge logs:
 
 This confirms the module is wired + reports the package name + current debug-logging state. Use `adb logcat -s MpvBridgeModule` to filter.
 
-### TypeScript "Cannot find module '@simba/react-native-media-player'"
+### TypeScript "Cannot find module '@simba-dev/react-native-media-player'"
 
 Make sure the package is in your `dependencies` (not `devDependencies`) and Metro has been restarted. The `package.json` field `"react-native": "src/index.ts"` lets Metro resolve to the source directly without a build step.
 
