@@ -4,6 +4,24 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-09-03
+
+### Added
+
+- **OIDC trusted publishing** (`release.yml`): switched `npm publish` from long-lived `NPM_TOKEN` to GitHub Actions OIDC + npmjs trusted publisher. Configured at https://www.npmjs.com/package/@simba-dev/react-native-media-player/settings → Trusted Publisher (GitHub Actions, repo `pavalep/react-native-media-player`, workflow `release.yml`).
+- **Promote workflow** (`.github/workflows/promote.yml`): `workflow_dispatch` job that promotes a `@staging` version to `@latest` via `npm dist-tag`, gated by the GitHub `production` environment with required reviewers. Publishes the corresponding draft GitHub Release.
+- **Staged release model**: `release.yml` now publishes with `--tag=staging` + creates a **draft** GitHub Release. Promote workflow (manual approval) flips `staging → latest` and publishes the draft. This is the secure production release path.
+
+### Fixed
+
+- **`babel.config.js`** — removed stale `consumerDep()` workspace-link to `../MOBILE_APP_REACT_NATIVE/node_modules/@react-native/babel-preset`. CI run #15 failed because that sibling consumer-app directory doesn't exist in the GitHub Actions runner. Now uses `@react-native/babel-preset` directly from local node_modules.
+- **`package.json`** — added `@react-native/babel-preset@0.86.0` to devDependencies (required by `babel.config.js`).
+- **v1.0.3 first-publish 404** — npmjs trusted publishers sometimes 404 the very first OIDC publish to a package originally created via legacy auth. Worked around by publishing 1.0.3 via local bypass-2FA token, then 1.0.4 will re-test the OIDC path.
+
+### Migration from 1.0.3
+
+No code changes. CI/CD authentication model only. Consumers see no behavioral difference.
+
 ## [1.0.3] - 2026-09-03
 
 ### Added
