@@ -31,7 +31,7 @@ jobs:
           fetch-depth: 0  # full history for changelog/release-notes
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # Trusted publishing requires npm >= 11.5 + Node >= 22.14.
           # docs example uses Node 24 (the runner-default).
