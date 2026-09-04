@@ -3,28 +3,30 @@ import {create} from 'zustand';
 /**
  * V15 Phase 65: the queue item shape exposed by `useQueue()`.
  *
- * Mirrors the consumer's V14 `playerSlice` queue entry: a
- * minimal `(uri, title)` plus the metadata the consumer
- * needs to display the queue UI. Kept structurally compatible
- * with the consumer's `QueueableItem` / `PlaybackEntry` types
- * so existing UI components can be migrated without shape
- * changes.
+ * Structurally a superset of the consumer's V14 `playerSlice`
+ * queue entry. `uri` and `title` are required; the rest are
+ * optional and pass through to the store. The store does not
+ * inspect these fields — they're retained so the UI can
+ * display rich row content.
  *
- * Only `uri` and `title` are required. The rest are optional
- * and ignored by the store's actions; they're retained so
- * the UI can display rich row content.
+ * `type` and `mediaType` are typed as `string` (not the narrower
+ * `'audio' | 'video'`) so consumers with richer content kinds
+ * (e.g. `'music' | 'movie' | 'podcast'`) can pass items without
+ * TypeScript rejecting the object. The module doesn't read
+ * these fields; the consumer's UI does.
  */
 export interface PlayerQueueItem {
   uri: string;
   title: string;
-  duration?: number;
+  duration: number;
   artist?: string;
   album?: string;
   artworkUri?: string;
+  /** Wide string for consumer flexibility (e.g. `MediaSource`). */
   source?: string;
-  /** `'audio' | 'video'` stream type. */
-  type?: 'audio' | 'video';
-  mediaType?: 'audio' | 'video';
+  /** Stream type or content kind. Wide string for consumer flexibility. */
+  type?: string;
+  mediaType?: string;
   provider?: string;
   /** Stable linked-folder identity for local entries. */
   folderId?: string;
@@ -41,10 +43,15 @@ export interface PlayerQueueActions {
   /** Remove the item at the given index. */
   removeFromQueue: (index: number) => void;
   /**
-   * Reorder: move item at `fromIndex` to `toIndex`.
-   * Other items shift accordingly.
+   * Reorder: move item at `fromIndex` to `toIndex`. Accepts
+   * either an object `{fromIndex, toIndex}` (preferred — matches
+   * the consumer's V14 dispatch shape) or two positional
+   * arguments. Other items shift accordingly.
    */
-  reorderQueue: (fromIndex: number, toIndex: number) => void;
+  reorderQueue: (
+    fromIndexOrOpts: number | {fromIndex: number; toIndex: number},
+    toIndexArg?: number,
+  ) => void;
   /** Clear all items from the queue. */
   clearQueue: () => void;
   /**
@@ -111,8 +118,17 @@ export const usePlayerQueueStore = create<PlayerQueueStore>()((set) => ({
       if (index < 0 || index >= state.queue.length) return state;
       return {queue: state.queue.filter((_, i) => i !== index)};
     }),
-  reorderQueue: (fromIndex, toIndex) =>
+  reorderQueue: (fromIndexOrOpts, toIndexArg) =>
     set(state => {
+      // Normalize the two accepted call shapes (object or positional).
+      const fromIndex =
+        typeof fromIndexOrOpts === 'number'
+          ? fromIndexOrOpts
+          : fromIndexOrOpts.fromIndex;
+      const toIndex =
+        typeof fromIndexOrOpts === 'number'
+          ? toIndexArg ?? fromIndexOrOpts
+          : fromIndexOrOpts.toIndex;
       if (
         fromIndex === toIndex ||
         fromIndex < 0 ||

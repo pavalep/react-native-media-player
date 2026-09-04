@@ -100,6 +100,22 @@ export {
   useQueueSelectedIndices,
   type PlayerQueueSelectionStore,
 } from './hooks/useQueueSelection';
+export {
+  useSleepTimer,
+  useSleepTimerEnd,
+  useSleepTimerMode,
+  useEqualizer,
+  useEqualizerEnabled,
+  useIsLiked,
+  useToggleLiked,
+  useShuffle,
+  useShuffleEnabled,
+  type PlayerSleepTimerStore,
+  type SleepTimerMode,
+  type PlayerEqualizerStore,
+  type PlayerLikedStore,
+  type PlayerShuffleStore,
+} from './hooks/usePlayerFeatureHooks';
 export {useLaunchParams} from './hooks/useLaunchParams';
 
 export {
