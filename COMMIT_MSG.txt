@@ -1,52 +1,17 @@
-feat(v13-dx): add SimbaPlayer wrapper + resolveStreamType helper
+feat(v13-dx): add useLaunchParams hook for PlayerActivity branching
 
-V13 DX additions for @simba-dev/react-native-media-player.
-Both are designed to make the consumer-side integration as simple
-as possible (the user-defined goal: "junior-dev level").
+V13 Phase 54 DX: `useLaunchParams()` hook for consumer
+App.tsx branches that render the module's <PlayerRoot /> when
+the activity is launched with a queued playback payload, vs the
+regular navigator when no params.
 
-resolveStreamType (useOpenWithResume.tsx):
-  - Maps consumer content kinds ('music', 'movie', 'podcast',
-    'live-tv', 'radio', 'audiobook', 'archive-audio',
-    'episode', 'video-file') to V13 stream types
-    ('audio' | 'video').
-  - Passthrough for already-V13 stream types ('video' | 'audio').
-  - Idempotent: double-wrapping is safe.
-  - Exported as `resolveStreamType` + the `ContentKind` type.
-  - Used in the 32 V13 screen-file migrations to absorb the
-    content-kind -> stream-kind mapping that would otherwise be
-    an inline ternary in every file.
+The hook reads the one-shot launch-params queue from the bridge
+exactly once on mount. Subsequent reads return null. Returns
+LaunchParams | null. Exported from the module index.
 
-SimbaPlayer (new file: src/hooks/SimbaPlayer.tsx):
-  - The one-import, one-wrapper integration point for the
-    module. Composes PlayerProvider + PlayerResumeProvider
-    under a single component.
-  - Props: `config?: PlayerConfig`, `lookup?: PlayerResumeLookup`,
-    `children`.
-  - Junior-dev App.tsx integration:
-    ```tsx
-    import { SimbaPlayer } from '@simba-dev/react-native-media-player';
-    <SimbaPlayer lookup={myBookmarkLookup}>
-      <RootNavigator />
-    </SimbaPlayer>
-    ```
-  - The `lookup` is optional; if omitted, the inner
-    PlayerResumeProvider is mounted with a no-op lookup that
-    always returns undefined. Screens that pass `resumeId` in
-    their openPlayer call get auto-resume; screens that don't are
-    unaffected.
-  - Exported from index.ts as `SimbaPlayer` + `SimbaPlayerProps`.
-
-Together with the previously-committed useOpenWithResume /
-PlayerResumeProvider / usePlayItem (commit 696fef9), the module
-now provides a complete public surface for the V13 migration:
-
-  - SimbaPlayer (the wrapper)
-  - usePlayerActivity (raw openPlayer access)
-  - useOpenWithResume (auto-resume)
-  - usePlayItem (one-line press handler)
-  - PlayerRoot + DefaultControls (the V13 UI, Phase 54)
-  - getMpvPlayerModule() (the typed bridge)
-  - resolveStreamType (content-kind -> stream-kind helper)
+Junior-dev rule of thumb: if your app routes to <PlayerRoot />,
+call this hook and check the return. No need to manage the
+queue, native one-shot, or React state yourself.
 
 Verification:
   - npm run typecheck: clean.
