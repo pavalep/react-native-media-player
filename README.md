@@ -105,35 +105,103 @@ getMpvPlayerModule().requestNotificationPermission?.(); // graceful no-op on old
 ## Basic usage
 
 ```tsx
-// App.tsx
+// App.tsx — V13+ (one wrapper, one import)
 import React from 'react';
-import { PlayerProvider, PlayerRoot } from '@simba-dev/react-native-media-player';
+import { SimbaPlayer, PlayerRoot, useLaunchParams } from '@simba-dev/react-native-media-player';
 
 export default function App() {
   return (
-    <PlayerProvider>
-      <PlayerRoot />
-    </PlayerProvider>
+    <SimbaPlayer>
+      <AppContent />
+    </SimbaPlayer>
   );
+}
+
+function AppContent() {
+  // If the activity was launched with playback params (i.e. some
+  // screen called openPlayer(...) and triggered the PlayerActivity
+  // handoff), render the module's player surface + controls.
+  // Otherwise, render the regular app.
+  const launchParams = useLaunchParams();
+  if (launchParams) return <PlayerRoot />;
+  return <YourNavigator />;
 }
 ```
 
-That's it — `<PlayerRoot>` renders `<PlayerSurface>` (the JS placeholder for the native SurfaceView) + `<DefaultControls>` (top bar + scrubber + transport buttons + auto-hide). Press play from the native side and the player comes alive.
+That's it — `<SimbaPlayer>` is the one-import, one-wrapper integration point. It composes the `PlayerProvider` (config + state) and `PlayerResumeProvider` (bookmark-aware resume lookup). `<PlayerRoot>` renders `<PlayerSurface>` (the JS placeholder for the native SurfaceView) + `<DefaultControls>` (top bar + scrubber + transport buttons + auto-hide).
 
 ### Launching a file from JS
 
 ```tsx
-import { NativeModules } from 'react-native';
+import { usePlayerActivity } from '@simba-dev/react-native-media-player';
 
-const { MpvPlayerModule } = NativeModules;
-
-await MpvPlayerModule.openPlayer(
-  'https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4',
-  'Big Buck Bunny',
-  'video', // or 'audio'
-  0,       // start position in ms
-);
+function TrackRow({ track }) {
+  const { openPlayer } = usePlayerActivity();
+  return (
+    <Pressable onPress={() => openPlayer({
+      uri: track.uri,
+      title: track.title,
+      type: 'audio',        // 'video' | 'audio'
+      startPositionMs: 0,   // optional
+    })}>
+      <Text>{track.title}</Text>
+    </Pressable>
+  );
+}
 // PlayerActivity launches, plays the file, supports PiP, etc.
+```
+
+### Resume-aware openPlayer (with bookmarks)
+
+If your app has a bookmarks/history feature, wrap your tree in `<SimbaPlayer>` with a `lookup` adapter and use `useOpenWithResume()`. The hook accepts a `resumeId` and looks up the saved position via your adapter — no manual position plumbing in every call site.
+
+```tsx
+// App.tsx
+import { SimbaPlayer, type PlayerResumeLookup } from '@simba-dev/react-native-media-player';
+
+const resumeLookup: PlayerResumeLookup = {
+  getResumePosition: (resumeId) => {
+    // resolve the resume position (ms) for the given item
+    // — return undefined for "no saved position"
+    return store.getState().bookmarks.byFileUri[resumeId]?.positionMs;
+  },
+};
+
+<SimbaPlayer lookup={resumeLookup}>
+  <AppContent />
+</SimbaPlayer>
+
+// TrackRow.tsx
+import { useOpenWithResume } from '@simba-dev/react-native-media-player';
+
+function TrackRow({ track }) {
+  const openPlayer = useOpenWithResume();
+  return (
+    <Pressable onPress={() => openPlayer({
+      uri: track.uri,
+      title: track.title,
+      type: 'audio',
+      resumeId: track.uri,  // module looks up the saved position
+    })}>
+      <Text>{track.title}</Text>
+    </Pressable>
+  );
+}
+```
+
+### Mapping content kinds to V13 stream types
+
+If your items have content kinds like `'music'`, `'movie'`, `'podcast'` (not the V13 stream types `'audio' | 'video'`), use the `resolveStreamType` helper:
+
+```tsx
+import { usePlayerActivity, resolveStreamType } from '@simba-dev/react-native-media-player';
+
+const { openPlayer } = usePlayerActivity();
+openPlayer({
+  uri: item.uri,
+  title: item.title,
+  type: resolveStreamType(item.kind),  // 'music' -> 'audio', 'movie' -> 'video', etc.
+});
 ```
 
 ## Custom UI
@@ -316,46 +384,47 @@ Default theme is dark with a golden accent (`DEFAULT_THEME`).
 
 ## API reference
 
-Every public export lives in [`src/index.ts`](./src/index.ts).
+Every public export lives in [`src/index.ts`](./src/index.ts). The **V13+ surface** is the recommended way to integrate; the V12 surface (`PlayerProvider` + `usePlayer()` directly) still works for backward compatibility but is undocumented for new consumers.
 
-### Components
+### Components (V13+ recommended)
 
 | Component | Purpose |
 |---|---|
-| `<PlayerProvider>` | Wraps the app; provides resolved config + `renderControls` slot to descendants. |
-| `<PlayerRoot>` | Renders `<PlayerSurface>` + the controls overlay (custom via `renderControls` or `<DefaultControls>`). |
+| `<SimbaPlayer>` | **One-import, one-wrapper integration.** Composes `PlayerProvider` + `PlayerResumeProvider`. Use this at the app root. |
+| `<PlayerRoot>` | Renders `<PlayerSurface>` + the controls overlay (default `<DefaultControls>` or custom via `renderControls`). Use in the activity branch of your App.tsx. |
 | `<PlayerSurface>` | `<View flex:1>` placeholder for the native SurfaceView. a11y-hidden. |
 | `<DefaultControls>` | Pre-built controls (top bar, scrubber, transport, auto-hide). |
+| `<PlayerProvider>` | (V12 surface) Wraps the app; provides resolved config + `renderControls` slot. Use `<SimbaPlayer>` instead unless you need the raw provider. |
 
-### Hooks
+### Hooks (V13+)
 
 | Hook | Returns | Throws outside provider? |
 |---|---|---|
+| `usePlayerActivity()` | `{ openPlayer(opts), getLaunchParams() }` | ❌ No (no-op fallback) |
+| `useOpenWithResume()` | `(opts: OpenPlayerOptions & { resumeId? }) => Promise<boolean>` | ❌ No (no-op lookup) |
+| `usePlayItem()` | `(item, opts) => Promise<boolean>` | ❌ No (sugar on `useOpenWithResume`) |
+| `useLaunchParams()` | `LaunchParams \| null` | ❌ No (returns null) |
+| `usePlayer()` | `{ state: PlayerState, commands: PlayerCommands }` | ❌ No (returns defaults) |
+| `usePlayerProgress()` | `{ positionMs, durationMs, isBuffering, isSeeking, seekable, cacheRanges, cacheFill }` | ❌ No (returns 0/0) |
 | `usePlayerConfig()` | `ResolvedPlayerConfig` | ✅ Yes (programmer error) |
 | `useTheme()` | `PlayerTheme` | ✅ Yes (programmer error) |
 | `useRenderControls()` | `RenderControlsFn \| null` | ❌ No (falls back to default controls) |
-| `usePlayer()` | `{ state: PlayerState, commands: PlayerCommands }` | ❌ No (returns defaults) |
-| `usePlayerProgress()` | `{ positionMs: number, durationMs: number }` | ❌ No (returns 0/0) |
 
-### Types
+### Types (V13+)
 
-| Type | Fields |
+| Type | Notes |
 |---|---|
-| `PlayerConfig` | `theme?`, `pip?`, `audio?`, `subtitle?`, `notifications?`, `hardwareDecoding?`, `debug?` |
-| `ResolvedPlayerConfig` | Same as `PlayerConfig` but every field is required + defaulted |
-| `PlayerTheme` | `accent`, `background`, `text`, `textSecondary`, `surface`, `icon?` |
-| `PipConfig` | `enabled`, `autoEnterOnLeave` |
-| `AudioConfig` | `backgroundPlayback`, `respectAudioFocus` |
-| `SubtitleConfig` | `preferredLanguages`, `fontSize` |
-| `NotificationConfig` | `enabled`, `channelId` |
-| `DebugConfig` | `verboseLogging` |
-| `HardwareDecodingPolicy` | `'auto' \| 'mediacodec' \| 'no'` |
-| `PlayerState` | `isPlaying`, `title`, `artist`, `album` |
-| `PlayerProgress` | `positionMs`, `durationMs` |
-| `PlayerCommands` | `play()`, `pause()`, `seek(ms)`, `skipBackward(s)`, `skipForward(s)` |
-| `UsePlayerResult` | `{ state, commands }` |
-| `RenderControlsFn` | `() => React.ReactNode` |
-| `MpvPlayerModuleBridge` | Typed view of the native module |
+| `PlayerState` | 20 fields: `isPlaying`, `title`, `artist`, `album`, `positionMs`, `durationMs`, `isBuffering`, `isSeeking`, `seekable`, `volume`, `isMuted`, `speed`, `loopMode`, `playlist`, `currentIndex`, `tracks`, `chapters`, `currentChapter`, `videoParams`, `error` |
+| `PlayerProgress` | 7 fields: `positionMs`, `durationMs`, `isBuffering`, `isSeeking`, `seekable`, `cacheRanges`, `cacheFill` |
+| `PlayerCommands` | 38 methods: `play`, `pause`, `seek`, `skipBackward`, `skipForward`, `togglePlayPause`, `stop`, `seekBy`, `seekToChapter`, `next`, `previous`, `setVolume`, `setMuted`, `toggleMute`, `setSpeed`, `setLoopMode`, `loadFile`, `loadPlaylist`, `playlistRemove`, `shuffle`, `clear`, `selectTrack`, `cycleTrack`, `setTrack`, `enterPip`, `exitPip`, `exitPipAndFinish`, `setKeepScreenOn`, `setOrientation`, `setImmersive`, `setScreenBrightness`, `requestNotificationPermission`, `openPlayer`, `getLaunchParams`, `getProperty`, `setProperty`, `observeProperty`, `unobserveProperty`, `grantPersistablePermission`, `verifyContentUri` |
+| `OpenPlayerOptions` | `{ uri, title, type: 'video' \| 'audio', startPositionMs? }` — the V13 `openPlayer` arg shape (replaces V11's positional args) |
+| `LaunchParams` | `{ uri, title, type, startPositionMs }` — read from the activity via `useLaunchParams()` |
+| `ContentKind` | `'video' \| 'audio' \| 'music' \| 'movie' \| 'podcast' \| 'live-tv' \| 'radio' \| 'audiobook' \| 'archive-audio' \| 'episode' \| 'video-file' \| string` |
+| `PlayerResumeLookup` | `{ getResumePosition(itemId: string): number \| undefined }` — adapter for the bookmark-aware resume lookup |
+| `SimbaPlayerProps` | `{ config?: PlayerConfig, lookup?: PlayerResumeLookup, children: React.ReactNode }` |
+| `MpvPlayerModuleBridge` | Typed view of the native module (78 methods) |
+| `PlayerConfig`, `ResolvedPlayerConfig`, `PlayerTheme`, `PipConfig`, `AudioConfig`, `SubtitleConfig`, `NotificationConfig`, `DebugConfig`, `HardwareDecodingPolicy` | V12 surface — same as before |
+| `MpvTrack`, `MpvChapter`, `MpvFileInfo`, `MpvVideoParams`, `MpvAudioDevice`, `MpvPlaybackState`, `MpvLoopMode`, `MpvEventName`, `MpvEvents`, `MpvEventPayloads`, `PlayerEventName`, `PlayerEventPayloads` | Low-level mpv types |
 
 ### Constants
 
@@ -370,6 +439,9 @@ Every public export lives in [`src/index.ts`](./src/index.ts).
 |---|---|
 | `resolvePlayerConfig(config)` | Merge a partial config with defaults — useful for tests / debug overlays |
 | `getMpvPlayerModule()` | Typed wrapper over `NativeModules.MpvPlayerModule`. Returns a no-op stub on non-RN platforms (jest, web). |
+| `resolveStreamType(kind: ContentKind): 'video' \| 'audio'` | Map a content kind to the V13 stream type. Idempotent — `'video'` and `'audio'` pass through unchanged. Use this when your items have `'music'`, `'movie'`, etc. but V13 `openPlayer` expects `'video' | 'audio'`. |
+| `subscribePlayerEvent(name, handler)` → unsubscribe | Subscribe to a native mpv event (22 events). Returns an unsubscribe function. |
+| `removeAllListeners(event?)` | Remove all listeners for an event (or all events if no arg). |
 
 ## Troubleshooting
 
