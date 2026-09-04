@@ -81,6 +81,12 @@ export {
 } from './hooks/useSimbaPlayerLookup';
 export {SimbaPlayerRoot, type SimbaPlayerRootProps} from './hooks/SimbaPlayerRoot';
 export {useOpenFromUrl} from './hooks/useOpenFromUrl';
+export {
+  useOpenPlaylist,
+  type PlayableEntry,
+  type OpenPlaylistOptions,
+  type UseOpenPlaylistResult,
+} from './hooks/useOpenPlaylist';
 export {useLaunchParams} from './hooks/useLaunchParams';
 
 export {
