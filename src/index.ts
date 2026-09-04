@@ -75,6 +75,7 @@ export {
 } from './hooks/useOpenWithResume';
 
 export {SimbaPlayer, type SimbaPlayerProps} from './hooks/SimbaPlayer';
+export {useLaunchParams} from './hooks/useLaunchParams';
 
 export {
   getMpvPlayerModule,
