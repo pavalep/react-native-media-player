@@ -76,6 +76,7 @@ export {
 
 export {SimbaPlayer, type SimbaPlayerProps} from './hooks/SimbaPlayer';
 export {SimbaPlayerRoot, type SimbaPlayerRootProps} from './hooks/SimbaPlayerRoot';
+export {useOpenFromUrl} from './hooks/useOpenFromUrl';
 export {useLaunchParams} from './hooks/useLaunchParams';
 
 export {
