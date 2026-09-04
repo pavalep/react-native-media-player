@@ -1,0 +1,63 @@
+feat(v13-dx): add useOpenWithResume + usePlayItem + PlayerResumeProvider
+
+V13+ DX: high-level hooks that absorb the resume-position lookup
+plumbing that every consumer screen would otherwise have to write
+by hand.
+
+Module additions (src/hooks/useOpenWithResume.tsx):
+
+- PlayerResumeContext + PlayerResumeProvider: a tiny context that
+  holds a getResumePosition(itemId) -> ms lookup function. The
+  consumer wires the lookup ONCE at the app root (e.g. in App.tsx)
+  to read from their bookmarks/history persistence. Every call
+  site below the provider can use the new hooks without touching
+  the persistence layer.
+
+- useOpenWithResume(): returns a stable openPlayer function that
+  accepts an OpenPlayerOptions + an optional resumeId. The hook
+  resolves resumeId to a startPositionMs via the provider's
+  lookup, falling back to 0 when no provider is in scope or the
+  lookup returns nothing. This is the primary public API for the
+  V13 migration: 32 screen files get a smaller, more consistent
+  openPlayer call shape.
+
+- usePlayItem(): sugar on top of useOpenWithResume. Accepts a
+  minimal item shape ({id, uri, title}) + a type, and returns a
+  one-arg function that opens the player with resume lookup. For
+  the V14 migration (Phase 54+): reduces the consumer's per-row
+  press handler to a single onPress call.
+
+Rationale:
+
+The 32 V13 screen files all do the same thing:
+  1. const {openPlayer} = usePlayerActivity();
+  2. openPlayer({uri, title, type, startPositionMs: lookup(id)});
+  3. <Pressable onPress={...}>
+
+useOpenWithResume collapses steps 1-2 into:
+  1. const openPlayer = useOpenWithResume();
+  2. openPlayer({uri, title, type, resumeId: id});
+
+The lookup is centralized in the provider. V14 can add the
+PlayerLauncher component as another layer of sugar.
+
+Why the module owns the resume lookup: every project persists
+bookmarks/history differently (Redux, SQLite, MMKV, etc.). The
+module provides the hook shape; the consumer provides the lookup
+adapter. The hook is the public surface, the lookup is the
+integration point.
+
+File layout:
+- src/hooks/useOpenWithResume.tsx: context + hook + provider (all
+  in one .tsx file because the project uses the legacy JSX
+  transform; .ts files can't contain JSX).
+- src/index.ts: re-exports.
+
+No breaking changes. usePlayerActivity, usePlayerActivity's
+openPlayer, and the rest of the V13 surface are unchanged.
+
+Out of scope (V14 ideas for the public API):
+- <PlayerLauncher> component (render-prop wrapping a press handler)
+- type inference from URI scheme / file extension
+- <Provider> composition: PlayerProvider + PlayerResumeProvider
+  in a single wrapper for PlayerActivity

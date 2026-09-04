@@ -65,6 +65,14 @@ export {
 } from './hooks/usePlayerActivity';
 
 export {
+  PlayerResumeProvider,
+  useOpenWithResume,
+  usePlayItem,
+  type PlayerResumeLookup,
+  type PlayerResumeProviderProps,
+} from './hooks/useOpenWithResume';
+
+export {
   getMpvPlayerModule,
   subscribePlayerEvent,
   removeAllListeners,
