@@ -54,8 +54,15 @@ export {
   type PlayerCommands,
   type PlayerProgress,
   type PlayerState,
+  type PlaylistEntry,
   type UsePlayerResult,
 } from './types/player';
+
+export {
+  usePlayerActivity,
+  type OpenPlayerOptions,
+  type UsePlayerActivityResult,
+} from './hooks/usePlayerActivity';
 
 export {
   getMpvPlayerModule,

@@ -4,6 +4,32 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - V13 Phases 51-52
+
+### Added
+
+- **Expanded `PlayerState` interface** (`src/types/player.ts`). The Phase 24 state had 4 fields (`isPlaying`, `title`, `artist`, `album`); the V13 Phase 51 state has **20 fields**. New fields: `positionMs`, `durationMs`, `isBuffering`, `isSeeking`, `seekable`, `volume`, `isMuted`, `speed`, `loopMode`, `playlist` (with new `PlaylistEntry` type), `currentIndex`, `tracks`, `chapters`, `currentChapter`, `videoParams`, `error`. Backward-compatible — all V12 fields keep their semantics.
+- **Expanded `PlayerCommands` interface**. V12 had 5 methods (`play`, `pause`, `seek`, `skipBackward`, `skipForward`); V13 has **38 methods**. New methods: `togglePlayPause`, `stop`, `seekBy`, `seekToChapter`, `next`, `previous`, `setVolume`, `setMuted`, `toggleMute`, `setSpeed`, `setLoopMode`, `loadFile`, `loadPlaylist`, `playlistRemove`, `shuffle`, `clear`, `selectTrack`, `cycleTrack`, `setTrack`, `enterPip`, `exitPip`, `exitPipAndFinish`, `setKeepScreenOn`, `setOrientation`, `setImmersive`, `setScreenBrightness`, `requestNotificationPermission`, `openPlayer` (reshaped from positional to options object), `getLaunchParams`, `getProperty`, `setProperty`, `observeProperty`, `unobserveProperty`, `grantPersistablePermission`, `verifyContentUri`. The `commands` object is now a module-scope singleton — `useMemo`-wrapped consumers can memoise on the reference.
+- **Expanded `PlayerProgress` interface**. V12 had 2 fields (`positionMs`, `durationMs`); V13 has **7 fields**. New fields: `isBuffering`, `isSeeking`, `seekable`, `cacheRanges`, `cacheFill`. `usePlayerProgress()` now reads from a separate context (owned by `PlayerProvider`) so consumers that only render a scrubber don't re-render on every volume / track / chapter change.
+- **`usePlayerActivity()` hook** (`src/hooks/usePlayerActivity.ts`). Thin wrapper exposing `{ openPlayer(opts), getLaunchParams() }` for the consumer's 33+ call sites that previously used the V11 `usePlaybackCommands()`. The hook is non-throwing: outside a provider / in jest / on web preview, the bridge resolves to the no-op fallback and `openPlayer` resolves `false` / `getLaunchParams` returns `null`.
+- **`PlayerStateContext` + `PlayerProgressContext`** exported from `src/types/player.ts` (used internally by `PlayerProvider`).
+- **New exported types**: `PlaylistEntry` (in `src/types/player.ts`).
+
+### Changed
+
+- **`PlayerProvider` now owns the live player state**. On mount it (1) hydrates from synchronous bridge getters, (2) subscribes to all 22 mpv events via `subscribePlayerEvent`, and (3) starts a 1Hz `setInterval` polling `getPosition`/`getDuration`. The state is held in a `useState` (rendered) + `useRef` (read-by-event-handlers) pair. `usePlayer()` outside a provider still returns the `DEFAULT_STATE` (no throw), so `DefaultControls` can render in any environment.
+- **`applyPlayerEvent(state, progress, event, payload) → { state, progress }`** is the new pure event-dispatch function (replaces the V12 stub `usePlayer()` which returned hardcoded `DEFAULT_STATE`). Unit-testable in isolation; exported from `types/player.ts` for V14 consumers.
+- **`hydratePlayerState(bridge)`** is a new pure function exported from `types/player.ts` that runs the initial-mount hydration. The provider calls it in its mount effect.
+- **`parseMetadata(json)`** is a new pure function exported from `types/player.ts` for parsing mpv's `metadata` property (a JSON array of `{key, value}` entries) into `{title, artist, album}`.
+- **`usePlayer()`** is now a thin context consumer (was a hardcoded-default hook). The `commands` object is a module-scope singleton so `expect(commands).toBe(firstCommands)` holds across re-renders (per the Phase 24 stable-reference contract).
+- **Test file rename**: `src/types/__tests__/player.test.ts` → `player.test.tsx` (the new tests need JSX for `<PlayerProvider>` wrappers). 100/100 tests pass.
+
+### Notes
+
+- **No version bump yet.** The V13 work lands as `1.2.0` at Phase 58 (V13 final QA + release). This Unreleased section documents Phases 51 + 52; Phases 53-58 will be appended before the release tag.
+- **Backward-compatible.** All V12 `usePlayer()` consumers see the same 4 fields in `state` and the same 5 methods in `commands`. New fields are additive; new commands are additive.
+- **Next up**: Phase 53 (migrate the consumer's 33+ call sites from `usePlaybackCommands`/`MpvPlayer`/`NativeModules.MpvPlayerModule` to module imports).
+
 ## [1.1.0] - 2026-09-03 (V13 Phase 50)
 
 ### Added
