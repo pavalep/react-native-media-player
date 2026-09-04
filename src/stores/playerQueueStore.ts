@@ -4,14 +4,23 @@ import {create} from 'zustand';
  * V15 Phase 65: the queue item shape exposed by `useQueue()`.
  *
  * Mirrors the consumer's V14 `playerSlice` queue entry: a
- * minimal `(fileUri, title)` plus the metadata the consumer
+ * minimal `(uri, title)` plus the metadata the consumer
  * needs to display the queue UI. Kept structurally compatible
- * with the consumer's `QueueItem` type so existing UI components
- * can be migrated without shape changes.
+ * with the consumer's `QueueableItem` / `PlaybackEntry` types
+ * so existing UI components can be migrated without shape
+ * changes.
+ *
+ * Only `uri` and `title` are required. The rest are optional
+ * and ignored by the store's actions; they're retained so
+ * the UI can display rich row content.
  */
 export interface PlayerQueueItem {
-  fileUri: string;
+  uri: string;
   title: string;
+  duration?: number;
+  artist?: string;
+  album?: string;
+  artworkUri?: string;
   source?: string;
   /** `'audio' | 'video'` stream type. */
   type?: 'audio' | 'video';
