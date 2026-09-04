@@ -44,22 +44,31 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Verify staging version exists
+      - name: Verify version is published
         shell: bash
         run: |
           VERSION="${{ inputs.version }}"
           PKG="@simba-dev/react-native-media-player"
           # Strip leading 'v' if user typed it
           VERSION="${VERSION#v}"
-          echo "Promoting ${PKG}@${VERSION} from staging → latest"
-          # Confirm the version is published with the staging tag.
-          # stderr is suppressed (2>/dev/null) to drop deprecation warnings
-          # that would otherwise corrupt the captured version string.
-          STAGING_VER=$(npm view "${PKG}@staging" version --registry https://registry.npmjs.org/ --silent 2>/dev/null || true)
-          echo "npm staging tag currently points at: ${STAGING_VER}"
-          if [ "$STAGING_VER" != "$VERSION" ]; then
-            echo "::error::Version ${VERSION} is not the current @staging (got ${STAGING_VER}). Aborting."
+          echo "Promoting ${PKG}@${VERSION} → latest"
+          # Confirm the version is published at all (any dist-tag, or no tag).
+          # This is more lenient than the previous "must be on staging" check
+          # because of a real-world case we hit: release.yml publishes a
+          # version successfully, but the staging tag is later clobbered by
+          # a re-publish of an older version (e.g. when npm rejects a
+          # re-publish, the dist-tag remains whatever was last set on the
+          # older version). The version itself is still valid and published.
+          PUBLISHED_VER=$(npm view "${PKG}@${VERSION}" version --registry https://registry.npmjs.org/ --silent 2>/dev/null || true)
+          if [ -z "$PUBLISHED_VER" ]; then
+            echo "::error::Version ${VERSION} not found on npm. Publish it first via release.yml (push tag v${VERSION})."
             exit 1
+          fi
+          # Report the current staging tag for context
+          STAGING_VER=$(npm view "${PKG}@staging" version --registry https://registry.npmjs.org/ --silent 2>/dev/null || echo "(none)")
+          echo "Current staging tag: ${STAGING_VER}"
+          if [ "${STAGING_VER}" != "${VERSION}" ]; then
+            echo "::warning::Staging tag points at ${STAGING_VER} but you are promoting ${VERSION}. The promote step below will align staging to ${VERSION} as well."
           fi
           # Save resolved version for the next step
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
@@ -71,10 +80,21 @@ jobs:
       # `production` environment secret `NPM_TOKEN`. Bypass-2FA is required for
       # CI automation; this capability is being deprecated Jan 2027 — by then
       # we expect npm to extend trusted publishing to dist-tag mutations.
-      - name: Promote staging → latest
+      - name: Promote staging → latest (and align staging)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm dist-tag add "@simba-dev/react-native-media-player@${VERSION}" latest
+        run: |
+          PKG="@simba-dev/react-native-media-player"
+          # 1. Flip the `latest` tag to the new version (the user-visible
+          #    semantic of "this is the version consumers get by default").
+          npm dist-tag add "${PKG}@${VERSION}" latest
+          # 2. Align the `staging` tag too. Normally release.yml sets
+          #    `staging` when it publishes, but if the tag was clobbered
+          #    by a later re-publish of an older version, the promote
+          #    step brings it back into alignment. This keeps the
+          #    contract intact: after promote, both `latest` and
+          #    `staging` point at the same version.
+          npm dist-tag add "${PKG}@${VERSION}" staging
 
       - name: Publish the draft GitHub Release
         env:
