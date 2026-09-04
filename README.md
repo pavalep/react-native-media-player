@@ -105,7 +105,7 @@ getMpvPlayerModule().requestNotificationPermission?.(); // graceful no-op on old
 ## Basic usage
 
 ```tsx
-// App.tsx — V14+ (one wrapper, one import, zero glue code)
+// App.tsx — V15+ (one wrapper, one import, zero glue code)
 import React from 'react';
 import {
   SimbaPlayer,
@@ -145,6 +145,38 @@ function AppContent() {
 ```
 
 That's it — `<SimbaPlayer>` is the one-import, one-wrapper integration point. It composes the `PlayerProvider` (config + state) and `PlayerResumeProvider` (bookmark-aware resume lookup). `<SimbaPlayerRoot>` (V14) absorbs the `useLaunchParams()` + activity-branch switch. `useOpenFromUrl()` (V14) absorbs the deep-link URI-scheme filter + title-derivation + extension-classification. `getResumePosition` (V14) is the new function-prop shape for the resume lookup (replaces V13's `lookup={...}` object shape).
+
+### Per-screen usage (V15+)
+
+Every player-related call is a one-line module hook. No `useAppDispatch` in player files. No `useAppSelector(state => state.player.X)`. No V11-mirrored redux state.
+
+```tsx
+import {
+  usePlayerActivity,   // single-track play
+  useOpenPlaylist,     // play all from a list
+  useQueue,            // add / remove / reorder queue items
+  useSleepTimer,       // arm a sleep timer
+  useEqualizer,        // 10-band EQ
+  useIsLiked,          // per-file "liked" state
+  useShuffle,          // shuffle flag
+} from '@simba-dev/react-native-media-player';
+
+// Single-track play (V14, unchanged)
+const {openPlayer} = usePlayerActivity();
+const handlePlay = (item) => openPlayer({uri: item.uri, title: item.title, type: 'audio'});
+
+// Play all from a list (V15 — the "play all" two-step absorption)
+const {openPlaylist} = useOpenPlaylist();
+const handlePlayAll = () => openPlaylist(sortedTracks, {type: 'audio'});
+
+// Add to queue (V15 — zustand-backed, no Redux)
+const {addToQueue} = useQueue();
+const handleAddToQueue = (item) => addToQueue({uri: item.uri, title: item.title, ...});
+
+// Set sleep timer (V15 — public surface; the consumer hasn't wired UI yet)
+const {endTime, setTimer, clear} = useSleepTimer();
+const handleSet30Min = () => setTimer(30 * 60);  // 30 minutes
+```
 
 ### Launching a file from JS
 
@@ -413,14 +445,21 @@ Every public export lives in [`src/index.ts`](./src/index.ts). The **V13+ surfac
 | `<DefaultControls>` | Pre-built controls (top bar, scrubber, transport, auto-hide). |
 | `<PlayerProvider>` | (V12 surface) Wraps the app; provides resolved config + `renderControls` slot. Use `<SimbaPlayer>` instead unless you need the raw provider. |
 
-### Hooks (V13+, V14 additions in **bold**)
+### Hooks (V13+, V14 additions in **bold**, V15 additions in __bold-italic__)
 
 | Hook | Returns | Throws outside provider? |
 |---|---|---|
 | `usePlayerActivity()` | `{ openPlayer(opts), getLaunchParams() }` | ❌ No (no-op fallback) |
 | `useOpenWithResume()` | `(opts: OpenPlayerOptions & { resumeId? }) => Promise<boolean>` | ❌ No (no-op lookup) |
 | **`useOpenFromUrl()`** | **`(uri: string) => Promise<boolean>`** — **deep-link helper** that filters `content://` + `file://` URIs, derives a title from the basename, classifies audio/video by extension, and forwards to `useOpenWithResume().openPlayer(...)` | ❌ No |
+| **`useOpenPlaylist()`** | __V15 — `{ openPlaylist(entries, opts) }` — "play all from a list" two-step absorption. `opts: { type?, startIndex?, startPositionMs?, shuffle?, startExtras? }`__ | ❌ No |
 | **`useSimbaPlayerLookup(selector?)`** | **`PlayerResumeLookup`** — **factory hook** that wraps an optional `selector` in a memoized lookup object. Without a selector, returns no-op. | ❌ No |
+| __`useQueue()` / `useQueueItems()` / `useQueueLength()` / `usePlaybackHistory()`__ | __V15 — queue + playback history state (zustand-backed). `useQueue()` returns the full store (queue, history, 9 actions: addToQueue, prependToQueue, removeFromQueue, reorderQueue, clearQueue, shuffleQueue, playFromQueue, addToPlaybackHistory, clearPlaybackHistory).__ | ❌ No |
+| __`useQueueSelection()` / `useQueueSelectedIndices()`__ | __V15 — multi-select state for the queue (selected indices + 4 actions: setSelection, clearSelection, removeSelected, moveSelectedToTop).__ | ❌ No |
+| __`useSleepTimer()` / `useSleepTimerEnd()` / `useSleepTimerMode()`__ | __V15 — sleep timer state (endTime + mode) + actions (setTimer, setMode, clear).__ | ❌ No |
+| __`useEqualizer()` / `useEqualizerEnabled()`__ | __V15 — 10-band equalizer (gains + enabled) + actions (setGains, toggle).__ | ❌ No |
+| __`useIsLiked(uri)` / `useToggleLiked()`__ | __V15 — per-file "liked" state (Record<uri, boolean>) + toggle action.__ | ❌ No |
+| __`useShuffle()` / `useShuffleEnabled()`__ | __V15 — shuffle flag + toggle action.__ | ❌ No |
 | `usePlayItem()` | `(item, opts) => Promise<boolean>` | ❌ No (sugar on `useOpenWithResume`) |
 | `useLaunchParams()` | `LaunchParams \| null` | ❌ No (returns null) |
 | `usePlayer()` | `{ state: PlayerState, commands: PlayerCommands, progress: PlayerProgress }` | ❌ No (returns defaults) |

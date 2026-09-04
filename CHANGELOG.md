@@ -4,6 +4,50 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-09-04 (V15.0.0 — per-screen simplification + state consolidation)
+
+This is the **V15.0.0** release — the per-screen layer of the V14 junior-dev mission. V14 (1.3.0) shipped the one-import, one-wrapper integration for `App.tsx`. V15 extends that simplicity into the per-screen code paths: every player-related call (play one, play all, add to queue, set sleep timer, toggle like, toggle equalizer, toggle shuffle) is now a one-line module hook. No more `useAppDispatch` in player files, no more `useAppSelector(state => state.player.X)`, no more V11-mirrored redux state.
+
+### Added (V15 Phases 64-66)
+
+- **`useOpenPlaylist()`** (Phase 64). The "play all from a list" two-step pattern in 4 list-style screens collapses to a single hook call. Absorbs the entries.copy + shuffle + start-track dispatch + `openPlayer` call.
+- **`useQueue()` + convenience hooks** (Phase 65). The consumer's `queue` + `playbackHistory` + `selectedQueueIndices` state moves into the module's zustand store. 13 queue-related reducers deleted from `playerSlice`.
+- **`useQueueSelection()`** (Phase 65). The queue multi-select state (selected indices, batch ops) moves into the module's zustand store.
+- **`useSleepTimer()` + `useSleepTimerEnd()` + `useSleepTimerMode()`** (Phase 66). Sleep-timer state (end time + mode) moves into the module's zustand store. Public API for future sleep-timer UI.
+- **`useEqualizer()` + `useEqualizerEnabled()`** (Phase 66). 10-band equalizer state + enabled flag in the module's zustand store.
+- **`useIsLiked()` + `useToggleLiked()`** (Phase 66). Per-file "liked" state. Public API for future like-button UI.
+- **`useShuffle()` + `useShuffleEnabled()`** (Phase 66). Shuffle flag in the module's zustand store.
+- **`PlayerQueueItem` type** — structurally a superset of the consumer's `PlaylistEntry` (uri, title, duration, source, type, mediaType, provider, folderId, artworkUri).
+- **`PlayerQueueStore` + `PlayerQueueSelectionStore` + `PlayerSleepTimerStore` + `PlayerEqualizerStore` + `PlayerLikedStore` + `PlayerShuffleStore` types** for advanced consumers.
+- **zustand@5.0.15** added as a regular runtime dependency.
+
+### Added (V15 Phase 67)
+
+- V11 cleanup: deleted `src/services/notificationService.ts` (307 lines, V11-only RPCs) and `v13-trash-2026-09-04/` directory (84 files). Audit found zero consumer files importing anything from either. Both moved to `X:\Development\SIMBA\v17-backup-2026-09-04\` for safe-keeping.
+
+### Changed (V15 Phase 62 — continued from V14)
+
+- **`playerSlice.ts` trimmed** from 489 lines → 178 lines. State fields removed: `shuffle`, `sleepTimerEndTime`, `sleepTimerMode`, `equalizerGains`, `equalizerEnabled`, `liked`, `queue`, `playbackHistory`, `selectedQueueIndices`. Reducers removed: 24 (V14's 8 V11-mirrored + V15's 16 queue/sleep/equalizer/liked/shuffle).
+- **`useOpenPlaylist` overloads**: accepts object form (`{type, startIndex, startPositionMs, shuffle, startExtras}`) or just positional entries for the simple case.
+- **V14's `state.shuffle`-based wrap behavior** in `nextTrack`/`previousTrack` reverted to V11's default (stop at end / start). Consumers who want playlist wrap should use the module's `setLoopMode('playlist')` command.
+
+### Migration from 1.3.0
+
+No breaking changes. All V14 exports retained. New exports are additive; new `<SimbaPlayer>` props are additive.
+
+For the consumer (`MOBILE_APP_REACT_NATIVE`):
+- `App.tsx` integration is unchanged from V14 (one wrapper, one import).
+- Per-screen integration: any `dispatch(addToQueue(item))` etc. can be replaced with `addToQueue(item)` from `useQueue()`. 4 "play all" screens collapsed from 12-30 lines to a single `openPlaylist()` call.
+- `<Provider store={store}>` is no longer required for the player integration. The store is still required for bookmarks, settings, etc.
+
+### Notes
+
+- **Backward-compatible.** No breaking changes for V14 consumers.
+- **`<Provider store={store}>` is optional for `<SimbaPlayer>`** — the module's zustand stores are self-contained. The consumer's `<Provider>` is still needed for the rest of the app (bookmarks, settings, etc.).
+- **`PlayerQueueItem.type` and `.source` and `.mediaType` are typed as `string`** (not the consumer's narrower `MediaKind` / `MediaSource` / `MediaLane` unions). At the consumer boundary, items are cast `as unknown as PlaylistEntry[]` — runtime-compatible, type-bridge documented.
+- **`playerSlice.ts` is preserved as a 178-line remnant** with `currentFile` / `playlist` / `currentIndex` + 5 used actions. 5 files still read these. Migration to module zustand is a separate "Phase 66.5" / V16 candidate.
+- **V15.5 / V16 ideas** (deferred): DRM (Widevine + ClearKey), Casting (DLNA + Chromecast + AirPlay-equivalent), iOS / Linux / tvOS support, deprecation warning for the legacy `lookup` object prop on `<SimbaPlayer>`, migrate the remaining 5 files using the consumer's `playlist` mirror.
+
 ## [1.3.0] - 2026-09-04 (V14.0.0 — junior-dev-level integration surface)
 
 This is the **V14.0.0** release — the DX-polish layer on top of the V13 extraction. V13 shipped "complete the extraction"; V14 ships "make the integration so simple a junior dev can ship a working player with one import + one wrapper component + zero glue code". Every consumer's `App.tsx` now reads identically:

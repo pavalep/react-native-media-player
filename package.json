@@ -1,7 +1,7 @@
 {
   "name": "@simba-dev/react-native-media-player",
-  "version": "1.3.0",
-  "description": "React Native video/audio player powered by libmpv — Picture-in-Picture, MediaSession, custom RN UI. **V14.0.0 stable release** (2026-09-04) — junior-dev-level integration surface. See [`SIMBA_PLAYER_MODULE_V14_FINAL_QA_REPORT.md`](X:/Development/SIMBA/MOBILE_APP_REACT_NATIVE/md/SIMBA_PLAYER_MODULE_V14_FINAL_QA_REPORT.md) for the QA report. Published under the `@simba-dev` org (the bare `simba` org-name on npmjs was reserved at publication time).",
+  "version": "1.4.0",
+  "description": "React Native video/audio player powered by libmpv — Picture-in-Picture, MediaSession, custom RN UI. **V15.0.0 stable release** (2026-09-04) — per-screen simplification + state consolidation. Junior-dev surface across App.tsx AND per-screen code paths. See [`SIMBA_PLAYER_MODULE_V15_FINAL_QA_REPORT.md`](X:/Development/SIMBA/MOBILE_APP_REACT_NATIVE/md/SIMBA_PLAYER_MODULE_V15_FINAL_QA_REPORT.md) for the QA report. Published under the `@simba-dev` org (the bare `simba` org-name on npmjs was reserved at publication time).",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "react-native": "src/index.ts",
