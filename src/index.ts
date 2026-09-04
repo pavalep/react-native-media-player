@@ -68,9 +68,13 @@ export {
   PlayerResumeProvider,
   useOpenWithResume,
   usePlayItem,
+  resolveStreamType,
+  type ContentKind,
   type PlayerResumeLookup,
   type PlayerResumeProviderProps,
 } from './hooks/useOpenWithResume';
+
+export {SimbaPlayer, type SimbaPlayerProps} from './hooks/SimbaPlayer';
 
 export {
   getMpvPlayerModule,

@@ -177,3 +177,60 @@ export function usePlayItem(): (item: {id: string; uri: string; title: string}, 
 
 /** Re-export the resume context for advanced consumers (testing, etc.). */
 export { PlayerResumeContext };
+
+/**
+ * V13+ DX: map a content/media-kind string to a V13 stream type
+ * (`'video' | 'audio'`). Useful for consumers that historically
+ * passed a content type (`'music'`, `'movie'`, etc.) where V13
+ * expects a stream type.
+ *
+ * The mapping is conservative — anything not in the explicit
+ * "video" / "audio" lists falls back to `'audio'` (the safer
+ * default; if you need a different default for your app, copy
+ * the function and adjust).
+ *
+ * The map covers the common SIMBA content kinds. Consumers with
+ * custom kinds should add their own cases or pre-map before
+ * calling.
+ *
+ * @example
+ * ```ts
+ * import { resolveStreamType } from '@simba-dev/react-native-media-player';
+ *
+ * openPlayer({
+ *   uri: item.uri,
+ *   title: item.title,
+ *   type: resolveStreamType(item.kind),  // 'music' -> 'audio', 'movie' -> 'video', etc.
+ * });
+ * ```
+ */
+export type ContentKind =
+  | 'video' | 'audio'              // stream types (passthrough)
+  | 'music' | 'audiobook' | 'podcast' | 'radio' | 'archive-audio'  // audio content
+  | 'movie' | 'episode' | 'live-tv' | 'video-file'  // video content
+  | string;                         // unknown — falls back to 'audio'
+
+export function resolveStreamType(input: ContentKind): 'video' | 'audio' {
+  // Already a stream type — passthrough.
+  if (input === 'video' || input === 'audio') return input;
+  // Audio content kinds.
+  switch (input) {
+    case 'music':
+    case 'audiobook':
+    case 'podcast':
+    case 'radio':
+    case 'archive-audio':
+      return 'audio';
+    // Video content kinds.
+    case 'movie':
+    case 'episode':
+    case 'live-tv':
+    case 'video-file':
+      return 'video';
+    default:
+      // Unknown kind — conservative default. Better to launch an
+      // audio player on an unknown file than to crash on a video
+      // mismatch.
+      return 'audio';
+  }
+}

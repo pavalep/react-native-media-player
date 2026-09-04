@@ -1,63 +1,53 @@
-feat(v13-dx): add useOpenWithResume + usePlayItem + PlayerResumeProvider
+feat(v13-dx): add SimbaPlayer wrapper + resolveStreamType helper
 
-V13+ DX: high-level hooks that absorb the resume-position lookup
-plumbing that every consumer screen would otherwise have to write
-by hand.
+V13 DX additions for @simba-dev/react-native-media-player.
+Both are designed to make the consumer-side integration as simple
+as possible (the user-defined goal: "junior-dev level").
 
-Module additions (src/hooks/useOpenWithResume.tsx):
+resolveStreamType (useOpenWithResume.tsx):
+  - Maps consumer content kinds ('music', 'movie', 'podcast',
+    'live-tv', 'radio', 'audiobook', 'archive-audio',
+    'episode', 'video-file') to V13 stream types
+    ('audio' | 'video').
+  - Passthrough for already-V13 stream types ('video' | 'audio').
+  - Idempotent: double-wrapping is safe.
+  - Exported as `resolveStreamType` + the `ContentKind` type.
+  - Used in the 32 V13 screen-file migrations to absorb the
+    content-kind -> stream-kind mapping that would otherwise be
+    an inline ternary in every file.
 
-- PlayerResumeContext + PlayerResumeProvider: a tiny context that
-  holds a getResumePosition(itemId) -> ms lookup function. The
-  consumer wires the lookup ONCE at the app root (e.g. in App.tsx)
-  to read from their bookmarks/history persistence. Every call
-  site below the provider can use the new hooks without touching
-  the persistence layer.
+SimbaPlayer (new file: src/hooks/SimbaPlayer.tsx):
+  - The one-import, one-wrapper integration point for the
+    module. Composes PlayerProvider + PlayerResumeProvider
+    under a single component.
+  - Props: `config?: PlayerConfig`, `lookup?: PlayerResumeLookup`,
+    `children`.
+  - Junior-dev App.tsx integration:
+    ```tsx
+    import { SimbaPlayer } from '@simba-dev/react-native-media-player';
+    <SimbaPlayer lookup={myBookmarkLookup}>
+      <RootNavigator />
+    </SimbaPlayer>
+    ```
+  - The `lookup` is optional; if omitted, the inner
+    PlayerResumeProvider is mounted with a no-op lookup that
+    always returns undefined. Screens that pass `resumeId` in
+    their openPlayer call get auto-resume; screens that don't are
+    unaffected.
+  - Exported from index.ts as `SimbaPlayer` + `SimbaPlayerProps`.
 
-- useOpenWithResume(): returns a stable openPlayer function that
-  accepts an OpenPlayerOptions + an optional resumeId. The hook
-  resolves resumeId to a startPositionMs via the provider's
-  lookup, falling back to 0 when no provider is in scope or the
-  lookup returns nothing. This is the primary public API for the
-  V13 migration: 32 screen files get a smaller, more consistent
-  openPlayer call shape.
+Together with the previously-committed useOpenWithResume /
+PlayerResumeProvider / usePlayItem (commit 696fef9), the module
+now provides a complete public surface for the V13 migration:
 
-- usePlayItem(): sugar on top of useOpenWithResume. Accepts a
-  minimal item shape ({id, uri, title}) + a type, and returns a
-  one-arg function that opens the player with resume lookup. For
-  the V14 migration (Phase 54+): reduces the consumer's per-row
-  press handler to a single onPress call.
+  - SimbaPlayer (the wrapper)
+  - usePlayerActivity (raw openPlayer access)
+  - useOpenWithResume (auto-resume)
+  - usePlayItem (one-line press handler)
+  - PlayerRoot + DefaultControls (the V13 UI, Phase 54)
+  - getMpvPlayerModule() (the typed bridge)
+  - resolveStreamType (content-kind -> stream-kind helper)
 
-Rationale:
-
-The 32 V13 screen files all do the same thing:
-  1. const {openPlayer} = usePlayerActivity();
-  2. openPlayer({uri, title, type, startPositionMs: lookup(id)});
-  3. <Pressable onPress={...}>
-
-useOpenWithResume collapses steps 1-2 into:
-  1. const openPlayer = useOpenWithResume();
-  2. openPlayer({uri, title, type, resumeId: id});
-
-The lookup is centralized in the provider. V14 can add the
-PlayerLauncher component as another layer of sugar.
-
-Why the module owns the resume lookup: every project persists
-bookmarks/history differently (Redux, SQLite, MMKV, etc.). The
-module provides the hook shape; the consumer provides the lookup
-adapter. The hook is the public surface, the lookup is the
-integration point.
-
-File layout:
-- src/hooks/useOpenWithResume.tsx: context + hook + provider (all
-  in one .tsx file because the project uses the legacy JSX
-  transform; .ts files can't contain JSX).
-- src/index.ts: re-exports.
-
-No breaking changes. usePlayerActivity, usePlayerActivity's
-openPlayer, and the rest of the V13 surface are unchanged.
-
-Out of scope (V14 ideas for the public API):
-- <PlayerLauncher> component (render-prop wrapping a press handler)
-- type inference from URI scheme / file extension
-- <Provider> composition: PlayerProvider + PlayerResumeProvider
-  in a single wrapper for PlayerActivity
+Verification:
+  - npm run typecheck: clean.
+  - npm test: 100/100 pass.
