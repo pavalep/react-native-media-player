@@ -105,30 +105,46 @@ getMpvPlayerModule().requestNotificationPermission?.(); // graceful no-op on old
 ## Basic usage
 
 ```tsx
-// App.tsx — V13+ (one wrapper, one import)
+// App.tsx — V14+ (one wrapper, one import, zero glue code)
 import React from 'react';
-import { SimbaPlayer, PlayerRoot, useLaunchParams } from '@simba-dev/react-native-media-player';
+import {
+  SimbaPlayer,
+  SimbaPlayerRoot,
+  useOpenFromUrl,
+} from '@simba-dev/react-native-media-player';
 
 export default function App() {
   return (
-    <SimbaPlayer>
+    <SimbaPlayer
+      getResumePosition={(uri) =>
+        store.getState().bookmarks.byFileUri[uri]?.positionMs
+      }
+    >
       <AppContent />
     </SimbaPlayer>
   );
 }
 
 function AppContent() {
-  // If the activity was launched with playback params (i.e. some
-  // screen called openPlayer(...) and triggered the PlayerActivity
-  // handoff), render the module's player surface + controls.
-  // Otherwise, render the regular app.
-  const launchParams = useLaunchParams();
-  if (launchParams) return <PlayerRoot />;
-  return <YourNavigator />;
+  // Deep links: open incoming content:// + file:// URIs in the player.
+  const openFromUrl = useOpenFromUrl();
+  React.useEffect(() => {
+    Linking.getInitialURL().then(url => url && openFromUrl(url));
+    const sub = Linking.addEventListener('url', ({ url }) => openFromUrl(url));
+    return () => sub.remove();
+  }, [openFromUrl]);
+
+  // <SimbaPlayerRoot> handles the activity-launch branch
+  // (renders <PlayerRoot /> when launchParams is set, otherwise children).
+  return (
+    <SimbaPlayerRoot>
+      <YourNavigator />
+    </SimbaPlayerRoot>
+  );
 }
 ```
 
-That's it — `<SimbaPlayer>` is the one-import, one-wrapper integration point. It composes the `PlayerProvider` (config + state) and `PlayerResumeProvider` (bookmark-aware resume lookup). `<PlayerRoot>` renders `<PlayerSurface>` (the JS placeholder for the native SurfaceView) + `<DefaultControls>` (top bar + scrubber + transport buttons + auto-hide).
+That's it — `<SimbaPlayer>` is the one-import, one-wrapper integration point. It composes the `PlayerProvider` (config + state) and `PlayerResumeProvider` (bookmark-aware resume lookup). `<SimbaPlayerRoot>` (V14) absorbs the `useLaunchParams()` + activity-branch switch. `useOpenFromUrl()` (V14) absorbs the deep-link URI-scheme filter + title-derivation + extension-classification. `getResumePosition` (V14) is the new function-prop shape for the resume lookup (replaces V13's `lookup={...}` object shape).
 
 ### Launching a file from JS
 
@@ -386,25 +402,28 @@ Default theme is dark with a golden accent (`DEFAULT_THEME`).
 
 Every public export lives in [`src/index.ts`](./src/index.ts). The **V13+ surface** is the recommended way to integrate; the V12 surface (`PlayerProvider` + `usePlayer()` directly) still works for backward compatibility but is undocumented for new consumers.
 
-### Components (V13+ recommended)
+### Components (V13+ recommended, V14 additions in **bold**)
 
 | Component | Purpose |
 |---|---|
-| `<SimbaPlayer>` | **One-import, one-wrapper integration.** Composes `PlayerProvider` + `PlayerResumeProvider`. Use this at the app root. |
-| `<PlayerRoot>` | Renders `<PlayerSurface>` + the controls overlay (default `<DefaultControls>` or custom via `renderControls`). Use in the activity branch of your App.tsx. |
+| `<SimbaPlayer>` | **One-import, one-wrapper integration.** Composes `PlayerProvider` + `PlayerResumeProvider`. V14 adds the `getResumePosition` function prop (alongside the legacy `lookup` object prop). Use this at the app root. |
+| **`<SimbaPlayerRoot>`** | **V14 — activity-branch wrapper.** Calls `useLaunchParams()` internally; renders `<PlayerRoot />` when the activity was launched with playback params, otherwise renders its `children`. Replaces the V13 `if (launchParams) return <PlayerRoot />` boilerplate. |
+| `<PlayerRoot>` | Renders `<PlayerSurface>` + the controls overlay (default `<DefaultControls>` or custom via `renderControls`). |
 | `<PlayerSurface>` | `<View flex:1>` placeholder for the native SurfaceView. a11y-hidden. |
 | `<DefaultControls>` | Pre-built controls (top bar, scrubber, transport, auto-hide). |
 | `<PlayerProvider>` | (V12 surface) Wraps the app; provides resolved config + `renderControls` slot. Use `<SimbaPlayer>` instead unless you need the raw provider. |
 
-### Hooks (V13+)
+### Hooks (V13+, V14 additions in **bold**)
 
 | Hook | Returns | Throws outside provider? |
 |---|---|---|
 | `usePlayerActivity()` | `{ openPlayer(opts), getLaunchParams() }` | ❌ No (no-op fallback) |
 | `useOpenWithResume()` | `(opts: OpenPlayerOptions & { resumeId? }) => Promise<boolean>` | ❌ No (no-op lookup) |
+| **`useOpenFromUrl()`** | **`(uri: string) => Promise<boolean>`** — **deep-link helper** that filters `content://` + `file://` URIs, derives a title from the basename, classifies audio/video by extension, and forwards to `useOpenWithResume().openPlayer(...)` | ❌ No |
+| **`useSimbaPlayerLookup(selector?)`** | **`PlayerResumeLookup`** — **factory hook** that wraps an optional `selector` in a memoized lookup object. Without a selector, returns no-op. | ❌ No |
 | `usePlayItem()` | `(item, opts) => Promise<boolean>` | ❌ No (sugar on `useOpenWithResume`) |
 | `useLaunchParams()` | `LaunchParams \| null` | ❌ No (returns null) |
-| `usePlayer()` | `{ state: PlayerState, commands: PlayerCommands }` | ❌ No (returns defaults) |
+| `usePlayer()` | `{ state: PlayerState, commands: PlayerCommands, progress: PlayerProgress }` | ❌ No (returns defaults) |
 | `usePlayerProgress()` | `{ positionMs, durationMs, isBuffering, isSeeking, seekable, cacheRanges, cacheFill }` | ❌ No (returns 0/0) |
 | `usePlayerConfig()` | `ResolvedPlayerConfig` | ✅ Yes (programmer error) |
 | `useTheme()` | `PlayerTheme` | ✅ Yes (programmer error) |
@@ -421,7 +440,9 @@ Every public export lives in [`src/index.ts`](./src/index.ts). The **V13+ surfac
 | `LaunchParams` | `{ uri, title, type, startPositionMs }` — read from the activity via `useLaunchParams()` |
 | `ContentKind` | `'video' \| 'audio' \| 'music' \| 'movie' \| 'podcast' \| 'live-tv' \| 'radio' \| 'audiobook' \| 'archive-audio' \| 'episode' \| 'video-file' \| string` |
 | `PlayerResumeLookup` | `{ getResumePosition(itemId: string): number \| undefined }` — adapter for the bookmark-aware resume lookup |
-| `SimbaPlayerProps` | `{ config?: PlayerConfig, lookup?: PlayerResumeLookup, children: React.ReactNode }` |
+| **`GetResumePosition`** | **V14 — `(itemId: string) => number \| undefined`** — the function reference shape for `<SimbaPlayer getResumePosition={...}>` |
+| `SimbaPlayerProps` | `{ config?, lookup?, getResumePosition?, children }` — V14 adds `getResumePosition` (function prop, recommended). If both `lookup` and `getResumePosition` are passed, `getResumePosition` wins. |
+| **`SimbaPlayerRootProps`** | **V14 — `{ children: React.ReactNode }`** — the children are rendered when the activity was launched WITHOUT playback params |
 | `MpvPlayerModuleBridge` | Typed view of the native module (78 methods) |
 | `PlayerConfig`, `ResolvedPlayerConfig`, `PlayerTheme`, `PipConfig`, `AudioConfig`, `SubtitleConfig`, `NotificationConfig`, `DebugConfig`, `HardwareDecodingPolicy` | V12 surface — same as before |
 | `MpvTrack`, `MpvChapter`, `MpvFileInfo`, `MpvVideoParams`, `MpvAudioDevice`, `MpvPlaybackState`, `MpvLoopMode`, `MpvEventName`, `MpvEvents`, `MpvEventPayloads`, `PlayerEventName`, `PlayerEventPayloads` | Low-level mpv types |

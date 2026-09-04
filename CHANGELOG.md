@@ -4,6 +4,39 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-09-04 (V14.0.0 — junior-dev-level integration surface)
+
+This is the **V14.0.0** release — the DX-polish layer on top of the V13 extraction. V13 shipped "complete the extraction"; V14 ships "make the integration so simple a junior dev can ship a working player with one import + one wrapper component + zero glue code". Every consumer's `App.tsx` now reads identically:
+
+```tsx
+<SimbaPlayer getResumePosition={(uri) => store.getState().bookmarks.byFileUri[uri]?.positionMs}>
+  <AppContent />
+</SimbaPlayer>
+```
+
+### Added (V14 Phases 59-63)
+
+- **`<SimbaPlayerRoot>`** (Phase 59). Activity-branch wrapper. Calls `useLaunchParams()` internally; renders `<PlayerRoot />` when the activity was launched with playback params, otherwise renders its `children` (typically a navigator). Replaces the V13 `if (launchParams) return <PlayerRoot />` boilerplate from every consumer's `App.tsx`.
+- **`useOpenFromUrl()`** (Phase 60). Deep-link helper hook. Returns a single function that filters `content://` + `file://` URIs, derives a display name from the URI basename, classifies the file as audio/video by extension, and forwards to `useOpenWithResume().openPlayer({uri, title, type, resumeId: uri})`. Replaces the V13 `handleIncomingUri` + `getMediaType` glue in the consumer's `App.tsx`.
+- **`<SimbaPlayer>` now accepts a `getResumePosition` function prop** (Phase 61). The new function-prop shape is `getResumePosition={(resumeId) => number | undefined}`. The legacy `lookup={lookupObj}` object shape is retained for backward compat; if both are passed, `getResumePosition` wins.
+- **`useSimbaPlayerLookup(selector?)`** (Phase 61). Factory hook that wraps an optional `selector` function in a memoized `PlayerResumeLookup` object. Without a selector, returns a no-op lookup. Hides the `useMemo<PlayerResumeLookup>(...)` boilerplate V13 consumers wrote by hand.
+- **`GetResumePosition` type** exported from the module's `index.ts` — the function reference shape used by `<SimbaPlayer getResumePosition={...}>`.
+
+### Consumer-side deprecation (V14 Phase 62)
+
+These are **consumer-side changes** (not in the module) but worth noting because they remove the V11-mirrored state from the consumer's `playerSlice`:
+
+- **`playbackState`, `currentPosition`, `duration`, `volume`, `isFullscreen`, `loopMode`, `playbackSpeed`** removed from the consumer's `playerSlice`. The module's `usePlayer()` is now the source of truth.
+- **8 V11-only reducers removed**: `playFile`, `setPlaybackState`, `setPosition`, `setDuration`, `setVolume`, `toggleFullscreen`, `setLoopMode`, `setPlaybackSpeed`. Use `usePlayer().commands.play() / pause() / seek() / setVolume() / setSpeed() / setLoopMode()` instead.
+- **7 mixed reducers** (`loadPlaylistToPlayer`, `playFromPlaylist`, `nextTrack`, `previousTrack`, `playFromQueue`, `clearPlaylist`, `clearPlayer`) lose their V11-mirror writes; the consumer parts (playlist, queue, currentIndex, currentFile, playbackHistory) stay.
+
+### Notes
+
+- **Backward-compatible.** All V13 consumers see the same `PlayerState`, `PlayerCommands`, `PlayerProgress`, `usePlayerActivity`, `useOpenWithResume`, `resolveStreamType`, `useLaunchParams`, `PlayerRoot`, `DefaultControls` exports. The new exports are additive; the new `<SimbaPlayer>` prop is additive (the `lookup` object prop still works).
+- **No breaking changes** for any V13 consumer. The V14 DX polish is purely additive on the module side; on the consumer side it's a cleanup of the V11-mirrored state in `playerSlice` (which the consumer did not need to begin with — it was a V11-era convenience).
+- **5 files migrated on the consumer side**: `useArtistScreen.ts` (also drops `playFile` dispatch), `useAlbumScreen.ts`, `useQueueScreen.ts`, `useLibraryScreen.ts`, `ArtistDetailScreen.tsx`. The consumer's `src/hooks/usePlayer.ts` (a dead wrapper that mirrored V11 fields) was moved to `v13-trash-2026-09-04/`.
+- **V15 ideas** (deferred, not in this release): DRM (Widevine + ClearKey), Casting (DLNA + Chromecast + AirPlay-equivalent), iOS / Linux / tvOS support, delete `notificationService.ts` V11-only methods (kept for V11 rollback path), delete `v13-trash-2026-09-04/` directories.
+
 ## [1.2.0] - 2026-09-04 (V13.0.0 stable release)
 
 This is the **V13.0.0** release — the V13 work ("complete the extraction") is now shipped end-to-end. The consumer's `MOBILE_APP_REACT_NATIVE` app is fully on the V13 module; all V11 inline player code is deleted. The module exposes a junior-dev-friendly public surface (`<SimbaPlayer>` wrapper, `usePlayerActivity`, `useOpenWithResume`, `useLaunchParams`, `resolveStreamType`) that any future consumer can adopt with **one import + one wrapper component**.
