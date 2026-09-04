@@ -75,6 +75,10 @@ export {
 } from './hooks/useOpenWithResume';
 
 export {SimbaPlayer, type SimbaPlayerProps} from './hooks/SimbaPlayer';
+export {
+  useSimbaPlayerLookup,
+  type GetResumePosition,
+} from './hooks/useSimbaPlayerLookup';
 export {SimbaPlayerRoot, type SimbaPlayerRootProps} from './hooks/SimbaPlayerRoot';
 export {useOpenFromUrl} from './hooks/useOpenFromUrl';
 export {useLaunchParams} from './hooks/useLaunchParams';
