@@ -87,6 +87,19 @@ export {
   type OpenPlaylistOptions,
   type UseOpenPlaylistResult,
 } from './hooks/useOpenPlaylist';
+export {
+  useQueue,
+  useQueueLength,
+  useQueueItems,
+  usePlaybackHistory,
+  type PlayerQueueItem,
+  type PlayerQueueStore,
+} from './hooks/useQueue';
+export {
+  useQueueSelection,
+  useQueueSelectedIndices,
+  type PlayerQueueSelectionStore,
+} from './hooks/useQueueSelection';
 export {useLaunchParams} from './hooks/useLaunchParams';
 
 export {

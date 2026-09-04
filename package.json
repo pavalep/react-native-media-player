@@ -88,5 +88,8 @@
   },
   "bugs": {
     "url": "https://github.com/pavalep/react-native-media-player/issues"
+  },
+  "dependencies": {
+    "zustand": "^5.0.15"
   }
 }
