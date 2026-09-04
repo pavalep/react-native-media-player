@@ -59,7 +59,19 @@ export {
 
 export {
   getMpvPlayerModule,
+  subscribePlayerEvent,
+  removeAllListeners,
   setDebugLogging,
   dumpObservedProperties,
   type MpvPlayerModuleBridge,
+  type PlayerEventName,
+  type PlayerEventPayloads,
+  type LaunchParams,
+  type MpvPlaybackState,
+  type MpvLoopMode,
+  type MpvTrack,
+  type MpvChapter,
+  type MpvFileInfo,
+  type MpvVideoParams,
+  type MpvAudioDevice,
 } from './bridge/MpvPlayerModule';

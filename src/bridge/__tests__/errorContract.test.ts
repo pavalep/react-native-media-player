@@ -33,8 +33,11 @@ describe('Phase 38 — error contract (TypeScript side)', () => {
     // The native module isn't wired in jest — verify by checking
     // that a setConfig call (the only Promise-returning method)
     // resolves immediately rather than rejecting with the documented
-    // E_CONFIG_PARSE_FAILED code.
-    await expect(bridge.setConfig('not-valid-json{')).resolves.toBeUndefined();
+    // E_CONFIG_PARSE_FAILED code. V13 Phase 50: setConfig now
+    // resolves with the count of parsed top-level keys (matches the
+    // Kotlin implementation at MpvBridgeModule.kt). The no-op
+    // fallback resolves to 0.
+    await expect(bridge.setConfig('not-valid-json{')).resolves.toBe(0);
   });
 
   it('no-op bridge methods do not throw on edge-case inputs', () => {
@@ -56,11 +59,12 @@ describe('Phase 38 — error contract (TypeScript side)', () => {
     // for malformed JSON. The no-op fallback resolves silently —
     // this is by design: jest unit tests should not crash on
     // malformed config; the real parsing happens at runtime on a
-    // device.
+    // device. V13 Phase 50: the resolution value is the parsed-key
+    // count (0 for malformed input, matches Kotlin).
     const bridge = getMpvPlayerModule();
-    await expect(bridge.setConfig('')).resolves.toBeUndefined();
-    await expect(bridge.setConfig('not-json')).resolves.toBeUndefined();
-    await expect(bridge.setConfig('{')).resolves.toBeUndefined();
+    await expect(bridge.setConfig('')).resolves.toBe(0);
+    await expect(bridge.setConfig('not-json')).resolves.toBe(0);
+    await expect(bridge.setConfig('{')).resolves.toBe(0);
   });
 
   it('typed bridge interface exposes the 6 documented methods', () => {

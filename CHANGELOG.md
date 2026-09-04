@@ -4,6 +4,34 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-09-03 (V13 Phase 50)
+
+### Added
+
+- **Expanded TypeScript bridge surface** (`src/bridge/MpvPlayerModule.ts`). The Phase 24 bridge exposed 9 methods needed by `DefaultControls`. The V13 Phase 50 bridge exposes **all 78 `@ReactMethod` declarations from `MpvBridgeModule.kt`** as typed methods on the `MpvPlayerModuleBridge` interface. Consumers (the `MOBILE_APP_REACT_NATIVE` consumer app in V13 Phases 53+) no longer need to reach into `NativeModules.MpvPlayerModule` directly — every bridge method is reachable via `getMpvPlayerModule().<method>()`.
+- **Event subscription API** (`subscribePlayerEvent`, `removeAllListeners`). Wraps React Native's `NativeEventEmitter` with typed payload interfaces for all **22 mpv events** (`onFileLoaded`, `onPlaybackStateChanged`, `onPositionChanged`, `onDurationChanged`, `onPropertyChanged`, `onTracksChanged`, `onChapterChanged`, `onVideoParamsChanged`, `onError`, `onBuffering`, `onCacheState`, `onSeekable`, `onSeeking`, `onEndFile`, `onPlaybackRestart`, `onEndReached`, `onAudioDeviceChanged`, `onVolumeChanged`, `onSpeedChanged`, `videoReconfig`, `onPipModeChanged`, `onPipPlayPause`, `onPipExpand`, `onPipClose`).
+- **New exported types**: `PlayerEventName`, `PlayerEventPayloads`, `LaunchParams`, `MpvPlaybackState`, `MpvLoopMode`, `MpvTrack`, `MpvChapter`, `MpvFileInfo`, `MpvVideoParams`, `MpvAudioDevice`.
+
+### Changed
+
+- **`setConfig`** now returns `Promise<number>` (the count of top-level keys parsed) instead of `Promise<void>`. Matches the Kotlin implementation at `MpvBridgeModule.kt` which calls `promise.resolve(parsed?.size ?: 0)`. Tests updated.
+- **`resolveBridge()`** now also requires `loadFile` (cheap method independent of `initPlayer()`) to be present. The previous check (only `play`/`pause`/`seekAbsolute`) was insufficient — consumers using the expanded surface would silently fall back to the no-op bridge on partial mocks. The jest setup mock in `jest.setup.ts` is updated to include every method.
+
+### Migration from 1.0.x
+
+No breaking changes for existing consumers. The expansion adds methods + types; nothing is removed.
+
+If a consumer was reaching into `NativeModules.MpvPlayerModule` directly, they can now import `getMpvPlayerModule()` instead. The old `MpvPlayer` API on the consumer side has an equivalent on the new bridge — see V13 spec §3.1 for the migration map.
+
+### Notes
+
+This is the foundation for V13 (complete the module extraction). Subsequent V13 phases (51-58) will:
+- Phase 51: Wire `usePlayer`/`usePlayerProgress` to `subscribePlayerEvent` so they return live state instead of hardcoded defaults (Phase 25 was supposed to do this in V12 but didn't).
+- Phase 52: Expose `openPlayer`/`getLaunchParams` via a `usePlayerActivity()` hook.
+- Phase 53: Migrate the consumer's 33+ call sites from `usePlaybackCommands`/`MpvPlayer`/`NativeModules.MpvPlayerModule` to module imports.
+- Phase 54-57: Mount `<PlayerProvider>` in `PlayerActivity`, then delete `src/modules/playback/`, `src/native/`, `src/contexts/TransportContext.tsx`.
+- Phase 58: Release v1.2.0.
+
 ## [1.0.4] - 2026-09-03
 
 ### Added
