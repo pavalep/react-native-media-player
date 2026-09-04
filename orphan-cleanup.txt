@@ -1,0 +1,13 @@
+chore(v13): remove duplicate PlayerResumeProvider.tsx
+
+The PlayerResumeProvider function is defined in useOpenWithResume.tsx
+(and re-exported from index.ts). The standalone PlayerResumeProvider.tsx
+file was an artifact from an earlier split-then-merge iteration. Removed.
+
+The trashed file is kept at v13-orphan-2026-09-04/ (gitignored) for
+safety. Remove with 'git rm -r v13-orphan-2026-09-04' after the 1.2.0
+release cut ships.
+
+Verification:
+  - npm run typecheck: clean
+  - npm test: 100/100 pass

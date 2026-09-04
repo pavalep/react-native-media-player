@@ -4,7 +4,35 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - V13 Phases 51-52
+## [1.2.0] - 2026-09-04 (V13.0.0 stable release)
+
+This is the **V13.0.0** release — the V13 work ("complete the extraction") is now shipped end-to-end. The consumer's `MOBILE_APP_REACT_NATIVE` app is fully on the V13 module; all V11 inline player code is deleted. The module exposes a junior-dev-friendly public surface (`<SimbaPlayer>` wrapper, `usePlayerActivity`, `useOpenWithResume`, `useLaunchParams`, `resolveStreamType`) that any future consumer can adopt with **one import + one wrapper component**.
+
+### Added (V13 Phases 51-58)
+
+- **Live player state in `PlayerProvider`** (Phase 51). `PlayerState` (4→20 fields), `PlayerCommands` (5→38 methods), `PlayerProgress` (2→7 fields). `PlayerProvider` hydrates from sync bridge getters, subscribes to all 22 mpv events, and runs a 1Hz `getPosition`/`getDuration` poll. State held in a `useState` (rendered) + `useRef` (read-by-handlers) pair.
+- **`usePlayerActivity()`** (Phase 52). Thin wrapper exposing `{ openPlayer(opts), getLaunchParams() }` for the 32+ call sites that previously used the V11 `usePlaybackCommands()`.
+- **`<SimbaPlayer>` wrapper** (Phase 53+ DX). The one-import, one-wrapper integration point that composes `PlayerProvider` + `PlayerResumeProvider`. Consumer App.tsx wiring drops from 4+ imports and 2 wrappers to **1 import + 1 wrapper component**.
+- **`useOpenWithResume()` + `PlayerResumeProvider`** (Phase 53 DX). Hook that accepts a `resumeId` and looks up the saved bookmark position via the consumer's `PlayerResumeLookup`. The lookup is a small adapter the consumer provides once at the app root.
+- **`usePlayItem()`** (Phase 53 DX). Sugar on top of `useOpenWithResume` — takes `{id, uri, title}` + `{type}` and returns a one-arg press handler.
+- **`useLaunchParams()`** (Phase 54 DX). One-shot accessor for the activity's launch payload. Used by App.tsx to branch between `<PlayerRoot />` and the regular navigator.
+- **`resolveStreamType(contentKind: ContentKind): 'video' | 'audio'`** (Phase 53 DX). Maps consumer content kinds ('music', 'movie', 'podcast', 'live-tv', 'radio', 'audiobook', 'archive-audio', 'episode', 'video-file') to V13 stream types. Passthrough for already-V13 stream types. Idempotent. Without this, every one of the 32 screen files would have an inline `type: 'audio' | 'video'` ternary.
+- **`<PlayerRoot />`** (Phase 54). The module's player surface + default controls. Used in the PlayerActivity branch of App.tsx; replaces the V11 custom player UI.
+- **New exported types**: `PlaylistEntry`, `PlayerResumeLookup`, `ContentKind`, `SimbaPlayerProps`, `OpenPlayerOptions` (the V13 module's openPlayer shape).
+
+### Changed (V13 Phases 51-58)
+
+- **`PlayerStateContext` + `PlayerProgressContext` exported** from `src/types/player.ts`. Split state context prevents the 1Hz position tick from re-rendering volume-mirror consumers.
+- **`applyPlayerEvent(state, progress, event, payload) → { state, progress }`** is the new pure event-dispatch function (replaces the V12 stub `usePlayer()`). Unit-testable in isolation.
+- **`hydratePlayerState(bridge)`** + **`parseMetadata(json)`** are new pure helpers exported from `types/player.ts`.
+- **`openPlayer` signature reshaped** from positional args to an options object: `openPlayer({uri, title, type, startPositionMs?})` returns `Promise<boolean>`.
+
+### Notes
+
+- **Backward-compatible.** All V12 `usePlayer()` consumers see the same 4 fields in `state` and the same 5 methods in `commands`. New fields are additive; new commands are additive.
+- **No breaking changes** for any consumer that imports from `@simba-dev/react-native-media-player`. The V11-to-V13 work was consumer-side (the 38 source files in `MOBILE_APP_REACT_NATIVE/` were migrated in 5 batches).
+- **V14 ideas** (deferred, not in this release): `<PlayerLauncher>` component, automatic type inference from URI, hook composition with the activity's PlayerActivity, smart default for `useOpenWithResume`'s lookup.
+- **Device verification pending**: Phase 54c requires on-device testing of the PlayerActivity branch (PlayerRoot rendering). The typecheck + jest in the consumer pass; the smoke test (play / pause / seek / skip / PiP / lock-screen controls / Bluetooth controls / exit PiP) is a manual step.
 
 ### Added
 

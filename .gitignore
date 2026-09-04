@@ -62,4 +62,4 @@ junit.xml
 # Local secrets folder (recovery codes, etc.) — lives outside this repo
 # at ../secrets/, but ignore here too in case of accidental copy.
 ../secrets/
-secrets/
+secrets/v13-orphan-2026-09-04/
