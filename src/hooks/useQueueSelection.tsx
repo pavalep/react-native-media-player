@@ -3,9 +3,13 @@ import {usePlayerQueueSelectionStore} from '../stores/playerQueueSelectionStore'
 import type {PlayerQueueSelectionStore} from '../stores/playerQueueSelectionStore';
 
 /**
- * V15 Phase 65: the public hook for queue multi-select state.
+ * V15 Phase 65 (V16 Phase 69 hardened): the public hook for queue
+ * multi-select state.
  *
- * Returns the full selection store: `{selectedIndices, setSelection, clearSelection, removeSelected, moveSelectedToTop}`.
+ * Two overloads:
+ * - `useQueueSelection()` returns the full store
+ *   `{selectedIndices, setSelection, clearSelection, removeSelected, moveSelectedToTop}`.
+ * - `useQueueSelection(selector)` returns the selected slice.
  *
  * @example
  * ```tsx
@@ -15,13 +19,17 @@ import type {PlayerQueueSelectionStore} from '../stores/playerQueueSelectionStor
  * }
  * ```
  */
-export function useQueueSelection<T = PlayerQueueSelectionStore>(
+export function useQueueSelection(): PlayerQueueSelectionStore;
+export function useQueueSelection<T>(
+  selector: (state: PlayerQueueSelectionStore) => T,
+): T;
+export function useQueueSelection<T>(
   selector?: (state: PlayerQueueSelectionStore) => T,
-): T {
+): PlayerQueueSelectionStore | T {
   if (selector) {
     return useStore(usePlayerQueueSelectionStore, selector);
   }
-  return useStore(usePlayerQueueSelectionStore) as unknown as T;
+  return useStore(usePlayerQueueSelectionStore);
 }
 
 /** Convenience hook: just the selected indices. */

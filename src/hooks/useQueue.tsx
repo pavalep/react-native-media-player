@@ -9,12 +9,14 @@ import type {
 } from '../stores/playerQueueStore';
 
 /**
- * V15 Phase 65: the public hook for queue + playback-history state.
+ * V15 Phase 65 (V16 Phase 69 hardened): the public hook for queue +
+ * playback-history state.
  *
- * Returns the full store: `{queue, playbackHistory, addToQueue, ...}`.
- * Use with a selector (and `useShallow` for object selectors) to
- * subscribe to a slice of the state and avoid unnecessary
- * re-renders.
+ * Two overloads:
+ * - `useQueue()` returns the full store `{queue, playbackHistory, addToQueue, ...}`.
+ * - `useQueue(selector)` returns the selected slice (use `useShallow`
+ *   on object selectors to subscribe by-value and avoid unnecessary
+ *   re-renders).
  *
  * @example
  * ```tsx
@@ -30,13 +32,15 @@ import type {
  * }
  * ```
  */
-export function useQueue<T = PlayerQueueStore>(
+export function useQueue(): PlayerQueueStore;
+export function useQueue<T>(selector: (state: PlayerQueueStore) => T): T;
+export function useQueue<T>(
   selector?: (state: PlayerQueueStore) => T,
-): T {
+): PlayerQueueStore | T {
   if (selector) {
     return useStore(usePlayerQueueStore, useShallow(selector));
   }
-  return useStore(usePlayerQueueStore) as unknown as T;
+  return useStore(usePlayerQueueStore);
 }
 
 /** Convenience hook: just the queue length. */

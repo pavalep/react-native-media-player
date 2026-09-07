@@ -1,7 +1,7 @@
 import {create} from 'zustand';
 
 /**
- * V15 Phase 65: the queue item shape exposed by `useQueue()`.
+ * V16 Phase 69: the queue item shape exposed by `useQueue()`.
  *
  * Structurally a superset of the consumer's V14 `playerSlice`
  * queue entry. `uri` and `title` are required; the rest are
@@ -9,27 +9,52 @@ import {create} from 'zustand';
  * inspect these fields — they're retained so the UI can
  * display rich row content.
  *
- * `type` and `mediaType` are typed as `string` (not the narrower
- * `'audio' | 'video'`) so consumers with richer content kinds
- * (e.g. `'music' | 'movie' | 'podcast'`) can pass items without
- * TypeScript rejecting the object. The module doesn't read
- * these fields; the consumer's UI does.
+ * The three classification fields (`source`, `type`, `mediaType`)
+ * are **generic** with `string` defaults. Consumers with
+ * narrower literal unions (e.g. `MediaSource`/`MediaKind`/
+ * `MediaLane` for SIMBA) specialize the generic:
+ *
+ * ```ts
+ * interface MyEntry extends PlayerQueueItem<MediaSource, MediaKind, MediaLane> {
+ *   // consumer-only fields
+ * }
+ * ```
+ *
+ * With the generic specialized, a `MyEntry` flows through
+ * `addToQueue(entry)` and back via `useQueueItems()` without
+ * the consumer needing `as unknown as` casts at the boundary.
+ *
+ * Default usage (`PlayerQueueItem` with no generics) is
+ * backward-compatible with V15 — the three fields stay `string`.
+ *
+ * `resumePosition` and `autoplay` are added in V16 so a
+ * consumer's `PlaybackEntry` can extend `PlayerQueueItem`
+ * directly without losing its existing fields.
  */
-export interface PlayerQueueItem {
+export interface PlayerQueueItem<
+  TSource extends string = string,
+  TKind extends string = string,
+  TLane extends string = string,
+> {
   uri: string;
   title: string;
   duration: number;
   artist?: string;
   album?: string;
   artworkUri?: string;
-  /** Wide string for consumer flexibility (e.g. `MediaSource`). */
-  source?: string;
-  /** Stream type or content kind. Wide string for consumer flexibility. */
-  type?: string;
-  mediaType?: string;
+  /** Coarse provenance (e.g. `MediaSource` = 'local' | 'api'). */
+  source?: TSource;
+  /** Stream type or content kind (e.g. `MediaKind`). */
+  type?: TKind;
+  /** Playback lane (e.g. `MediaLane` = 'audio' | 'video'). */
+  mediaType?: TLane;
   provider?: string;
   /** Stable linked-folder identity for local entries. */
   folderId?: string;
+  /** V16: last native-confirmed playback position for resume. */
+  resumePosition?: number;
+  /** V16: whether the item should auto-play on load. */
+  autoplay?: boolean;
 }
 
 /**
