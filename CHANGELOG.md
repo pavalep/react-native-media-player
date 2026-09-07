@@ -4,6 +4,63 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-09-07 (V16.0.0 — API hardening + type-safety sweep)
+
+This is the **V16.0.0** release — the "no half-baked, no bad code" pass on the public surface that V14 (1.3.0) and V15 (1.4.0) shipped. V15 finished the per-screen simplification layer; V16 hardens the public API and removes dead code from the public surface.
+
+### Added
+
+- `PlayerQueueItem` is now a generic over the three classification fields: `PlayerQueueItem<TSource extends string = string, TKind extends string = string, TLane extends string = string>`. Default usage (`PlayerQueueItem` with no generics) is byte-equivalent to V15. Consumers with narrower unions (e.g. `MediaSource`/`MediaKind`/`MediaLane` for SIMBA) can now specialize the generic so items round-trip through `addToQueue` / `useQueueItems` without `as unknown as` casts at the boundary.
+- `useQueueItemsAs<T>()` and `usePlaybackHistoryAs<T>()` — typed read hooks. The cast from the module's default `PlayerQueueItem[]` to the consumer's narrow `T[]` lives in ONE place (the module) instead of being scattered across every read site in the consumer.
+- `<SimbaPlayer resumePolicy={fn}>` — the V16 single-prop integration. Replaces the V13 `lookup` object prop, V14 `getResumePosition` function prop, and V14 `useSimbaPlayerLookup` factory hook. Public API goes from 4 wiring paths to 1.
+- `resumePosition?: number` and `autoplay?: boolean` on `PlayerQueueItem` — standard playback fields. Lets a consumer's `PlaybackEntry` extend `PlayerQueueItem` directly without losing fields.
+- `toPlaylistEntry(item)` helper in the consumer's `playerSlice.ts` — the single, documented boundary cast from the module's `PlayerQueueItem<MediaSource, MediaKind, MediaLane>` to the consumer's `PlaylistEntry`.
+
+### Changed
+
+- `<SimbaPlayer>` v2 — the `lookup` and `getResumePosition` props are gone. The new `resumePolicy` prop is the only way to wire the resume lookup. The `useSimbaPlayerLookup` factory hook and `GetResumePosition` type are removed from the public surface.
+- `useQueue()` and `useQueueSelection()` are now typed as overloads (no `as unknown as T` cast).
+- `PlaylistEntry` in the consumer's `playerSlice.ts` extends `PlayerQueueItem<MediaSource, MediaKind, MediaLane>` directly (with the three classification fields promoted to required). Documents the structural contract with the module.
+- `applyAudioSettingsToMpv()` in the consumer collapses 6 copy-pasted `try { setProperty } catch {}` blocks into a single `setProp(name, value)` helper. Each property is now logged on failure.
+- `useQueueActions.toEntry()` in the consumer now derives `type` (MediaKind) and `mediaType` (MediaLane) from one of the caller-provided fields via `mediaKindToLane()`. The previous code set BOTH to the same `MediaLane` value, which violated the type contract. Real bug fix.
+- The `useQueueScreen.ts:131` tautological identity-check (`candidate === entry` always false for distinct objects) is removed. Field-wise equality is the real check.
+
+### Removed
+
+- **4 dead zustand stores + 9 hooks** (~6834 bytes of dead module code): `playerSleepTimerStore`, `playerEqualizerStore`, `playerLikedStore`, `playerShuffleStore` + `useSleepTimer` / `useSleepTimerEnd` / `useSleepTimerMode` / `useEqualizer` / `useEqualizerEnabled` / `useIsLiked` / `useToggleLiked` / `useShuffle` / `useShuffleEnabled`. These were scaffolded in V15 Phase 66 but no consumer file ever read or wrote them. The functionality can be re-introduced as a V17+ feature by copying the store from git history.
+- `useSimbaPlayerLookup` (V14 factory hook) — folded into the new `<SimbaPlayer resumePolicy={...}>` prop. App.tsx: -19 lines, 1 fewer import.
+- `PlayerQueueItem.source` / `type` / `mediaType` as bare `string` (the V15 type leak). Now generic with `string` defaults.
+- 23 triple-nested + 4 double-nested `resolveStreamType(X)` calls in the consumer (20 files). The function is idempotent; the outer wrappers were dead code. Collapsed via `scripts/collapse-resolveStreamType.cjs`.
+- 3 `as unknown as PlaylistEntry` casts in `useQueueScreen.ts` — replaced with a single `toPlaylistEntry()` boundary call.
+- 7 silent `catch {}` blocks in media-player-touching services (audioSettingsService, artCacheService, cacheService, fileService, useHomeScreen, useQueueScreen) — replaced with `logger.warn(...)` that includes the property name + error.
+- 7 `(navigation as any).navigate(...)` casts in `useLibraryScreen` + `useArtistScreen` — typed navigation. One of them (`AlbumScreen` param key was `albumTitle` instead of `albumName`) was a real bug: the previous code was silently dropping the album name on navigation. Real bug fix.
+- `playFromQueue` queue action — renamed to `removeFromQueueByIndex`. The old name implied "play this item" but the implementation only spliced the item from the queue. The new name is honest about what the action does. To actually promote a queue item to the active playlist and play it, the consumer calls `useOpenPlaylist()` separately.
+
+### Migration from 1.4.0
+
+- `<SimbaPlayer lookup={obj}>` / `<SimbaPlayer getResumePosition={fn}>` / `useSimbaPlayerLookup(selector)` → `<SimbaPlayer resumePolicy={fn}>`. One import + one prop.
+- Consumer items now extend `PlayerQueueItem<MediaSource, MediaKind, MediaLane>` and add `origin?`. The module's `useQueueItemsAs<...>()` reads the items back as the consumer's narrow type without casts.
+- `playFromQueue(idx)` in the consumer → `removeFromQueueByIndex(idx)` (splice-only). The previous "play" behavior is achieved with `useOpenPlaylist(entries, {startIndex: idx})`.
+- `useSleepTimer` / `useEqualizer` / `useIsLiked` / `useShuffle` imports → removed. (If you used these, the functionality is gone — the dead-feature stores were never wired to a UI. Restore from git history if needed.)
+
+### Verification
+
+- Module `npm run typecheck` + `npm test`: clean. 100/100 + 7 suites.
+- Consumer `npx tsc --noEmit` + `npm test`: clean. 19/19 + 1 todo across 5 suites.
+- Zero `as unknown as` casts in non-test module source.
+- Zero `as unknown as PlaylistEntry` casts in the consumer's queue UI.
+- Zero triple-nested `resolveStreamType` in the consumer.
+- Zero silent `catch {}` in media-player-touching files.
+- Zero `(navigation as any)` in media-player-touching files (3 remain in non-player files; deferred to V17).
+
+### Out of scope (V17+ candidates)
+
+- Non-player `as any` sites (Dialog, Skeleton, authService, AboutScreen, SearchScreen, navigationHelper).
+- Non-player silent catches (metadataService, downloadService).
+- Non-player `console.log` (useAuth, weatherSlice, geolocation, weatherService).
+- N+1 in `mediaSlice.buildSearchIndex`.
+- On-device smoke test (V15 + V16 wrap-semantics + SimbaPlayer v2 behavior).
+
 ## [1.4.0] - 2026-09-04 (V15.0.0 — per-screen simplification + state consolidation)
 
 This is the **V15.0.0** release — the per-screen layer of the V14 junior-dev mission. V14 (1.3.0) shipped the one-import, one-wrapper integration for `App.tsx`. V15 extends that simplicity into the per-screen code paths: every player-related call (play one, play all, add to queue, set sleep timer, toggle like, toggle equalizer, toggle shuffle) is now a one-line module hook. No more `useAppDispatch` in player files, no more `useAppSelector(state => state.player.X)`, no more V11-mirrored redux state.
