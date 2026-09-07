@@ -74,11 +74,7 @@ export {
   type PlayerResumeProviderProps,
 } from './hooks/useOpenWithResume';
 
-export {SimbaPlayer, type SimbaPlayerProps} from './hooks/SimbaPlayer';
-export {
-  useSimbaPlayerLookup,
-  type GetResumePosition,
-} from './hooks/useSimbaPlayerLookup';
+export {SimbaPlayer, type SimbaPlayerProps, type ResumePolicy} from './hooks/SimbaPlayer';
 export {SimbaPlayerRoot, type SimbaPlayerRootProps} from './hooks/SimbaPlayerRoot';
 export {useOpenFromUrl} from './hooks/useOpenFromUrl';
 export {
