@@ -86,14 +86,15 @@ export interface PlayerQueueActions {
    */
   shuffleQueue: () => void;
   /**
-   * Promote a queue item to the module's playlist and play it.
-   *
-   * The queue stays display-only for the rest of the playback
-   * (the module's `next()` doesn't consume it). Phase 65 keeps
-   * the same semantics as the V14 `playFromQueue` reducer in
-   * `playerSlice`.
+   * V16 Phase 72: rename from `playFromQueue`. The old name
+   * implied "play this item" but the implementation only
+   * removed the item from the queue - it never promoted the
+   * item to the active playlist. The new name is honest about
+   * what the action does. To actually promote a queue item to
+   * the active playlist and play it, the consumer should call
+   * `useOpenPlaylist()` separately.
    */
-  playFromQueue: (index: number) => void;
+  removeFromQueueByIndex: (index: number) => void;
 
   /** Append a single item to the playback history. */
   addToPlaybackHistory: (item: PlayerQueueItem) => void;
@@ -110,16 +111,14 @@ export interface PlayerQueueStore extends PlayerQueueActions {
 }
 
 /**
- * V15 Phase 65: a no-op placeholder for `playFromQueue` that
- * the module-side store doesn't directly drive. The actual
- * playlist update is performed by the activity via
- * `bridge.loadPlaylist` + `bridge.setTrack`; for now, the
- * store just removes the item from the queue (Phase 65 is
- * the data-consolidation step; the actual playlist command
- * remains consumer's responsibility until Phase 66 or a
- * follow-up phase consolidates it too).
+ * V16 Phase 72: rename from `playFromQueueImpl`. The old name
+ * implied "promote to playlist + play" but the implementation
+ * only spliced the item from the queue. The new name reflects
+ * what the action actually does: remove from queue. To
+ * promote a queue item to the active playlist, the consumer
+ * should call `useOpenPlaylist()` separately.
  */
-function playFromQueueImpl(
+function removeFromQueueByIndexImpl(
   set: (updater: (state: PlayerQueueStore) => PlayerQueueStore) => void,
   index: number,
 ): void {
@@ -179,7 +178,7 @@ export const usePlayerQueueStore = create<PlayerQueueStore>()((set) => ({
       }
       return {queue: q};
     }),
-  playFromQueue: (index) => playFromQueueImpl(set, index),
+  removeFromQueueByIndex: (index) => removeFromQueueByIndexImpl(set, index),
 
   addToPlaybackHistory: (item) =>
     set(state => ({playbackHistory: [...state.playbackHistory, item]})),
