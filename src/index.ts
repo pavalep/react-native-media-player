@@ -91,7 +91,9 @@ export {
   useQueue,
   useQueueLength,
   useQueueItems,
+  useQueueItemsAs,
   usePlaybackHistory,
+  usePlaybackHistoryAs,
   type PlayerQueueItem,
   type PlayerQueueStore,
 } from './hooks/useQueue';
