@@ -4,6 +4,18 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-09-07 (V16.0.1 — Android build fix)
+
+Patch release. The 1.5.0 `android/build.gradle` had `debugImplementation("com.squareup.leakcanary:leakcanary-android:3.0.0-alpha-8")` which fails every consumer Android build with `Could not find com.squareup.leakcanary:leakcanary-android:3.0.0-alpha-8` — that artifact was never published to Maven Central / Google Maven / JitPack. D-028 device-task QA runs blocked on this.
+
+### Fixed
+
+- **`android/build.gradle`**: commented out the unresolvable LeakCanary debug dependency. The line is preserved as a comment so re-enabling once the artifact is republished (or wired to a private Maven) is one edit. Consumers no longer see `Could not find ... 3.0.0-alpha-8` on `gradlew assembleDebug`.
+
+### Migration from 1.5.0
+
+None. Drop-in replacement.
+
 ## [1.5.0] - 2026-09-07 (V16.0.0 — API hardening + type-safety sweep)
 
 This is the **V16.0.0** release — the "no half-baked, no bad code" pass on the public surface that V14 (1.3.0) and V15 (1.4.0) shipped. V15 finished the per-screen simplification layer; V16 hardens the public API and removes dead code from the public surface.

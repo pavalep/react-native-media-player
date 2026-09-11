@@ -196,5 +196,10 @@ dependencies {
     // player 100 times (per §36.2), and watch logcat for
     // `LeakCanary: ... retained X bytes` warnings. The heap-dump
     // notifications appear in the system notification shade.
-    debugImplementation("com.squareup.leakcanary:leakcanary-android:3.0.0-alpha-8")
+    // D-028 (W22 device-task drive): LeakCanary 3.0.0-alpha-8 isn't
+    // published to Maven Central / Google Maven / JitPack, so QA builds
+    // fail with "Could not find ... 3.0.0-alpha-8". Commented out below
+    // — re-enable when the artifact is republished or a private repo is
+    // wired up:
+    // debugImplementation("com.squareup.leakcanary:leakcanary-android:3.0.0-alpha-8")
 }
