@@ -63,3 +63,10 @@ junit.xml
 # at ../secrets/, but ignore here too in case of accidental copy.
 ../secrets/
 secrets/v13-orphan-2026-09-04/
+
+# Scratch commit-message drafts left over from V13 + V16 phase work.
+# These were authored, used to draft commits, but never committed
+# themselves. They're noise in `git status`.
+COMMITMSG_*.txt
+COMMIT_MSG.txt
+orphan-cleanup.txt

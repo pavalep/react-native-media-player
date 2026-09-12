@@ -4,6 +4,27 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.3] - 2026-09-12 (V16.0.3 — CMake fail-fast + stale error string)
+
+Patch release. Two follow-ups to the 1.5.2 fixes and one repo-hygiene cleanup.
+
+### Fixed
+
+- **`android/src/main/cpp/CMakeLists.txt`** — replaced the silent `message(WARNING ... "link will fail")` fallback with `message(FATAL_ERROR ...)`. The previous behavior produced a downstream linker failure (`ld.lld: error: unable to find library -lmpv`) that pointed at the wrong file — the build technically succeeded at the configure step and only failed at the link step, making the root cause (libmpv.so missing from the consumer's jniLibs/) hard to diagnose. Now CMake stops at configure time with an actionable message that names the missing file, the npm reinstall command, and the `package.json` `files` allow-list that includes jniLibs.
+- **`MpvBridgeModule.dumpObservedProperties()` (line ~1137)** — the catch-block failure marker was still `<getPropertyString failed: ...>` from before the 1.5.2 rename (1.5.2 renamed the call to `MPVLIB.nativeGetProperty` but missed updating the string literal). Updated to `<nativeGetProperty failed: ...>` so the rare throw path logs a label that matches the actual API name. No behavior change — only affects the label shown in the catch block.
+
+### Changed
+
+- **`.gitignore`** — added `COMMITMSG_*.txt`, `COMMIT_MSG.txt`, and `orphan-cleanup.txt`. These are scratch commit-message drafts left over from V13 + V16 phase work; they're authored, used to draft commits, but were never committed themselves. They're noise in `git status`. After the new entries take effect, `git status` for a fresh clone is clean.
+
+### Migration from 1.5.2
+
+None. Drop-in replacement. The CMake change only affects the path where `libmpv.so` is already missing; for normal consumers with a correct install, the build proceeds identically.
+
+### Notes
+
+- 1.5.2's fix to the silent `getPropertyString` → `nativeGetProperty` rename was incomplete (the call site was updated but the catch-block's failure-marker string was not). This release closes that loop.
+
 ## [1.5.2] - 2026-09-07 (V16.0.2 — MpvBridgeModule bug fixes)
 
 Patch release. Two silent runtime bugs in `MpvBridgeModule.kt` fixed.

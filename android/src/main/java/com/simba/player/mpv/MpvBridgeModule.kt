@@ -1134,7 +1134,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             val value: String? = try {
                 if (nativePtr != 0L) MPVLib.nativeGetProperty(nativePtr, name) else null
             } catch (e: Exception) {
-                "<getPropertyString failed: ${e.message}>"
+                "<nativeGetProperty failed: ${e.message}>"
             }
             Log.i(TAG, "[PlaybackTrace][Bridge][dumpProperties] property=$name value=\"$value\" requested=true")
         }
