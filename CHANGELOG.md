@@ -4,6 +4,19 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2026-09-07 (V16.0.2 — MpvBridgeModule bug fixes)
+
+Patch release. Two silent runtime bugs in `MpvBridgeModule.kt` fixed.
+
+### Fixed
+
+- **`MpvBridgeModule.dumpObservedProperties()` (line ~1135)** — was calling `MPVLib.getPropertyString(nativePtr, name)`. That method doesn't exist on `MPVLib`; the real one is `nativeGetProperty`. The existing `try { ... } catch (e: Exception) { "<getPropertyString failed: ${e.message}>" }` was silently swallowing the `NoSuchMethodError`, so every debug log of observed properties showed the failure string instead of the actual value. Renamed to `nativeGetProperty` so the debug output is now real values. No behavior change for non-debug callers (the method is only invoked from the `dumpObservedProperties` debug helper).
+- **`MpvBridgeModule.initialize()` (line ~1198)** — removed the `isHeadlessJsTask=${isHeadlessJsTask}` token from the init log line. The field is not defined on `ReactApplicationContext`. Was a leftover that either no-op'd or threw a property-access error in older Kotlin versions. Init log now logs only the fields that actually exist (`package`, `debugLogging`).
+
+### Migration from 1.5.1
+
+None. Drop-in replacement.
+
 ## [1.5.1] - 2026-09-07 (V16.0.1 — Android build fix)
 
 Patch release. The 1.5.0 `android/build.gradle` had `debugImplementation("com.squareup.leakcanary:leakcanary-android:3.0.0-alpha-8")` which fails every consumer Android build with `Could not find com.squareup.leakcanary:leakcanary-android:3.0.0-alpha-8` — that artifact was never published to Maven Central / Google Maven / JitPack. D-028 device-task QA runs blocked on this.

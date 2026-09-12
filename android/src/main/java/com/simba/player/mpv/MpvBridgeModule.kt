@@ -1132,7 +1132,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         Log.i(TAG, "[PlaybackTrace][Bridge][dumpObservedProperties] $count properties observed:")
         pendingObservedProperties.sorted().forEach { name ->
             val value: String? = try {
-                if (nativePtr != 0L) MPVLib.getPropertyString(nativePtr, name) else null
+                if (nativePtr != 0L) MPVLib.nativeGetProperty(nativePtr, name) else null
             } catch (e: Exception) {
                 "<getPropertyString failed: ${e.message}>"
             }
@@ -1198,7 +1198,6 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             TAG,
             "[PlaybackTrace][Bridge][initialize] MpvPlayerModule v0.1.0 init: " +
                 "package=${reactApplicationContext.packageName} " +
-                "isHeadlessJsTask=${isHeadlessJsTask} " +
                 "debugLogging=$debugLoggingEnabled",
         )
     }
