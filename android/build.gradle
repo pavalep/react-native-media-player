@@ -1,5 +1,12 @@
 apply plugin: "com.android.library"
 apply plugin: "org.jetbrains.kotlin.android"
+// V16.0.4 / 1.5.4 (D-032): the React Native gradle plugin must be applied
+// for the consumer app's `react.autolinkLibrariesWithApp()` codegen pipeline
+// to produce TurboModule glue for this library. Removing this line silently
+// breaks new-arch TurboModule resolution (NativeModules.MpvPlayerModule is
+// undefined at runtime; no native compile error, no logcat warning).
+// Harmless on old arch — the plugin still loads.
+apply plugin: "com.facebook.react"
 
 /**
  * React Native MediaPlayer — Android library module

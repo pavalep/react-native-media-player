@@ -4,6 +4,83 @@ All notable changes to `@simba-dev/react-native-media-player` are documented her
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.4] - 2026-09-14 - D-032 / B-010 fix (new-arch TurboModule wire-up)
+
+### Fixed
+
+- **D-032 / B-010: `NativeModules.MpvPlayerModule` is `undefined` in
+  new-arch consumer apps, every `openPlayer` silently resolves `false`,
+  the Movies/Search/Music/AllVideos player toast shows
+  "Player refused launch".**
+
+  Root cause: v1.5.3 shipped without `apply plugin: "com.facebook.react"`
+  in `android/build.gradle` AND without a TurboModule spec file at
+  `src/bridge/Native*.ts` (codegen requires both). The consumer app's
+  `react.autolinkLibrariesWithApp()` runs the lib's codegen task and
+  emits `No modules to process in combine-js-to-schema-cli.` (the
+  combine-cli filter at
+  `node_modules/@react-native/codegen/lib/cli/combine/combine-js-to-schema.js:22`
+  only processes files matching `/extends TurboModule/` or
+  `/export default codegenNativeComponent</`), so no
+  `NativeMpvPlayerSpec.java` is generated. In `newArchEnabled=true` that
+  means the new-arch TurboModule resolver cannot find a spec for
+  `"MpvPlayerModule"`, JS-side `NativeModules.MpvPlayerModule` stays
+  `undefined`, `resolveBridge()` in `MpvPlayerModule.ts:624-637` returns
+  `null`, and `openPlayer()` falls back to `NOOP_BRIDGE.openPlayer` which
+  resolves `false` (the misleading "Player refused launch" toast).
+
+  Detection recipe (logcat shows nothing for `MpvPlayer` /
+  `MpvBridgeModule`; `PlayerPackage` is in the consumer's autolinking
+  PackageList but the codegen output at
+  `android/app/build/generated/source/codegen/java/com/facebook/fbreact/specs/`
+  has no `NativeMpvPlayerSpec.java`).
+
+  Fix:
+  - **`android/build.gradle`** — restore `apply plugin: "com.facebook.react"`
+    after `apply plugin: "org.jetbrains.kotlin.android"`. The line is
+    harmless on old arch and required on new arch — its absence is what
+    stops the consumer's codegen pipeline from running against this lib.
+  - **`src/bridge/NativeMpvPlayer.ts`** — new file declaring
+    `interface Spec extends TurboModule` mirroring the public
+    `MpvPlayerModuleBridge` interface (`src/bridge/MpvPlayerModule.ts:182`)
+    and default-exporting `TurboModuleRegistry.getEnforcing<Spec>('MpvPlayerModule')`.
+    Codegen scans this file (matches `/extends TurboModule/`) and
+    produces `com.facebook.fbreact.specs.NativeMpvPlayerSpec` with
+    `NAME = "MpvPlayerModule"` — matching the Kotlin
+    `@ReactModule(name = MpvBridgeModule.NAME)` where
+    `NAME = "MpvPlayerModule"` (see `MpvBridgeModule.kt:34-35`).
+
+  The existing `MpvPlayerModule.ts:624-637` `resolveBridge()` keeps
+  working unchanged — RN's new-arch TurboModule resolution
+  auto-populates `NativeModules.MpvPlayerModule` from the codegen
+  spec at module-load time, so the existing manual lookup
+  (`(NativeModules as Record<string, unknown>).MpvPlayerModule`) finds
+  the live bridge.
+
+  Verified on SIMBA V22 (consumer app, RN 0.86, newArchEnabled=true,
+  emulator-5554): tapping a movie card on Movies screen now launches
+  `PlayerActivity` (mpv surface + media controls visible) instead of
+  firing the "Player refused launch" toast.
+
+### Notes
+
+- Type-mapping notes for codegen (kept in the JSDoc at the top of
+  `src/bridge/NativeMpvPlayer.ts`):
+  - `string | null` → `string` (codegen doesn't support nullable strings).
+  - `'video' | 'audio'` literal unions → `string`.
+  - `Promise<T>` methods become async on the Kotlin side (the
+    consumer-facing `@ReactMethod` receives a `Promise` as the last
+    parameter when `isBlockingSynchronousMethod=false`).
+  - `stepFrame(direction: 1 | -1)` → `stepFrame(direction: number)`.
+- Methods NOT declared in the Spec are unreachable from JS. The Kotlin
+  side keeps them for legacy / native-only callers but the consumer
+  app today only uses the Spec surface.
+- This release is the lib-side companion to SIMBA V22 in-session
+  patches at `node_modules/@simba-dev/react-native-media-player/android/build.gradle`
+  and `node_modules/@simba-dev/react-native-media-player/src/bridge/NativeMpvPlayer.ts`.
+  Once 1.5.4 is published, `npm install @simba-dev/react-native-media-player@1.5.4`
+  on the consumer replaces the in-session patches.
+
 ## [Unreleased] — post-1.5.3 CI hardening (not yet published)
 
 CI-only changes. The published artifact is unchanged from 1.5.3
