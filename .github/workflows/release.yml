@@ -109,7 +109,7 @@ jobs:
       # promote step). Consumers see the "Latest" badge pointing at this
       # release as soon as the workflow finishes.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
