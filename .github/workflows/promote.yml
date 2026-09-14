@@ -34,7 +34,7 @@ jobs:
       # Checkout so the `gh` CLI has a git repo context for tag/release lookups.
       # Uses the default branch (no `ref:`) since this is a workflow_dispatch.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
