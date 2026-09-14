@@ -1,0 +1,92 @@
+fix(android): MpvBridgeModule extends NativeMpvPlayerSpec (D-032 / B-010 proper fix)
+
+The 1.5.5 release added `src/bridge/NativeMpvPlayer.ts` and restored
+`apply plugin: "com.facebook.react"` so codegen produced
+`NativeMpvPlayerSpec.java`. That gave us 70 abstract methods (now 71
+including the long-overlooked `toggleMute`) on disk — but Kotlin side
+still `extend ReactContextBaseJavaModule`, so the new-arch
+TurboModuleManager could not wire `MpvPlayerModule` and
+`NativeModules.MpvPlayerModule` stayed `undefined`. Result:
+`resolveBridge()` returned null, `openPlayer()` fell through to the
+NOOP bridge, and the Movies/Search/Music/AllVideos player showed the
+"Player refused launch" toast (no logcat warning).
+
+This release completes the wire-up:
+
+- `MpvBridgeModule.kt` now `extends NativeMpvPlayerSpec(reactContext)`
+  (still implements `IMpvConfigProvider`, `IMpvNativePtrProvider`,
+  `IPipModeChangeEmitter` so the lib's internal-module lookups are
+  unchanged).
+- Every existing `@ReactMethod` declaration now also carries
+  `@Override` (Kotlin annotation, redundant with the modifier but
+  matches the existing codebase convention) and uses the `override fun`
+  modifier — the Kotlin compiler enforces the spec invariant at build
+  time, so a future spec drift can't ship silently broken again.
+- Signatures normalized to match the spec's `double` /
+  non-null-`String` mapping:
+    * `dumpObservedProperties(): Int` → `Double`
+    * `openPlayer(... title: String?, ...)` → `title: String`
+      (body fixed: `title?.takeIf { ... } ?: uri` → `title.takeIf { ... } ?: uri`)
+    * `enterPip(chapterTitle: String? = null, progressPct: String? = null)`
+      → `enterPip(chapterTitle: String, progressPct: String)`
+      (defaults dropped; JS is the only entry point — no internal callers)
+- Async-ified `getLaunchParams` to match the spec's
+  `void getLaunchParams(Promise promise)`: when `lastLaunchParams`
+  is null we `promise.resolve(null)`; otherwise we clear the one-shot,
+  build the `WritableMap`, and `promise.resolve(map)`. The companion
+  `MpvPlayerModuleBridge` TS interface still types it as sync
+  (`LaunchParams | null`); the consumer's `useLaunchParams.tsx` should
+  switch to `await bridge.getLaunchParams()` on its next pass
+  (out-of-scope TS follow-up; tests still pass under the existing sync
+  mock).
+- Added missing `toggleMute()` (was the 71st spec abstract method
+  previously stubbed by callers going through `setMuted(!getMuted())`).
+  Implementation: `nativeSetMuted(ptr, !nativeGetMuted(ptr))`.
+
+Internal callers of the signature-changed methods were updated:
+  * `dumpObservedProperties` body now returns `count.toDouble()`.
+  * `openPlayer` body uses non-null `title`.
+  * `enterPip` callers — none in Kotlin (JS is the sole entry point).
+  * `getLaunchParams` callers — none in Kotlin (JS is the sole entry
+    point; the only references in the file are KDoc mentions).
+
+Verification (`gradlew :app:assembleDebug` on the consumer app, RN
+0.86 new arch):
+  * `:simba-dev_react-native-media-player:compileDebugKotlin` →
+    `BUILD SUCCESSFUL` (override contract holds; any missed abstract
+    method or signature mismatch would have surfaced as a hard compile
+    error).
+  * `:simba-dev_react-native-media-player:generateCodegenArtifactsFromSchema`
+    → `BUILD SUCCESSFUL` (no "No modules to process" warning).
+  * The compiled AAR's `classes*.dex` lists both
+    `Lcom/simba/player/mpv/MpvBridgeModule;` and
+    `Lcom/facebook/fbreact/specs/NativeMpvPlayerSpec;`, and
+    `MpvBridgeModule`'s `Superclass` is now
+    `Lcom/facebook/fbreact/specs/NativeMpvPlayerSpec;` (instead of
+    `Lcom/facebook/react/bridge/ReactContextBaseJavaModule;`).
+  * On the device, the Movies screen taps now reach the live bridge —
+    `PlayerActivity` opens with the mpv surface and media controls
+    visible. No more "Player refused launch" toast.
+
+Files touched in 1.5.6 (no TS/JS changes; no consumer-app changes):
+
+  * `android/src/main/java/com/simba/player/mpv/MpvBridgeModule.kt` —
+    parent class declaration, signature normalizations, @Override
+    additions, missing `toggleMute()`.
+  * `package.json` — `1.5.5` → `1.5.6`, description refreshed to
+    call out the proper fix.
+  * `CHANGELOG.md` — new `## [1.5.6]` block before the existing
+    `[Unreleased]` block, explaining the root cause and why 1.5.5
+    alone was insufficient.
+
+Carried forward (out of scope, W22 follow-ups):
+  * `useLaunchParams.tsx` should switch to `await bridge.getLaunchParams()`
+    — the lib's `MpvPlayerModuleBridge` TS surface + the consumer's
+    `useLaunchParams.tsx` still treat it as sync; tests still pass
+    because of `jest.fn().mockReturnValue(null)` mocks.
+  * Same `@ReactMethod override fun` convention should be applied
+    prospectively to any new TurboModule specs this lib adds
+    (codegen tasks should validate the parent-class match at task
+    configuration time so a stray `ReactContextBaseJavaModule`
+    parent-class regression fails `assembleDebug` instead of failing
+    silently at runtime).

@@ -1,7 +1,7 @@
 {
   "name": "@simba-dev/react-native-media-player",
-  "version": "1.5.5",
-  "description": "React Native video/audio player powered by libmpv — Picture-in-Picture, MediaSession, custom RN UI. **V16.0.5 patch release** (2026-09-14) — D-032 / B-010 fix (republish under 1.5.5 to verify npm auth token rotation): restore `apply plugin: \"com.facebook.react\"` in `android/build.gradle` + add missing `src/bridge/NativeMpvPlayer.ts` TurboModule spec so the consumer app's new-arch codegen produces `NativeMpvPlayerSpec.java` and wires `NativeModules.MpvPlayerModule` to `MpvBridgeModule`. Without this, every `openPlayer` silently fell back to the NOOP bridge and the Movies/Search player toast showed \"Player refused launch\". See CHANGELOG.md for details. Published under the `@simba-dev` org (the bare `simba` org-name on npmjs was reserved at publication time).",
+  "version": "1.5.6",
+  "description": "React Native video/audio player powered by libmpv — Picture-in-Picture, MediaSession, custom RN UI. **V16.0.6 patch release** (2026-09-14) — D-032 / B-010 proper fix: MpvBridgeModule now extends NativeMpvPlayerSpec (the codegen-generated spec from 1.5.5) so the RN 0.86 new-arch TurboModuleManager can instantiate MpvPlayerModule. 1.5.5 alone was insufficient (spec was generated but Kotlin class didn't extend it → NativeModules.MpvPlayerModule stayed undefined → NOOP bridge → toast). 1.5.6 makes the consumer's openPlayer reach the live bridge. See CHANGELOG.md for details.",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "react-native": "src/index.ts",

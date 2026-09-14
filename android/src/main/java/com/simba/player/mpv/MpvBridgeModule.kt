@@ -8,10 +8,10 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.ReactApplicationContext
-import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.facebook.fbreact.specs.NativeMpvPlayerSpec
 import com.simba.player.IMpvConfigProvider
 import com.simba.player.IMpvNativePtrProvider
 import com.simba.player.IPipModeChangeEmitter
@@ -26,7 +26,7 @@ import org.json.JSONObject
  */
 @ReactModule(name = MpvBridgeModule.NAME)
 class MpvBridgeModule(reactContext: ReactApplicationContext) :
-    ReactContextBaseJavaModule(reactContext),
+    NativeMpvPlayerSpec(reactContext),
     IMpvConfigProvider,
     IMpvNativePtrProvider,
     IPipModeChangeEmitter {
@@ -395,7 +395,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // ── Screen Brightness ──
 
     @ReactMethod
-    fun setScreenBrightness(brightness: Double) {
+    @Override
+    override fun setScreenBrightness(brightness: Double) {
         val activity = getCurrentActivity() ?: return
         val layout = activity.window.attributes
         layout.screenBrightness = brightness.toFloat().coerceIn(0.0f, 1.0f)
@@ -403,7 +404,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getScreenBrightness(): Double {
+    @Override
+    override fun getScreenBrightness(): Double {
         val activity = getCurrentActivity() ?: return 1.0
         val b = activity.window.attributes.screenBrightness
         return if (b < 0f) 1.0 else b.toDouble()
@@ -418,7 +420,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // on when entering 'playing' and off on pause/finish/close.
 
     @ReactMethod
-    fun setKeepScreenOn(enabled: Boolean) {
+    @Override
+    override fun setKeepScreenOn(enabled: Boolean) {
         val activity = getCurrentActivity() ?: return
         activity.runOnUiThread {
             if (enabled) {
@@ -453,7 +456,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // before the chip is reached.
 
     @ReactMethod
-    fun setOrientation(mode: String) {
+    @Override
+    override fun setOrientation(mode: String) {
         val activity = getCurrentActivity() ?: return
         activity.runOnUiThread {
             val requested = when (mode.lowercase()) {
@@ -467,7 +471,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun setImmersive(enabled: Boolean) {
+    @Override
+    override fun setImmersive(enabled: Boolean) {
         val activity = getCurrentActivity() ?: return
         activity.runOnUiThread {
             val window = activity.window
@@ -489,7 +494,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // ── Playback ──
 
     @ReactMethod
-    fun play() {
+    @Override
+    override fun play() {
         ensurePtr()
         Log.i(TAG, "[PlaybackTrace][Bridge][play] ptr=$nativePtr")
         MPVLib.nativePlay(nativePtr)
@@ -497,7 +503,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun pause() {
+    @Override
+    override fun pause() {
         ensurePtr()
         Log.i(TAG, "[PlaybackTrace][Bridge][pause] ptr=$nativePtr")
         MPVLib.nativePause(nativePtr)
@@ -505,45 +512,52 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun stop() {
+    @Override
+    override fun stop() {
         ensurePtr()
         Log.i(TAG, "[PlaybackTrace][Bridge][stop] ptr=$nativePtr")
         MPVLib.nativeStop(nativePtr)
     }
 
     @ReactMethod
-    fun togglePlayPause() {
+    @Override
+    override fun togglePlayPause() {
         ensurePtr()
         MPVLib.nativeTogglePlayPause(nativePtr)
     }
 
     @ReactMethod
-    fun seekForward(seconds: Double) {
+    @Override
+    override fun seekForward(seconds: Double) {
         ensurePtr()
         MPVLib.nativeSeekRelative(nativePtr, seconds)
     }
 
     @ReactMethod
-    fun seekBackward(seconds: Double) {
+    @Override
+    override fun seekBackward(seconds: Double) {
         ensurePtr()
         MPVLib.nativeSeekRelative(nativePtr, -seconds)
     }
 
     @ReactMethod
-    fun seekAbsolute(position: Double) {
+    @Override
+    override fun seekAbsolute(position: Double) {
         ensurePtr()
         Log.i(TAG, "[PlaybackTrace][Bridge][seekAbsolute] position=$position ptr=$nativePtr")
         MPVLib.nativeSeek(nativePtr, position)
     }
 
     @ReactMethod
-    fun stepFrame(direction: Double) {
+    @Override
+    override fun stepFrame(direction: Double) {
         ensurePtr()
         MPVLib.nativeStepFrame(nativePtr, direction.toInt())
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun screenshot(): String {
+    @Override
+    override fun screenshot(): String {
         ensurePtr()
         val tempFile = File(reactApplicationContext.cacheDir, "screenshot_temp.png")
         return MPVLib.nativeScreenshot(nativePtr, tempFile.absolutePath)
@@ -558,7 +572,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * show a preview of where the user left off.
      */
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun captureThumbnail(uri: String): String {
+    @Override
+    override fun captureThumbnail(uri: String): String {
         ensurePtr()
         val cacheDir = reactApplicationContext.cacheDir
         val hash = uri.hashCode().toLong() and 0x7FFFFFFF
@@ -569,7 +584,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // ── File Loading ───────────────────────────────────────────────────────
 
     @ReactMethod
-    fun loadFile(path: String) {
+    @Override
+    override fun loadFile(path: String) {
         ensurePtr()
         val resolvedPath = normalizeMpvInput(resolveContentUri(path))
         Log.i(TAG, "[PlaybackTrace][Bridge][loadFile] requested=$path resolved=$resolvedPath ptr=$nativePtr")
@@ -583,7 +599,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun loadFileWithRequestId(path: String, requestId: String) {
+    @Override
+    override fun loadFileWithRequestId(path: String, requestId: String) {
         ensurePtr()
         if (requestId.isBlank()) {
             loadFile(path)
@@ -610,7 +627,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * URI inaccessible after restart.
      */
     @ReactMethod
-    fun grantPersistablePermission(uri: String) {
+    @Override
+    override fun grantPersistablePermission(uri: String) {
         try {
             val contentUri = android.net.Uri.parse(uri)
             val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -634,7 +652,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * revoked (e.g. after app data clear or OS-level permission reset).
      */
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun verifyContentUri(uri: String): Boolean {
+    @Override
+    override fun verifyContentUri(uri: String): Boolean {
         if (!uri.startsWith("content://")) return true // non-content URIs assumed valid
         return try {
             val context = reactApplicationContext
@@ -691,7 +710,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun loadPlaylist(paths: ReadableArray, startIndex: Double) {
+    @Override
+    override fun loadPlaylist(paths: ReadableArray, startIndex: Double) {
         ensurePtr()
         val arr = Array(paths.size()) { i ->
             normalizeMpvInput(resolveContentUri(paths.getString(i) ?: ""))
@@ -700,7 +720,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getFileInfo(): String {
+    @Override
+    override fun getFileInfo(): String {
         ensurePtr()
         return JSONObject().apply {
             put("path", try { MPVLib.nativeGetProperty(nativePtr, "path") } catch (_: Exception) { "" })
@@ -710,7 +731,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getVideoParams(): String {
+    @Override
+    override fun getVideoParams(): String {
         ensurePtr()
         val w = try { MPVLib.nativeGetProperty(nativePtr, "width") } catch (_: Exception) { "0" }
         val h = try { MPVLib.nativeGetProperty(nativePtr, "height") } catch (_: Exception) { "0" }
@@ -729,7 +751,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // ── Tracks ─────────────────────────────────────────────────────────────
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getTracks(): String {
+    @Override
+    override fun getTracks(): String {
         ensurePtr()
         return try {
             MPVLib.nativeGetProperty(nativePtr, "track-list")
@@ -737,13 +760,15 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun selectTrack(trackId: Double) {
+    @Override
+    override fun selectTrack(trackId: Double) {
         ensurePtr()
         MPVLib.nativeSelectTrack(nativePtr, trackId.toInt())
     }
 
     @ReactMethod
-    fun setTrack(type: String, trackId: Double) {
+    @Override
+    override fun setTrack(type: String, trackId: Double) {
         ensurePtr()
         val prop = when (type) {
             "video" -> "vid"
@@ -757,7 +782,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun cycleTrack(type: String) {
+    @Override
+    override fun cycleTrack(type: String) {
         ensurePtr()
         when (type) {
             "video" -> MPVLib.nativeSetProperty(nativePtr, "cycle", "\"video\"")
@@ -767,14 +793,16 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun setTrackVisibility(trackType: String, visible: Boolean) {
+    @Override
+    override fun setTrackVisibility(trackType: String, visible: Boolean) {
         // No-op: mpv handles track visibility automatically
     }
 
     // ── Chapters ───────────────────────────────────────────────────────────
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getChapters(): String {
+    @Override
+    override fun getChapters(): String {
         ensurePtr()
         return try {
             MPVLib.nativeGetProperty(nativePtr, "chapter-list")
@@ -782,7 +810,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun seekChapter(direction: Double) {
+    @Override
+    override fun seekChapter(direction: Double) {
         ensurePtr()
         if (direction > 0) {
             MPVLib.nativeSetProperty(nativePtr, "chapter", "1")
@@ -792,7 +821,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getCurrentChapter(): String {
+    @Override
+    override fun getCurrentChapter(): String {
         ensurePtr()
         return try {
             MPVLib.nativeGetProperty(nativePtr, "chapter-metadata")
@@ -802,32 +832,37 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // ── Volume / Audio ─────────────────────────────────────────────────────
 
     @ReactMethod
-    fun setVolume(volume: Double) {
+    @Override
+    override fun setVolume(volume: Double) {
         ensurePtr()
         Log.i(TAG, "[PlaybackTrace][Bridge][setVolume] volume=$volume ptr=$nativePtr")
         MPVLib.nativeSetVolume(nativePtr, volume)
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getVolume(): Double {
+    @Override
+    override fun getVolume(): Double {
         ensurePtr()
         return MPVLib.nativeGetVolume(nativePtr)
     }
 
     @ReactMethod
-    fun setMuted(muted: Boolean) {
+    @Override
+    override fun setMuted(muted: Boolean) {
         ensurePtr()
         MPVLib.nativeSetMuted(nativePtr, muted)
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getMuted(): Boolean {
+    @Override
+    override fun getMuted(): Boolean {
         ensurePtr()
         return MPVLib.nativeGetMuted(nativePtr)
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getAudioDevices(): String {
+    @Override
+    override fun getAudioDevices(): String {
         ensurePtr()
         return try {
             val devices = MPVLib.nativeGetProperty(nativePtr, "audio-device-list")
@@ -840,22 +875,50 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun setAudioDevice(deviceName: String) {
+    @Override
+    override fun setAudioDevice(deviceName: String) {
         ensurePtr()
         Log.i(TAG, "[PlaybackTrace][Bridge][setAudioDevice] device=$deviceName ptr=$nativePtr")
         MPVLib.nativeSetProperty(nativePtr, "audio-device", "\"$deviceName\"")
     }
 
+    /**
+     * V16.0.6 / D-032 / B-010 proper fix — `toggleMute()` is an abstract
+     * method on the codegen-generated `NativeMpvPlayerSpec` (1.5.5), so the
+     * Kotlin class MUST override it to satisfy the new-arch TurboModule
+     * contract. The lib's public surface previously went through
+     * `setMuted(!getMuted())` instead; this is the spec-compliant single
+     * primitive.
+     *
+     * Reads the current `nativeGetMuted` value, flips it, and writes back
+     * via `nativeSetMuted`. Both helpers already exist on MPVLib; we don't
+     * need to talk to mpv via raw `nativeSetProperty` strings.
+     */
+    @ReactMethod
+    @Override
+    override fun toggleMute() {
+        ensurePtr()
+        val currentlyMuted = MPVLib.nativeGetMuted(nativePtr)
+        val nextMuted = !currentlyMuted
+        MPVLib.nativeSetMuted(nativePtr, nextMuted)
+        Log.i(
+            TAG,
+            "[PlaybackTrace][Bridge][toggleMute] flipped mute $currentlyMuted → $nextMuted",
+        )
+    }
+
     // ── Playback Speed ─────────────────────────────────────────────────────
 
     @ReactMethod
-    fun setSpeed(speed: Double) {
+    @Override
+    override fun setSpeed(speed: Double) {
         ensurePtr()
         MPVLib.nativeSetSpeed(nativePtr, speed)
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getSpeed(): Double {
+    @Override
+    override fun getSpeed(): Double {
         ensurePtr()
         return MPVLib.nativeGetSpeed(nativePtr)
     }
@@ -863,7 +926,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // ── Loop / Repeat ──────────────────────────────────────────────────────
 
     @ReactMethod
-    fun setLoopMode(mode: String) {
+    @Override
+    override fun setLoopMode(mode: String) {
         ensurePtr()
         val m = when (mode) {
             "file"     -> 1
@@ -874,7 +938,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getLoopMode(): String {
+    @Override
+    override fun getLoopMode(): String {
         ensurePtr()
         return when (MPVLib.nativeGetLoopMode(nativePtr)) {
             1 -> "file"
@@ -884,7 +949,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun setPlaylistLoop(loop: Boolean) {
+    @Override
+    override fun setPlaylistLoop(loop: Boolean) {
         ensurePtr()
         MPVLib.nativeSetLoopMode(nativePtr, if (loop) 2 else 0)
     }
@@ -892,19 +958,22 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // ── Properties ─────────────────────────────────────────────────────────
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getProperty(name: String): String {
+    @Override
+    override fun getProperty(name: String): String {
         ensurePtr()
         return MPVLib.nativeGetProperty(nativePtr, name)
     }
 
     @ReactMethod
-    fun setProperty(name: String, value: String) {
+    @Override
+    override fun setProperty(name: String, value: String) {
         ensurePtr()
         MPVLib.nativeSetProperty(nativePtr, name, value)
     }
 
     @ReactMethod
-    fun observeProperty(name: String) {
+    @Override
+    override fun observeProperty(name: String) {
         if (name.isBlank()) return
         Log.i(TAG, "[PlaybackTrace][Bridge][observeProperty] name=$name initialized=${nativePtr != 0L}")
         pendingObservedProperties.add(name)
@@ -920,7 +989,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun unobserveProperty(name: String) {
+    @Override
+    override fun unobserveProperty(name: String) {
         pendingObservedProperties.remove(name)
         if (nativePtr == 0L) return
         try {
@@ -933,13 +1003,15 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // ── Video/Audio Filters ────────────────────────────────────────────────
 
     @ReactMethod
-    fun setVideoFilter(filter: String, enabled: Boolean) {
+    @Override
+    override fun setVideoFilter(filter: String, enabled: Boolean) {
         ensurePtr()
         MPVLib.nativeSetVideoFilter(nativePtr, filter, enabled)
     }
 
     @ReactMethod
-    fun setAudioFilter(filter: String, enabled: Boolean) {
+    @Override
+    override fun setAudioFilter(filter: String, enabled: Boolean) {
         ensurePtr()
         MPVLib.nativeSetAudioFilter(nativePtr, filter, enabled)
     }
@@ -947,7 +1019,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // ── Playlist ───────────────────────────────────────────────────────────
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getPlaylist(): String {
+    @Override
+    override fun getPlaylist(): String {
         ensurePtr()
         return try {
             MPVLib.nativeGetProperty(nativePtr, "playlist")
@@ -955,31 +1028,36 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun playlistNext() {
+    @Override
+    override fun playlistNext() {
         ensurePtr()
         MPVLib.nativePlaylistNext(nativePtr)
     }
 
     @ReactMethod
-    fun playlistPrev() {
+    @Override
+    override fun playlistPrev() {
         ensurePtr()
         MPVLib.nativePlaylistPrev(nativePtr)
     }
 
     @ReactMethod
-    fun playlistRemove(index: Double) {
+    @Override
+    override fun playlistRemove(index: Double) {
         ensurePtr()
         MPVLib.nativePlaylistRemove(nativePtr, index.toInt())
     }
 
     @ReactMethod
-    fun playlistShuffle() {
+    @Override
+    override fun playlistShuffle() {
         ensurePtr()
         MPVLib.nativePlaylistShuffle(nativePtr)
     }
 
     @ReactMethod
-    fun playlistClear() {
+    @Override
+    override fun playlistClear() {
         ensurePtr()
         MPVLib.nativePlaylistClear(nativePtr)
     }
@@ -987,21 +1065,24 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // ── State Queries ──────────────────────────────────────────────────────
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getPosition(): Double {
+    @Override
+    override fun getPosition(): Double {
         val position = if (nativePtr != 0L) MPVLib.nativeGetPosition(nativePtr) else 0.0
         Log.d(TAG, "[PlaybackTrace][Bridge][getPosition] ptr=$nativePtr position=$position")
         return position
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getDuration(): Double {
+    @Override
+    override fun getDuration(): Double {
         val duration = if (nativePtr != 0L) MPVLib.nativeGetDuration(nativePtr) else 0.0
         Log.d(TAG, "[PlaybackTrace][Bridge][getDuration] ptr=$nativePtr duration=$duration")
         return duration
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getPlaybackState(): String {
+    @Override
+    override fun getPlaybackState(): String {
         if (nativePtr == 0L) {
             Log.d(TAG, "[PlaybackTrace][Bridge][getPlaybackState] ptr=0 state=idle")
             return "idle"
@@ -1033,7 +1114,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun isMuted(): Boolean {
+    @Override
+    override fun isMuted(): Boolean {
         return if (nativePtr != 0L) MPVLib.nativeGetMuted(nativePtr) else false
     }
 
@@ -1057,7 +1139,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun initPlayer(): Boolean {
+    @Override
+    override fun initPlayer(): Boolean {
         Log.i(TAG, "[PlaybackTrace][Bridge][initPlayer] call currentPtr=$nativePtr")
         if (nativePtr != 0L) {
             Log.w(TAG, "[PlaybackTrace][Bridge][initPlayer] Already initialized ptr=$nativePtr")
@@ -1083,7 +1166,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun destroy() {
+    @Override
+    override fun destroy() {
         if (nativePtr != 0L) {
             MPVLib.nativeDestroy()
             nativePtr = 0L
@@ -1105,7 +1189,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * The toggle is idempotent — calling with the current value is a no-op.
      */
     @ReactMethod
-    fun setDebugLogging(enabled: Boolean) {
+    @Override
+    override fun setDebugLogging(enabled: Boolean) {
         debugLoggingEnabled = enabled
         if (nativePtr != 0L) {
             try {
@@ -1127,7 +1212,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      *   ...
      */
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun dumpObservedProperties(): Int {
+    @Override
+    override fun dumpObservedProperties(): Double {
         val count = pendingObservedProperties.size
         Log.i(TAG, "[PlaybackTrace][Bridge][dumpObservedProperties] $count properties observed:")
         pendingObservedProperties.sorted().forEach { name ->
@@ -1138,7 +1224,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             }
             Log.i(TAG, "[PlaybackTrace][Bridge][dumpProperties] property=$name value=\"$value\" requested=true")
         }
-        return count
+        return count.toDouble()
     }
 
     /**
@@ -1238,9 +1324,10 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     //   • E_SECURITY               — manifest restriction refused the launch
     //   • E_OPEN_PLAYER_FAILED     — anything else (e.g. flag mismatch)
     @ReactMethod
-    fun openPlayer(
+    @Override
+    override fun openPlayer(
         uri: String,
-        title: String?,
+        title: String,
         type: String,
         startPositionMs: Double,
         promise: Promise,
@@ -1272,7 +1359,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         // from the activity, but the flag is harmless and makes the
         // intent correct if the activity is ever swapped for a
         // background-launched one).
-        val resolvedTitle = title?.takeIf { it.isNotBlank() } ?: uri
+        val resolvedTitle = title.takeIf { it.isNotBlank() } ?: uri
         val intent = android.content.Intent(
             activity,
             com.simba.player.PlayerActivity::class.java,
@@ -1339,9 +1426,17 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * is correct — that path uses MainActivity's PlaybackContext, not
      * PlayerActivity's.
      */
-    @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getLaunchParams(): com.facebook.react.bridge.WritableMap? {
-        val params = lastLaunchParams ?: return null
+    @ReactMethod
+    @Override
+    override fun getLaunchParams(promise: Promise) {
+        val params = lastLaunchParams
+        if (params == null) {
+            // No launch pending (or already consumed) — resolve with JS `null`
+            // so the consumer's `await bridge.getLaunchParams()` sees the same
+            // nullable shape the spec promised (`Promise<LaunchParams | null>`).
+            promise.resolve(null)
+            return
+        }
         // Clear immediately — we want the next call (in the same
         // activity or any other) to see null. The first read is the
         // only meaningful one.
@@ -1352,7 +1447,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         map.putString("type", params.type)
         map.putDouble("startPositionMs", params.startPositionMs.toDouble())
         Log.i(TAG, "[PlaybackTrace][Bridge][getLaunchParams] returning uri='${params.uri}' type='${params.type}'")
-        return map
+        promise.resolve(map)
     }
 
     // ── PlayerConfig (Phase 21) ──────────────────────────────────────────────
@@ -1373,7 +1468,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // re-renders.
 
     @ReactMethod
-    fun setConfig(configJson: String, promise: Promise) {
+    @Override
+    override fun setConfig(configJson: String, promise: Promise) {
         try {
             val parsed: Map<String, Any?>? = if (configJson.isBlank()) {
                 null
@@ -1419,7 +1515,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * @param progressPct   Optional — progress percentage string like "45 %".
      */
     @ReactMethod
-    fun enterPip(chapterTitle: String? = null, progressPct: String? = null) {
+    @Override
+    override fun enterPip(chapterTitle: String, progressPct: String) {
         val activity = getCurrentActivity()
         if (activity == null || android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) return
         try {
@@ -1450,7 +1547,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * Called from JS when user taps "Expand" in PiP RemoteActions.
      */
     @ReactMethod
-    fun exitPip() {
+    @Override
+    override fun exitPip() {
         val activity = getCurrentActivity()
         if (activity == null || android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) return
         if (!activity.isInPictureInPictureMode) return
@@ -1483,7 +1581,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * Called from JS when user taps "Close" in PiP RemoteActions.
      */
     @ReactMethod
-    fun exitPipAndFinish() {
+    @Override
+    override fun exitPipAndFinish() {
         val activity = getCurrentActivity()
         if (activity == null) return
         activity.finishAndRemoveTask()
@@ -1576,7 +1675,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun isNotificationActive(): Boolean {
+    @Override
+    override fun isNotificationActive(): Boolean {
         return com.simba.player.MediaPlaybackService.isRunning()
     }
 
@@ -1589,7 +1689,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * `PermissionsAndroid.check/request` flow.
      */
     @ReactMethod
-    fun requestNotificationPermission() {
+    @Override
+    override fun requestNotificationPermission() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             val activity = getCurrentActivity() ?: return
             androidx.core.app.ActivityCompat.requestPermissions(
@@ -1615,7 +1716,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     override fun fetchNativePtr(): Long = nativePtr
 
     @ReactMethod(isBlockingSynchronousMethod = true)
-    fun getNativePtr(): Double {
+    @Override
+    override fun getNativePtr(): Double {
         return nativePtr.toDouble()
     }
 
