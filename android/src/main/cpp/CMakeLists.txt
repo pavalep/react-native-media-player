@@ -68,6 +68,36 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/include/mpv
 )
 
+# V16.0.8 / 1.5.8 (D-033 follow-up): 16 KB page-size alignment for Android 14+
+# devices that use 16 KB pages (Pixel 8+, Galaxy S24+, etc.). Without this,
+# Android App Compatibility shows "LOAD segment not aligned" for
+# libsimbaplayer_mpv.so and refuses to load it, which cascades to
+# "Unknown error" for all transitively-loaded libs (libmpv.so, libc++_shared.so,
+# libav*.so) — the app boots to a white screen.
+#
+# Per https://developer.android.com/guide/practices/page-sizes and
+# https://android.googlesource.com/platform/bionic/+/master/android-changes-for-ndk-developers.md
+# the linker must emit LOAD segments aligned to 16 KB (16384 = 2**14).
+# `-z,max-page-size=16384` sets the maximum page size the loader will use;
+# `-z,common-page-size=16384` sets the common page size the linker assumes
+# when laying out segments (NDK r27+ linker defaults this to 16 KB when
+# both are 16384, but setting it explicitly is forward-compatible with
+# older linkers and self-documenting).
+#
+# Why add_link_options (not target_link_options): only `simbaplayer_mpv` is
+# actually linked here — `mpv` is `SHARED IMPORTED` so its own ELF was
+# emitted by the prebuilt (already 16 KB-aligned). `add_link_options`
+# cleanly applies to the only locally-built target without requiring a
+# `target_link_options(simbaplayer_mpv ...)` call.
+#
+# The `if(CMAKE_SYSTEM_NAME STREQUAL "Android")` guard keeps it Android-only
+# — useful if someone ever builds this on a host (where the linker flag
+# would either no-op or break depending on toolchain).
+if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    add_link_options("-Wl,-z,max-page-size=16384")
+    add_link_options("-Wl,-z,common-page-size=16384")
+endif()
+
 target_link_libraries(
     simbaplayer_mpv
     android

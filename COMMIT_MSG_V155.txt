@@ -1,0 +1,17 @@
+chore(release): bump version to 1.5.5
+
+V16.0.5 patch release. Same D-032 / B-010 fix as 1.5.4 (which was
+attempted-publish-only and skipped, since the registry rejected the
+PUT with E404 — see npm dist-tags: { staging: '1.5.3', latest: '1.5.5' }).
+
+This commit brings package.json in sync with the npm-published 1.5.5
+tarball, so the release.yml tag-version check (`v${TAG_VERSION} ==
+${PKG_VERSION}`) passes when the v1.5.5 tag is pushed.
+
+Why a new minor patch (1.5.5 instead of fixing 1.5.4): the user already
+ran `npm version 1.5.4 --no-git-tag-version` once locally, which
+updated package.json without creating a git commit/tag, then ran
+`npm publish --access public` (failed with E404 at the registry). The
+1.5.5 bump is the cleanest retry path — npm accepts it, the registry
+holds it at `latest`, and this commit backfills the version so the GH
+Release workflow can verify the tag.

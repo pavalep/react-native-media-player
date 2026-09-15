@@ -317,6 +317,16 @@ class PlayerActivity : ReactActivity() {
     // activity start and React's first paint is opaque black instead of
     // the default white. Eliminates the white flicker when launching
     // into a video.
+    // V22.0.0 / 1.5.10 (D-034): mark this activity as "player host"
+    // BEFORE RN mounts so `useLaunchParams()` (called from the
+    // module's React tree on first commit) sees a true answer and
+    // claims the most-recent `lastLaunchParams`. Without this, any
+    // prior session's launchParams would already have been consumed
+    // by MainActivity's React tree (which goes through the same
+    // SimbaPlayerRoot) and SimbaPlayerRoot would render the
+    // PlayerRoot-only fallback in MainActivity - the V22 user
+    // regression on cold start.
+    com.simba.player.mpv.MpvBridgeModule.currentActivityIsPlayer = true
     window.setBackgroundDrawable(ColorDrawable(Color.BLACK))
     super.onCreate(savedInstanceState)
     Log.i(
@@ -1709,6 +1719,14 @@ class PlayerActivity : ReactActivity() {
     // Step 6.6.3: null the reference.
     mpvRenderView = null
     Log.i(TAG, "onDestroy: MpvRenderView cleaned up and removed")
+    // V22.0.0 / 1.5.10 (D-034): clear the player-host flag. We set
+    // the flag in onCreate before RN mounts; we clear it here so
+    // the next time JS asks `isCurrentActivityPlayer()` it sees
+    // false. Without this, returning to MainActivity after the
+    // user finishes a video would leave the flag stuck at true
+    // and SimbaPlayerRoot in MainActivity would wrongly claim
+    // every future launchParams.
+    com.simba.player.mpv.MpvBridgeModule.currentActivityIsPlayer = false
     // Phase 17.5: stop the progress update runnable. The
     // service is about to stop (below), so the runnable would
     // race with the service teardown on its next tick. Stop

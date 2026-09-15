@@ -35,6 +35,30 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         const val NAME = "MpvPlayerModule"
         private const val TAG = "MpvBridgeModule"
 
+        // V22.0.0 / 1.5.10 (D-034): activity-aware launchParams guard.
+        //
+        // Background: `lastLaunchParams` (declared further down) is the
+        // canonical handoff from `openPlayer(...)` to the next
+        // `PlayerActivity` mount. The previous architecture had
+        // `useLaunchParams()` consume it from BOTH MainActivity's React
+        // tree and PlayerActivity's React tree - both activities mount
+        // the same JS App and both wrap in `<SimbaPlayerRoot>` which
+        // calls the hook on mount. Result on cold start: stale
+        // lastLaunchParams from a prior `openPlayer` call got consumed
+        // by MainActivity's tree, and `<PlayerRoot />` got rendered over
+        // the Home screen (the V22 user regression).
+        //
+        // The fix: PlayerActivity's `onCreate` sets this flag to
+        // `true` and `onDestroy` resets to `false`. `useLaunchParams()`
+        // consults it via the synchronous `isCurrentActivityPlayer()`
+        // bridge method and returns `null` (without touching
+        // lastLaunchParams) when we are in any non-PlayerActivity host.
+        // The flag is process-wide (companion object), so React tree
+        // boundaries don't matter.
+        @Volatile
+        @JvmStatic
+        var currentActivityIsPlayer: Boolean = false
+
         // Holds the ReactApplicationContext from RN init time so non-module
         // call sites (e.g. MainActivity.onPictureInPictureModeChanged) can
         // emit DeviceEventManagerModule events. Bridgeless RN: MainActivity's
@@ -1117,6 +1141,27 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     @Override
     override fun isMuted(): Boolean {
         return if (nativePtr != 0L) MPVLib.nativeGetMuted(nativePtr) else false
+    }
+
+    // V22.0.0 / 1.5.10 (D-034): activity-aware launchParams guard.
+    //
+    // Returns true while PlayerActivity is the foreground React host,
+    // false otherwise (MainActivity foreground, no React host, or
+    // about to attach). Mirrors the static
+    // `MpvBridgeModule.currentActivityIsPlayer` which PlayerActivity
+    // toggles in onCreate/onDestroy.
+    //
+    // Why a static companion flag rather than `getCurrentActivity()
+    // is PlayerActivity`: in `newArchEnabled=true` bridgeless mode,
+    // `getCurrentActivity()` can return null mid-attach (RN hasn't
+    // finished initializing), and the JS render path needs an
+    // authoritative answer the instant MainActivity's React tree
+    // mounts. The static flag set in `Activity.onCreate` (before
+    // React even renders) is always authoritative.
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    @Override
+    override fun isCurrentActivityPlayer(): Boolean {
+        return currentActivityIsPlayer
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────────────

@@ -29,6 +29,25 @@ import { getMpvPlayerModule, type LaunchParams } from '../bridge/MpvPlayerModule
  * shared React state, but that requires hoisting the hook to
  * a common ancestor.)
  *
+ * V22.0.0 / 1.5.10 (D-034) activity-aware guard:
+ *
+ * The previous implementation consumed `lastLaunchParams` from
+ * the FIRST React tree to mount. With MainActivity and
+ * PlayerActivity both mounting the same `App` component (both
+ * wrap in `<SimbaPlayerRoot>`), cold-start races meant stale
+ * launchParams from a prior `openPlayer` call would get
+ * consumed by MainActivity's React tree, and `<PlayerRoot />`
+ * would get rendered over the Home screen.
+ *
+ * The fix here: before calling `getLaunchParams()` we ask the
+ * native module `isCurrentActivityPlayer()` — a synchronous
+ * boolean set to `true` by `PlayerActivity.onCreate` and reset
+ * to `false` in `PlayerActivity.onDestroy`. When false (we are
+ * in MainActivity, a Share Sheet host, or no React host yet),
+ * we return `null` *without* calling `getLaunchParams()`, so
+ * the single-shot queue stays intact for the eventual
+ * PlayerActivity mount to consume.
+ *
  * @example
  * ```tsx
  * function AppContent() {
@@ -44,13 +63,27 @@ import { getMpvPlayerModule, type LaunchParams } from '../bridge/MpvPlayerModule
  * subscription (e.g. for analytics), use
  * `getMpvPlayerModule().getLaunchParams()` directly. Note that
  * a direct call consumes the one-shot queue the same way the
- * hook does — so don't call it twice.
+ * hook does — so don't call it twice from `MainActivity`'s
+ * tree (it would steal the params from `PlayerActivity`).
  */
 export function useLaunchParams(): LaunchParams | null {
   const [params, setParams] = useState<LaunchParams | null>(null);
 
   useEffect(() => {
     const bridge = getMpvPlayerModule();
+    // V22.0.0 / 1.5.10 (D-034): refuse to consume the queue
+    // unless we are the player host. see hook comment for why.
+    try {
+      const isPlayer = bridge.isCurrentActivityPlayer();
+      if (!isPlayer) {
+        setParams(null);
+        return;
+      }
+    } catch {
+      // Bridge didn't expose the guard (pre-1.5.10 lib) — fall
+      // through to the legacy one-shot-queue read so older
+      // versions of the lib keep working.
+    }
     try {
       const next = bridge.getLaunchParams();
       setParams(next);

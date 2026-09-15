@@ -1,0 +1,63 @@
+react-native-media-player v1.5.10 (D-034: activity-aware launchParams guard)
+
+D-034 cold-start regression fix. Previously, MainActivity and
+PlayerActivity both mounted the same App component which wrapped in
+`<SimbaPlayerRoot>`. SimbaPlayerRoot called `useLaunchParams()` on
+mount, and the hook unconditionally consumed `lastLaunchParams` from
+the native bridge (a single-shot queue). On a cold start with stale
+launchParams from a prior session's `openPlayer(...)` call,
+MainActivity's React tree won the race, consumed the queue, and
+rendered `<PlayerRoot />` over the Home screen (the V22
+user-reported regression). Steps from the user:
+
+  1. Tap any Movies/Music card -> `openPlayer()` -> PlayerActivity.
+  2. Press back / finish the video.
+  3. Force-stop the app (or swipe from recents).
+  4. Cold-launch from the icon.
+  ...and the home screen briefly showed the PlayerRoot chrome
+  before falling back to navigator. Worse, if the user killed the
+  app mid-playback, the cold start would land on PlayerRoot with
+  no media to play.
+
+Fix:
+- New sync bridge method `isCurrentActivityPlayer(): boolean` on the
+  TurboModule spec at `src/bridge/NativeMpvPlayer.ts`. Sync because
+  the JS-side guard runs before the `Promise<T> | null` decision
+  in `useLaunchParams` and we want a straight-line render, no
+  Suspense / loading gate at app cold start.
+- Static companion flag `MpvBridgeModule.currentActivityIsPlayer`
+  in `MpvBridgeModule.kt` (a `@Volatile @JvmStatic var` on the
+  companion object so PlayerActivity can flip it without holding
+  a module-instance reference).
+- `PlayerActivity.onCreate` flips the flag true BEFORE RN mounts;
+  `onDestroy` flips it false. This guarantees the synchronously
+  asked bridge method returns the right answer on the first commit.
+- `useLaunchParams` (in `src/hooks/useLaunchParams.tsx`) calls
+  `bridge.isCurrentActivityPlayer()` first; if false, returns null
+  WITHOUT calling `getLaunchParams()`, so the single-shot queue
+  stays intact for PlayerActivity's React tree to consume.
+  Pre-1.5.10 consumers that don't have the guard method yet still
+  work via the legacy fall-through `try/catch`.
+
+Why a static companion flag rather than `getCurrentActivity()
+is PlayerActivity`: in `newArchEnabled=true` bridgeless mode,
+`getCurrentActivity()` can return null mid-attach (RN hasn't
+finished initializing), and the JS render path needs an
+authoritative answer the instant MainActivity's React tree
+mounts. The static flag set in `Activity.onCreate` is always
+authoritative.
+
+Verified on: emulator-5554 API 37 x86_64. After this fix + the
+consumer-side jniLibs fix in `MOBILE_APP_REACT_NATIVE/android/app/src/
+main/jniLibs/{x86_64,arm64-v8a}/libc++_shared.so`, the cold start
+lands on HomeScreen with no PlayerRoot leak.
+
+Carried forward from 1.5.9:
+- `-DANDROID_STL=c++_static` so libsimbaplayer_mpv.so statically
+  links libc++ (avoids the NDK r27 libc++_shared.so missing the
+  LLVM 17 `__from_chars_floating_point` symbol).
+- `add_link_options("-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")`
+  + `-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=TRUE` for 16 KB LOAD
+  alignment on 64-bit ABIs.
+- `pickFirst "lib/**/libc++_shared.so"` at the consumer's
+  packaging level (defense-in-depth).

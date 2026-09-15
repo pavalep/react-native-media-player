@@ -337,6 +337,22 @@ export interface MpvPlayerModuleBridge {
    */
   getLaunchParams(): LaunchParams | null;
 
+  // V22.0.0 / 1.5.7 (D-034): activity-aware launchParams guard.
+  //
+  // Synchronous boolean getter exposing the static
+  // `MpvBridgeModule.currentActivityIsPlayer` flag. PlayerActivity's
+  // `onCreate` sets this to `true` BEFORE React mounts; `onDestroy`
+  // resets it to `false`. `useLaunchParams` consults it via this
+  // method and short-circuits — returns `null` (without consuming
+  // the single-shot `lastLaunchParams` queue) when we are in
+  // MainActivity, a Share Sheet host, or no React host yet.
+  //
+  // Pre-1.5.7 consumers (where this method is absent) fall through
+  // to the legacy unconditional one-shot-queue read in
+  // `useLaunchParams`, which has the cold-start `<PlayerRoot />`
+  // regression this D-034 release fixes.
+  isCurrentActivityPlayer(): boolean;
+
   // ── Configuration (V12 Phase 21) ───────────────────────────────────────
   /**
    * Push the latest PlayerConfig JSON to the native side. Resolves
@@ -546,6 +562,11 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
     return Promise.resolve(false);
   },
   getLaunchParams: () => null,
+
+  // V22.0.0 / 1.5.7 (D-034): no-op fallback always reports "not a
+  // player host" so jest tests + Storybook previews don't render
+  // PlayerRoot even when lastLaunchParams is somehow pre-populated.
+  isCurrentActivityPlayer: () => false,
 
   // Config
   setConfig: (_configJson: string) => {

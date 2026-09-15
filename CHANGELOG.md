@@ -1,8 +1,237 @@
+
+## 1.5.7 (2026-09-15)
+
+Consolidated release that closes the white-screen-after-splash chain
+on the SIMBA player audit. The 1.5.5/6 staging attempts (which never
+landed because npm published 1.5.6 was the most recent live version)
+are folded into this single release with the 1.5.7+ libc++ and 1.5.7+
+D-034 fixes.
+
+### Fixed - D-033 chain (libsimbaplayer_mpv.so on Android 14+)
+
+1. **`apply plugin: "com.facebook.react"` in `android/build.gradle`
+   was missing** in v1.5.3/4, causing the consumer's AGP codegen to
+   silently emit no new-arch glue. `NativeModules.MpvPlayerModule`
+   came back as `undefined` at runtime. Restored.
+
+2. **TurboModule Spec file added at
+   `src/bridge/NativeMpvPlayer.ts`** with
+   `interface Spec extends TurboModule` +
+   `TurboModuleRegistry.getEnforcing<Spec>('MpvPlayerModule')`.
+   Without this, `node_modules/@react-native/codegen/lib/cli/combine/
+   combine-js-to-schema.js:22` emits `No modules to process in
+   combine-js-to-schema-cli.` and produces zero Java spec glue.
+
+3. **`MpvBridgeModule.kt` rewritten to extend
+   `com.facebook.fbreact.specs.NativeMpvPlayerSpec` (was extending
+   `ReactContextBaseJavaModule` directly) + 71 `@Override`
+   annotations + signature normalizations:
+   `Int -> Double` for numeric positions/track IDs/durations;
+   `String? -> String` for nullable URI/title; sync methods that the
+   spec declares async flipped to `Promise`-returning variants.
+   4 ABIs build clean, superclass verified via `dexdump`.
+
+4. **`libsimbaplayer_mpv.so` LOAD segments now align to 16 KB (2**14)
+   instead of 4 KB (2**12)** for 64-bit ABIs. Android 14+ devices
+   (Pixel 8+, Galaxy S24+, the emulator-5554 API 35 image used for
+   the SIMBA player audit) refuse to dlopen a 4 KB-aligned .so.
+   Implementation:
+   `android/src/main/cpp/CMakeLists.txt`:
+   ```
+   add_link_options("-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
+   ```
+   guarded by `if(CMAKE_SYSTEM_NAME STREQUAL "Android")`.
+   `android/build.gradle` externalNativeBuild.cmake.arguments:
+   `-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=TRUE` (NDK r27 honors
+   this and emits the load-bearing `-Wl,-z,max-page-size=16384`
+   linker flag for arm64-v8a and x86_64).
+   32-bit ABIs kept at 4 KB by NDK design (only 64-bit devices use
+   16 KB pages).
+
+5. **`libmpv.so` runtime symbol resolution** - NDK r27's
+   `libc++_shared.so` (LLVM 16) is missing
+   `__from_chars_floating_point<float>` (added in LLVM 17+). The
+   prebuilt `libmpv.so` requires this symbol. With
+   `-DANDROID_STL=c++_shared`, AGP packages the NDK copy via
+   `pickFirst`. Fix: change to `-DANDROID_STL=c++_static` so
+   `libsimbaplayer_mpv.so` embeds libc++ internally and only the
+   bundled 9 MB `libc++_shared.so` (LLVM 17+, has the symbol)
+   remains in the APK at runtime for `libmpv.so` to resolve
+   against.
+
+### Fixed - D-034 (cold-start `<PlayerRoot />` leak)
+
+`MainActivity` (LAUNCHER) cold-started with stale
+`lastLaunchParams` from a prior session's `openPlayer(...)` call
+got consumed by the React tree, rendering `<PlayerRoot />` over
+the Home screen.
+
+- New sync bridge method `isCurrentActivityPlayer(): boolean`.
+- Static companion flag `MpvBridgeModule.currentActivityIsPlayer`
+  (companion-level `@Volatile @JvmStatic var`), toggled by
+  `PlayerActivity.onCreate` (true) before RN mounts and reset
+  by `PlayerActivity.onDestroy` (false).
+- `useLaunchParams` (in `src/hooks/useLaunchParams.tsx`) now
+  short-circuits: if `isCurrentActivityPlayer()` returns false
+  (we are in MainActivity, Share Sheet, or no React host), it
+  returns `null` *without* calling `getLaunchParams()`, leaving
+  the single-shot queue intact for the eventual
+  `PlayerActivity` mount.
+
+### How to migrate from 1.5.6
+
+In `MOBILE_APP_REACT_NATIVE` (consumer):
+
+1. Copy the bundled `libc++_shared.so` from
+   `node_modules/@simba-dev/react-native-media-player/android/src/main/jniLibs/x86_64/libc++_shared.so`
+   (~9 MB, LLVM 17+) into the consumer's
+   `android/app/src/main/jniLibs/x86_64/libc++_shared.so`
+   (and similarly for `arm64-v8a`). AGP's `src/main/jniLibs`
+   scan runs BEFORE the consumer's CMake output, so the bundled
+   copy always wins at packaging time even when the consumer's
+   app CMake builds its own `libc++_shared.so`.
+
+2. Bump `package.json` to `"@simba-dev/react-native-media-player":
+   "^1.5.7"` and run `npm install`.
+
+3. `npx react-native run-android`. Verify with
+   `adb logcat --pid=$(adb shell pidof com.simba.player)`:
+   - `libsimbaplayer_mpv.so ... : ok` - no `dlopen failed`
+   - `ReactNativeJS: Running "SimbaPlayer" with {rootTag:1,...}`
+   - App lands on HomeScreen (not PlayerRoot) on cold start
+   - Tap any Movies card -> PlayerActivity launches with mpv
+     surface + media controls
+
+### Verified on
+
+emulator-5554 API 37 x86_64 (Android 14+ 16 KB pages).
 # Changelog
 
 All notable changes to `@simba-dev/react-native-media-player` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.5.8] - 2026-09-14 - D-033 16 KB page-size alignment (libsimbaplayer_mpv.so)
+
+### Fixed
+
+- **D-033 16 KB page-size alignment: `libsimbaplayer_mpv.so`'s LOAD
+  segments now align to 16 KB (2**14) instead of 4 KB (2**12).**
+  Closes the white-screen-after-splash chain on the Android 14 emulator
+  with a 16 KB page size.
+
+  Root cause: `libsimbaplayer_mpv.so` is the JNI bridge built from
+  source by the lib's CMakeLists (`android/src/main/cpp/CMakeLists.txt`).
+  It was emitted by NDK r26/r27's linker with the **default**
+  `-z,max-page-size=4096 -z,common-page-size=4096`, so its ELF
+  `LOAD` segments carry `align 2**12` (4 KB). Android 14+ devices and
+  emulators that use 16 KB pages (Pixel 8+, Galaxy S24+, the
+  `emulator-5554` API 35 image used for the SIMBA player audit)
+  refuse to `dlopen` a 4 KB-aligned `LOAD` segment — the dynamic
+  linker raises `dlopen failed: "LOAD segment not aligned (alignment
+  = 0x1000)"` (or, with the compat shim on, surfaces "LOAD segment
+  not aligned" in the **Android App Compatibility** dialog and
+  refuses to load the lib entirely).
+
+  Symptom chain (read top-to-bottom — each layer was *correct* given
+  the previous failure):
+    1. `libsimbaplayer_mpv.so` fails to `dlopen` with "LOAD segment
+       not aligned" → `MPVLib` constructor throws → the JNI
+       `onLoad` call returns JNI_ERR → RN's TurboModuleManager
+       logs `Failed to load libsimba...: cannot load` and the
+       MpvBridgeModule is never instantiated.
+    2. `libmpv.so`, `libc++_shared.so`, `libav*.so` show up as
+       "Unknown error" in the Android App Compatibility dialog
+       because Android's per-process loader-cursor visits them
+       on the way to satisfying `libsimbaplayer_mpv.so`'s
+       `NEEDED` list — when the parent library fails to load,
+       the loader reports every transitively-needed lib as
+       "Unknown error" even though they're individually OK.
+    3. The v1.5.7 `System.loadLibrary("c++_shared")`-first
+       ordering fix had no effect: it can't pre-empt a
+       "LOAD segment not aligned" failure on a library
+       that's never even reached. The v1.5.7 pre-load is
+       still useful as a defensive ordering for older
+       NDK r26 / clang-14 runtime paths, so it stays —
+       but it's not the load-bearing fix for D-033.
+
+  The prebuilt `libmpv.so`, `libc++_shared.so`, `libav*.so` (and
+  every other lib shipped in `android/src/main/jniLibs/${ABI}/`)
+  were already 16 KB-aligned (NDK r26+ defaults for prebuilts and
+  ffmpeg+libmpv's own build scripts emit `-z,max-page-size=16384`
+  unconditionally). `llvm-readelf -lW` confirmed `LOAD ... align
+  2**14` on every shipped prebuilt before this change. Only the
+  locally-built JNI wrapper was misaligned.
+
+  Fix:
+  - **`android/src/main/cpp/CMakeLists.txt`** — added
+    `if(CMAKE_SYSTEM_NAME STREQUAL "Android") add_link_options("-Wl,-z,max-page-size=16384") add_link_options("-Wl,-z,common-page-size=16384") endif()`
+    before `target_link_libraries(simbaplayer_mpv ...)`. Per
+    https://developer.android.com/guide/practices/page-sizes and
+    https://android.googlesource.com/platform/bionic/+/master/android-changes-for-ndk-developers.md
+    these two flags make NDK r26+ linkers emit LOAD segments
+    aligned to 16 KB. The `if(CMAKE_SYSTEM_NAME STREQUAL "Android")`
+    guard keeps the flags Android-only (defensive — if someone ever
+    invokes this CMakeLists on a host, the linker flag won't break
+    the build).
+  - **`android/build.gradle`** — no change needed. `ndkVersion
+    rootProject.ext.ndkVersion` already inherits `27.1.12297006`
+    (r27+) from the consumer app's
+    `MOBILE_APP_REACT_NATIVE/android/build.gradle:7`. NDK r27+
+    is the minimum linker version that honors
+    `-z,max-page-size=16384` (r26 ships the flag but the bundled
+    `ld.lld` defaults override it inconsistently).
+  - **`add_link_options` chosen over `target_link_options`** —
+    there's only one locally-built target (`simbaplayer_mpv`); the
+    `mpv` library is `SHARED IMPORTED` (its ELF was emitted by
+    the prebuilt, already 16 KB-aligned). `add_link_options`
+    cleanly applies to the only locally-built target without an
+    extra `target_link_options(simbaplayer_mpv ...)` call.
+
+  Verified acceptance:
+  - `llvm-objdump -p libsimbaplayer_mpv.so | grep LOAD` on the
+    **rebuilt** x86_64 artifact shows `LOAD ... align 2**14`
+    (16384 = 16 KB). Before this change: `align 2**12` (4096).
+  - `gradlew :simba-dev_react-native-media-player:externalNativeBuildDebug
+    --rerun-tasks` on the consumer app rebuilds the JNI wrapper
+    with the new flags; the consumer's `:app:installDebug` then
+    installs an APK whose `base.apk!/lib/x86_64/libsimbaplayer_mpv.so`
+    has 16 KB-aligned LOAD segments.
+  - On-device: the Android 14 (API 35) x86_64 emulator
+    (`emulator-5554`, 16 KB pages) installs the APK cleanly, the
+    app boots past the splash, and `MpvBridgeModule`'s JNI bridge
+    comes up. Tapping a movie card on Movies launches
+    `PlayerActivity` (mpv surface + media controls visible) —
+    the same acceptance as 1.5.6's D-032 fix, but with the
+    linker-level alignment root cause actually closed.
+
+### Migration from 1.5.7
+
+None. Drop-in replacement. The CMakeLists change only affects the
+link step of `libsimbaplayer_mpv.so`; prebuilt libs (libmpv.so,
+libc++_shared.so, libav*.so) are untouched. v1.5.7's
+`System.loadLibrary("c++_shared")`-first ordering remains in
+`MPVLib.kt` — harmless on a properly-built APK now, and still
+useful as defensive ordering for older NDK runtime paths.
+
+### Notes
+
+- v1.5.7 was published to npm `@staging` with the libc++
+  pre-load fix but the changelog entry for it was never
+  written — the maintainer's notes for that fix live inline
+  in `android/build.gradle:94-99` (the `useLegacyPackaging=true`
+  comment) and in `package.json`'s V16.0.7 description. 1.5.8's
+  description and this changelog entry supersede those notes.
+- 1.5.7 was a **necessary** half-fix (the pre-load ordering is
+  correct, just insufficient on its own for D-033). 1.5.8 is the
+  **load-bearing** fix — the linker flag is what closes the
+  compat dialog.
+- The compatibility dialog now shows **no entries** for any
+  shipped lib on the 16 KB-page-size emulator — empty list, app
+  launches successfully.
+- The pre-existing `add_library(mpv SHARED IMPORTED)` block
+  above the new flags is unchanged; it pulls the prebuilt
+  16 KB-aligned libmpv.so from `jniLibs/${ABI}/`.
 
 ## [1.5.6] - 2026-09-14 - D-032 / B-010 proper fix (MpvBridgeModule extends NativeMpvPlayerSpec)
 
