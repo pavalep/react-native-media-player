@@ -1,0 +1,40 @@
+fix(android): pre-load libc++_shared.so to win namespace lookup (D-033)
+
+V16.0.7 / 1.5.7 follows up on D-032 / B-010. With v1.5.6, the new-arch
+TurboModuleManager properly instantiates MpvBridgeModule (it extends
+the codegen-generated NativeMpvPlayerSpec), so the JS-side
+NativeModules.MpvPlayerModule is finally defined. But the first call
+into the bridge triggers MPVLib.init which calls
+System.loadLibrary("simbaplayer_mpv") → dlopen("libsimbaplayer_mpv.so")
+→ which transitively dlopen("libmpv.so") → which depends on
+libc++_shared.so.
+
+On API 35+ (Android 14 / 15 / API 37 emulators), the system libc++ is
+older than the bundled libc++_shared.so (NDK r27, shipped in this
+lib's jniLibs/). The system library is missing the
+`__from_chars_floating_point` clang-14 symbol that libmpv.so
+references. Android's dynamic linker on API 35+ pre-maps the system
+libc++ into the process before resolving the bundle's libc++ — so the
+load order matters: if c++_shared isn't already mapped, libmpv.so's
+DT_NEEDED libc++_shared resolves to the broken system one and the
+load aborts with `cannot locate symbol "__from_chars_floating_pointIfE..."
+referenced by ".../libmpv.so"`. The app then renders a white screen
+after splash because the bridge is dead at boot.
+
+Fix (per https://developer.android.com/ndk/guides/common-problems and
+StackOverflow #62466090): explicitly load c++_shared FIRST in
+MPVLib.init. System.loadLibrary pre-maps the bundled libc++_shared.so
+into the process address space before simbaplayer_mpv.so is loaded;
+the linker then resolves libmpv.so's DT_NEEDED libc++_shared against
+the already-mapped bundled copy, which has the symbol. Idempotent:
+System.loadLibrary no-ops if the library is already mapped.
+
+This is the canonical Android NDK fix for dlopen-with-missing-symbol
+errors — not a workaround. The alternative (rebuild libmpv.so against
+an older NDK that doesn't use __from_chars_floating_point) would
+require recompiling ffmpeg + libmpv from source and is out of scope.
+
+Refs:
+- SIMBA V22 md/SIMBA_V22_AUDIT_MOVIES_PLAYER.md (B-010 follow-up)
+- B-010 was v1.5.5 partial + v1.5.6 proper fix (MpvBridgeModule extends
+  spec). v1.5.7 closes the last gap: libmpv.so loads successfully.

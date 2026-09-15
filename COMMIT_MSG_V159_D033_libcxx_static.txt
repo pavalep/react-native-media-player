@@ -1,0 +1,33 @@
+react-native-media-player v1.5.9 (D-033 fix #2: c++_static libc++)
+
+D-033 companion to v1.5.8. v1.5.8 fixed the 16 KB LOAD alignment for
+libsimbaplayer_mpv.so, but on first launch the bridge still failed with:
+
+  dlopen failed: cannot locate symbol
+    _ZNSt6__ndk1...__from_chars_floating_pointIfE...
+    referenced by libmpv.so
+
+Root cause: -DANDROID_STL=c++_shared (from v1.5.5..1.5.8) caused CMake to
+link libsimbaplayer_mpv.so against NDK r27's libc++_shared.so (LLVM 16,
+missing __from_chars_floating_point, added in LLVM 17). The prebuilt
+libmpv.so was compiled against LLVM 17+, where the symbol exists. AGP's
+pickFirst "lib/**/libc++_shared.so" then picks the smaller NDK copy
+(1.25 MB) at packaging time, so libmpv.so could not resolve its symbols.
+
+Fix: change -DANDROID_STL from c++_shared to c++_static. Now
+libsimbaplayer_mpv.so statically links libc++, the bundled
+libc++_shared.so (9 MB, LLVM 17+) is the only libc++_shared in the APK,
+and libmpv.so resolves its symbols against the bundled one.
+
+Verified live on emulator-5554 (API 37 x86_64). libsimbaplayer_mpv.so
+statically links libc++ (no NEEDED libc++_shared), libmpv.so loads
+cleanly, MpvBridgeModule resolves to true, PlayerActivity launches.
+
+Carries forward v1.5.8 changes:
+- CMakeLists.txt: add_link_options -Wl,-z,max-page-size=16384
+  -Wl,-z,common-page-size=16384 (guarded by CMAKE_SYSTEM_NAME==Android)
+- android/build.gradle: -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=TRUE
+- 64-bit ABIs: LOAD segments align 2**14 (16 KB)
+- 32-bit ABIs: LOAD segments align 2**12 (4 KB, NDK r27 design)
+
+Verified on: emulator-5554 API 37 x86_64 (Android 14+ 16 KB pages).

@@ -44,12 +44,41 @@ android {
         }
 
         // Phase 28: CMake external build for libsimbaplayer_mpv.so.
-        // -DANDROID_STL=c++_shared links against libc++_shared.so (already
-        // present in src/main/jniLibs/{ABI}/libc++_shared.so).
+        // -DANDROID_STL=c++_static links libc++ STATICALLY into
+        // libsimbaplayer_mpv.so (V22.0.0 / 1.5.9, D-033 fix #2). Why static
+        // and not shared like v1.5.5/6/7/8: NDK r27's libc++_shared.so is
+        // missing __from_chars_floating_point<float> (added in LLVM 17+),
+        // and the prebuilt libmpv.so was compiled against an LLVM 17+ libc++
+        // that HAS the symbol. With c++_shared, libsimbaplayer_mpv.so
+        // links against NDK's libc++_shared (missing the symbol) and
+        // AGP's `pickFirst` packaging picks the NDK copy at build time,
+        // so dlopen(libmpv.so) fails with
+        //   "cannot locate symbol
+        //    _ZNSt6__ndk1...__from_chars_floating_pointIfE...
+        //    referenced by libmpv.so"
+        // even after the 16 KB alignment fix. With c++_static, libc++ is
+        // baked into libsimbaplayer_mpv.so and only the BUNDLED libc++_shared
+        // (from src/main/jniLibs/, the 9 MB one with __from_chars_floating_point)
+        // remains for libmpv.so to resolve against — dlopen succeeds.
+        // -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=TRUE is REQUIRED (V16.0.8 /
+        // 1.5.8, D-033 fix #1) so NDK r27's toolchain emits
+        // `-Wl,-z,max-page-size=16384` for arm64-v8a and x86_64 (see
+        // ndk/27.1.12297006/build/cmake/android-legacy.toolchain.cmake:460-465).
+        // Without this flag, libsimbaplayer_mpv.so is emitted with LOAD
+        // segments aligned to 4 KB (2**12), which Android 14+ devices with
+        // 16 KB pages (Pixel 8+, Galaxy S24+, the emulator-5554 API 35 image
+        // used for the SIMBA player audit) refuse to dlopen — the dynamic
+        // linker raises "LOAD segment not aligned (alignment = 0x1000)" and
+        // the Android App Compatibility dialog shows the error. The
+        // CMakeLists.txt also calls
+        // add_link_options("-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
+        // for defense-in-depth, but the load-bearing flag is this cmake
+        // argument.
         externalNativeBuild {
             cmake {
-                arguments "-DANDROID_STL=c++_shared",
-                          "-DCMAKE_BUILD_TYPE=Release"
+                arguments "-DANDROID_STL=c++_static",
+                          "-DCMAKE_BUILD_TYPE=Release",
+                          "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=TRUE"
                 cppFlags "-std=c++17", "-fvisibility=hidden", "-fvisibility-inlines-hidden"
             }
         }
@@ -91,7 +120,22 @@ android {
     //   libmpv that AGP otherwise tries to merge into META-INF.
     packagingOptions {
         jniLibs {
-            useLegacyPackaging = false
+            // V16.0.7 / 1.5.7 (D-033 follow-up): useLegacyPackaging MUST be
+            // true when android:extractNativeLibs="true" is declared in
+            // the consumer's AndroidManifest. AGP otherwise logs a warning
+            // and the .so files stay packed inside the APK
+            // (base.apk!/lib/<abi>/libfoo.so), where Android's dynamic
+            // linker resolves libc++_shared.so's NEEDED against the
+            // SYSTEM libc++ (older, missing __from_chars_floating_point)
+            // — dlopen("libmpv.so") then fails with
+            // "cannot locate symbol ... referenced by libmpv.so".
+            //
+            // With useLegacyPackaging=true, AGP extracts the .so files
+            // to /data/data/<pkg>/lib/<abi>/ at install time, where the
+            // dynamic linker uses a different namespace model: app libs
+            // take priority over system libs, so the bundled
+            // libc++_shared.so (NDK r27, has the symbol) wins.
+            useLegacyPackaging = true
         }
         pickFirst "lib/**/libc++_shared.so"
         pickFirst "lib/**/libmpv.so"

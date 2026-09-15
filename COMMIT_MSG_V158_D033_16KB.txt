@@ -1,0 +1,76 @@
+fix(android): 16 KB LOAD segment alignment for libsimbaplayer_mpv.so (D-033)
+
+Symptom chain observed on the Android 14 emulator-5554 (16 KB pages):
+1. App boots to a white screen after the splash.
+2. Android App Compatibility dialog shows "LOAD segment not aligned"
+   for libsimbaplayer_mpv.so AND "Unknown error" for libmpv.so,
+   libc++_shared.so, libav*.so, libswresample.so, libswscale.so,
+   libavfilter.so, libavdevice.so, libavformat.so, libavutil.so,
+   libOpenCL.so.
+3. logcat shows dlopen("libsimbaplayer_mpv.so") failing at
+   MpvBridgeModule JNI onLoad — TurboModuleManager logs
+   "Failed to load libsimba...: cannot load".
+4. NativeModules.MpvPlayerModule resolves to undefined, the bridge
+   silently dies, the app stays on the white splash screen.
+
+Root cause: libsimbaplayer_mpv.so is the only locally-built .so
+in the lib's AAR (everything else — libmpv.so, libc++_shared.so,
+libav*.so, libOpenCL.so — is prebuilt and was already shipped with
+16 KB LOAD alignment: `llvm-readelf -lW` showed `align 2**14`
+on every prebuilt). The CMakeLists for libsimbaplayer_mpv.so did
+not pass `-Wl,-z,max-page-size=16384` to the linker, so NDK r27's
+default `-z,max-page-size=4096` won and the JNI wrapper's ELF
+LOAD segments came out 4 KB-aligned (`align 2**12`). Android 14+
+with 16 KB pages refuses to dlopen a 4 KB-aligned LOAD segment —
+the dynamic linker raises "LOAD segment not aligned
+(alignment = 0x1000)".
+
+The "Unknown error" entries for the prebuilts are a downstream
+cascade from libsimbaplayer_mpv.so failing to load: Android's
+per-process loader visits every lib on libsimbaplayer_mpv.so's
+NEEDED list (which includes libmpv.so, which transitively pulls
+libc++_shared.so and libav*.so) and reports each as "Unknown
+error" because the parent lib failed to load first.
+
+This also explains why v1.5.7's `System.loadLibrary("c++_shared")`-
+first ordering had no effect on the white screen: it can't pre-empt
+a "LOAD segment not aligned" failure on a library that's never
+reached. v1.5.7's pre-load stays in MPVLib.kt as defensive
+ordering for older NDK runtime paths, but it's not load-bearing
+for D-033.
+
+Fix:
+- android/src/main/cpp/CMakeLists.txt: add
+    if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+        add_link_options("-Wl,-z,max-page-size=16384")
+        add_link_options("-Wl,-z,common-page-size=16384")
+    endif()
+  before target_link_libraries. Per
+  https://developer.android.com/guide/practices/page-sizes the two
+  flags make NDK r27+ linkers emit LOAD segments aligned to 16 KB.
+  `add_link_options` (vs target_link_options) cleanly applies to
+  the only locally-built target — mpv is `SHARED IMPORTED`, so its
+  prebuilt ELF is reused as-is.
+- android/build.gradle: no change needed. `ndkVersion
+  rootProject.ext.ndkVersion` already inherits `27.1.12297006`
+  (r27+) from the consumer app's rootProject.ext; that's the
+  minimum linker version that honors -z,max-page-size=16384
+  consistently.
+- package.json: version 1.5.7 → 1.5.8; description → V16.0.8
+  patch release.
+- CHANGELOG.md: new [1.5.8] entry above [1.5.6] documenting the
+  full symptom chain and the verified acceptance.
+
+Verified on the consumer app (MOBILE_APP_REACT_NATIVE) on
+emulator-5554 (API 35, x86_64, 16 KB pages):
+- `gradlew :simba-dev_react-native-media-player:externalNativeBuildDebug
+  --rerun-tasks` succeeds with the new flags.
+- Rebuilt libsimbaplayer_mpv.so: `llvm-objdump -p ... |
+  grep LOAD` shows `LOAD ... align 2**14` (was `align 2**12`).
+- `:app:installDebug` installs cleanly. App boots past splash,
+  reaches login screen, Android App Compatibility dialog shows
+  no entries for any shipped lib.
+
+Refs: D-033, D-032, D-028 device-task drive, SIMBA V22 in-session
+patches. Forward-compatible with NDK r28+ (the linker flags are
+stable; r28 only adds further hardening for 16 KB-by-default).

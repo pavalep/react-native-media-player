@@ -148,6 +148,30 @@ export interface Spec extends TurboModule {
     startPositionMs: number;
   } | null>;
 
+  // V22.0.0 / 1.5.10 (D-034): activity-aware launchParams guard.
+  //
+  // `MpvBridgeModule.lastLaunchParams` is the canonical handoff from
+  // `openPlayer(...)` to the next `PlayerActivity` mount. The previous
+  // architecture had `useLaunchParams()` consume it from BOTH
+  // MainActivity's React tree and PlayerActivity's React tree.
+  // Result on cold start: stale `lastLaunchParams` from a prior
+  // `openPlayer` call (set when the user previously tapped a card)
+  // was consumed by MainActivity's `<SimbaPlayerRoot>` and rendered
+  // `<PlayerRoot />` over the Home screen.
+  //
+  // The fix: PlayerActivity sets this flag to `true` in onCreate and
+  // `false` in onDestroy. `useLaunchParams()` consults it via this
+  // synchronous getter and returns `null` (without consuming
+  // lastLaunchParams) when we're in MainActivity.
+  //
+  // Why sync, not Promise: `useLaunchParams` runs the check before the
+  // Promise<T> | null decision, so the synchronous bridge path keeps
+  // the consumer's render logic straight-line (no Suspense / loading
+  // gate at app cold start). Codegen emits a synchronous bridge
+  // method as-is when the Kotlin signature is
+  // `@ReactMethod(isBlockingSynchronousMethod = true)`.
+  isCurrentActivityPlayer(): boolean;
+
   // ── Configuration (V12 Phase 21) ───────────────────────────────────────
   setConfig(configJson: string): Promise<number>;
 

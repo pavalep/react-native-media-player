@@ -1,0 +1,180 @@
+@simba-dev/react-native-media-player v1.5.7 (D-033 + D-034 consolidated)
+
+Single consolidated release that closes the white-screen-after-splash
+chain on the SIMBA player audit. The v1.5.5 + v1.5.6 staging that
+landed at HEAD were never published because v1.5.6 was the most
+recent live release at the time, so consumers were running against
+v1.5.6 with no clear path to the upstream fix. This release
+publishes the v1.5.5/6 wire-up work + the libc++ + 16 KB + D-034
+work as a single installable npm version.
+
+## The chain
+
+The white-screen-after-splash the user kept reporting was actually
+five independent breakages stacked together. We diagnosed them in
+reverse order and fixed them in that order; only after all five
+land did the JS bundle render HomeScreen and the bridge wire up.
+
+### 1. `apply plugin: "com.facebook.react"` was missing in v1.5.3+
+
+NEW ARCHITECTURE TurboModule resolution requires the lib to declare
+`apply plugin: "com.facebook.react"` in its `android/build.gradle`
+so AGP runs the codegen pipeline. Removing it silently breaks
+TurboModule resolution at runtime - no compile error, no logcat
+warning, `NativeModules.<X>` becomes `undefined`.
+
+**Fix**: `android/build.gradle` - restored the line near the top of
+the `android {}` block.
+
+### 2. No TurboModule Spec file
+
+Codegen scans for files matching `/extends TurboModule/` or
+`/export default codegenNativeComponent</` (see
+`node_modules/@react-native/codegen/lib/cli/combine/combine-js-to-schema.js:22`).
+Without this, codegen emits `No modules to process in
+combine-js-to-schema-cli.` and produces zero Java spec glue.
+
+**Fix**: added `src/bridge/NativeMpvPlayer.ts` with:
+
+```ts
+import type {TurboModule} from 'react-native';
+import {TurboModuleRegistry} from 'react-native';
+export interface Spec extends TurboModule {
+  ...all 70 methods mirror the public Bridge interface...
+}
+export default TurboModuleRegistry.getEnforcing<Spec>('MpvPlayerModule');
+```
+
+Codegen then writes `com/facebook/fbreact/specs/NativeMpvPlayerSpec.java`
+with `NAME = "MpvPlayerModule"`, matching the Kotlin `@ReactModule`.
+
+### 3. MpvBridgeModule didn't extend the spec
+
+Even with the spec generated, the Kotlin module was extending
+`ReactContextBaseJavaModule` directly. Under `newArchEnabled=true`,
+the new-arch resolver needs `MpvBridgeModule` to extend the
+codegen-generated `NativeMpvPlayerSpec` so the resolver can
+instantiate it.
+
+**Fix**: rewrote `android/src/main/java/com/simba/player/mpv/MpvBridgeModule.kt`:
+
+- `class MpvBridgeModule(reactContext: ReactApplicationContext) :
+  NativeMpvPlayerSpec(reactContext), IPipModeChangeEmitter`
+- 71 `@Override` annotations added on every spec-derived method
+- Signature normalizations: `Int -> Double` for numeric positions,
+  track IDs, durations; `String? -> String` for nullable URI/title;
+  methods the spec declares async flipped to `Promise`-returning
+  variants; added a new `toggleMute()` to match the spec.
+- 4 ABIs build clean.
+- dexdump confirms `MpvBridgeModule`'s Superclass is
+  `Lcom/facebook/fbreact/specs/NativeMpvPlayerSpec;` (was previously
+  `Lcom/facebook/react/bridge/ReactContextBaseJavaModule;`)
+
+### 4. 16 KB LOAD alignment for libsimbaplayer_mpv.so
+
+Android 14+ devices (Pixel 8+, Galaxy S24+, the emulator-5554 API 35
+image used for the audit) refuse to dlopen a 4 KB-aligned `.so`
+without first disabling 16 KB page-size compatibility per-app in
+Developer Options. The prebuilt `libmpv.so` and `libav*.so` we ship
+already pass `align 2**14`, but the libsimbaplayer_mpv.so we build
+from source did not.
+
+**Fix** (defense-in-depth):
+
+- `android/src/main/cpp/CMakeLists.txt`:
+  ```
+  if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    add_link_options("-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
+  endif()
+  ```
+- `android/build.gradle` externalNativeBuild.cmake.arguments:
+  `-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=TRUE` (the load-bearing
+  flag - NDK r27 honors it and emits the linker flag for arm64-v8a
+  and x86_64 via
+  `ndk/27.1.12297006/build/cmake/android-legacy.toolchain.cmake:460-465`).
+
+Verified on x86_64: `LOAD off 0x00000000 vaddr 0x00000000 align 2**14`.
+32-bit ABIs kept at 4 KB by NDK design (only 64-bit devices use
+16 KB pages).
+
+### 5. libmpv.so could not find __from_chars_floating_point at dlopen
+
+After fix #4 the libsimbaplayer_mpv.so LOADed cleanly, but the
+prebuilt libmpv.so (still required at runtime) failed with:
+
+    dlopen failed: cannot locate symbol
+      _ZNSt6__ndk1...__from_chars_floating_pointIfE...
+      referenced by .../base.apk!/lib/x86_64/libmpv.so
+
+The symbol is in libc++ (LLVM 17+). With `-DANDROID_STL=c++_shared`
+AGP packages NDK r27's libc++_shared.so (LLVM 16, missing the
+symbol) via `pickFirst`. The bundled libc++_shared.so in
+`android/src/main/jniLibs/x86_64/` (9 MB, LLVM 17+, has the
+symbol) never wins at packaging time.
+
+**Fix**: change `-DANDROID_STL=c++_shared` to `c++_static` in
+`android/build.gradle`. Now `libsimbaplayer_mpv.so` statically links
+libc++ internally and only the bundled 9 MB `libc++_shared.so` is
+in the APK at runtime.
+
+**Consumer-side `jniLibs` patch** (MOBILE_APP_REACT_NATIVE, durable,
+code-side):
+
+1. Copy `node_modules/@simba-dev/react-native-media-player/android/src/
+   main/jniLibs/x86_64/libc++_shared.so` (~9 MB) into the consumer's
+   `android/app/src/main/jniLibs/x86_64/libc++_shared.so`. Same for
+   `arm64-v8a`. AGP's `src/main/jniLibs` scan runs before the
+   consumer's CMake output, so the bundled copy always wins at
+   packaging time.
+
+### D-034 (cold-start `<PlayerRoot />` leak)
+
+`MainActivity` (LAUNCHER) cold-started with stale `lastLaunchParams`
+from a prior session's `openPlayer(...)` call got consumed by the
+React tree, rendering `<PlayerRoot />` over the Home screen. Both
+MainActivity and PlayerActivity mount the same App component which
+wraps in `<SimbaPlayerRoot>`. The hook unconditionally consumed
+the queue; whoever mounted first won.
+
+**Fix**:
+
+- New sync bridge method `isCurrentActivityPlayer(): boolean` on
+  the TurboModule spec.
+- Static companion flag `MpvBridgeModule.currentActivityIsPlayer`
+  (companion-level `@Volatile @JvmStatic var`), toggled by
+  `PlayerActivity.onCreate` (true) before RN mounts and reset by
+  `PlayerActivity.onDestroy` (false). Synchronous set/clear
+  guarantees the bridge method returns the right answer on the
+  first commit, even in `newArchEnabled=true` bridgeless mode
+  where `getCurrentActivity()` can return null mid-attach.
+- `useLaunchParams` (in `src/hooks/useLaunchParams.tsx`) short-
+  circuits: if `isCurrentActivityPlayer()` returns false
+  (we are in MainActivity), returns `null` without touching
+  `lastLaunchParams`, leaving the single-shot queue intact for
+  the eventual `PlayerActivity` mount.
+
+## Carried forward (unchanged from v1.5.6)
+
+- `pickFirst "lib/**/lib{mpv,player,av*,OpenCL}.so"` and
+  `libc++_shared.so` in `android/build.gradle`'s
+  `packagingOptions { jniLibs { ... } }`.
+- `useLegacyPackaging = true` for native lib extraction
+  compatibility (kept for forward compat with 1.5.7-era
+  manifest changes if a consumer re-enables
+  `android:extractNativeLibs="true"`).
+- `resources { excludes += ["META-INF/AL2.0", ...] }` for
+  LICENSE/NOTICE duplicates from ffmpeg + libmpv.
+
+## Verified on
+
+emulator-5554 API 37 x86_64 (Android 14+ 16 KB pages). After all
+five fixes + consumer-side `jniLibs` patch + D-034 guard:
+
+- App cold-launches and lands on HomeScreen with engraved lion
+  + "Simba" Allura wordmark (per V8 HomeHeader design preference
+  - no tagline, no rounded container background).
+- `adb logcat --pid` shows
+  `ReactNativeJS: Running "SimbaPlayer" with {rootTag:1,...}`.
+- `nativeloader: Load .../libsimbaplayer_mpv.so ... : ok`.
+- Tap any Movies card -> PlayerActivity launches with mpv
+  surface + media controls.

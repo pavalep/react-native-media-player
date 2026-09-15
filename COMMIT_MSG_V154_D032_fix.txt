@@ -1,0 +1,40 @@
+fix(android): restore RN gradle plugin + add TurboModule spec (D-032 / B-010)
+
+v1.5.3 shipped without `apply plugin: "com.facebook.react"` in
+android/build.gradle AND without a TurboModule spec file at
+src/bridge/Native*.ts. Codegen needs both — without them the consumer
+app's `react.autolinkLibrariesWithApp()` runs the lib's codegen task,
+gets "No modules to process in combine-js-to-schema-cli." (the filter
+at @react-native/codegen/lib/cli/combine/combine-js-to-schema.js:22
+only processes files matching /extends TurboModule/ or
+/export default codegenNativeComponent</), produces no
+NativeMpvPlayerSpec.java, and NativeModules.MpvPlayerModule stays
+undefined at runtime. resolveBridge() returns null, openPlayer()
+falls back to NOOP_BRIDGE.openPlayer which resolves false, every
+Movies/Search/Music/AllVideos movie tap fires the "Player refused
+launch" toast.
+
+Fix:
+- android/build.gradle — restore `apply plugin: "com.facebook.react"`
+  after the kotlin plugin. Harmless on old arch; required on new arch.
+- src/bridge/NativeMpvPlayer.ts — new file declaring
+  `interface Spec extends TurboModule` mirroring the public
+  MpvPlayerModuleBridge interface, default-exporting
+  TurboModuleRegistry.getEnforcing<Spec>('MpvPlayerModule'). Codegen
+  produces com.facebook.fbreact.specs.NativeMpvPlayerSpec with
+  NAME = "MpvPlayerModule", matching the Kotlin @ReactModule on
+  MpvBridgeModule.
+- package.json — bump 1.5.3 -> 1.5.4, update description.
+- CHANGELOG.md — 1.5.4 entry with root-cause analysis + detection
+  recipe + type-mapping notes for codegen.
+
+The existing MpvPlayerModule.ts:624-637 resolveBridge() works
+unchanged — RN's new-arch TurboModule resolution auto-populates
+NativeModules.MpvPlayerModule from the codegen spec at module-load
+time.
+
+Verified on SIMBA V22 (consumer, RN 0.86, newArchEnabled=true,
+emulator-5554): tapping a movie card now launches PlayerActivity
+(mpv surface + media controls visible) instead of the toast.
+
+Refs: SIMBA V22 md/SIMBA_V22_AUDIT_MOVIES_PLAYER.md (B-010)

@@ -150,9 +150,40 @@ object MPVLib {
         listeners.remove(listener)
     }
 
-    // ── Load native library ────────────────────────────────────────────────
-
+    // ── Load native libraries ─────────────────────────────────────────────
+    //
+    // V16.0.7 / 1.5.7 (D-033): libc++_shared.so MUST be loaded BEFORE
+    // simbaplayer_mpv.so. Android's dynamic linker resolves `libmpv.so`'s
+    // `NEEDED libc++_shared.so` to the **system** libc++ unless the
+    // bundled one is already mapped into the process. On API 35+ / Android
+    // 14 / API 37 emulators, the system libc++ is older and is missing
+    // `__from_chars_floating_point` (a clang 14 / NDK r25+ symbol) — so
+    // `dlopen("libmpv.so")` fails with `cannot locate symbol
+    // "__from_chars_floating_pointIfE..."` and the bridge is dead at
+    // boot.
+    //
+    // The bundled `libc++_shared.so` (NDK r27, shipped in this lib's
+    // `src/main/jniLibs/{ABI}/`) DOES contain the symbol. The fix per
+    // https://developer.android.com/ndk/guides/common-problems
+    // (\"UnsatisfiedLinkError with dlopen\") and StackOverflow #62466090
+    // is to load the dependency first — `System.loadLibrary` is the
+    // standard Android mechanism for mapping a `.so` into the process
+    // address space; once `c++_shared` is mapped, the linker resolves
+    // subsequent `dlopen` calls against the mapped library, not the
+    // system one.
+    //
+    // Order matters: `c++_shared` is listed in libmpv.so's `DT_NEEDED`,
+    // so libmpv.so itself would normally cause c++_shared to be loaded
+    // transitively. But on API 35+ the linker pre-maps the system
+    // libc++ first (the namespace lookup order changed) and a missing
+    // symbol in the system library aborts the load. Explicitly
+    // loading c++_shared first pre-maps our bundled copy and wins.
+    //
+    // Idempotent: `System.loadLibrary` no-ops if the library is already
+    // mapped, so this is safe to call from multiple entry points
+    // (MPVLib.init + MpvBridgeModule's class init).
     init {
+        System.loadLibrary("c++_shared")
         System.loadLibrary("simbaplayer_mpv")
     }
 }
