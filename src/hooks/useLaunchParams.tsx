@@ -84,13 +84,42 @@ export function useLaunchParams(): LaunchParams | null {
       // through to the legacy one-shot-queue read so older
       // versions of the lib keep working.
     }
-    try {
-      const next = bridge.getLaunchParams();
-      setParams(next);
-    } catch {
-      // Bridge threw — assume no launch params.
-      setParams(null);
-    }
+    // V22.0.0 / 1.5.8 (D-035 fix #6): the runtime's
+    // `getLaunchParams()` is an async bridge method (Kotlin
+    // `@ReactMethod` without `isBlockingSynchronousMethod = true`),
+    // so it returns a JS Promise<LaunchParams | null>. The previous
+    // implementation called `setParams(next)` directly with the
+    // Promise object, which stored a Promise in React state. That
+    // had two observable symptoms:
+    //
+    //   - `if (launchParams != null)` was true (a Promise is
+    //     truthy), so consumers went down the "we have params"
+    //     branch — `<SimbaPlayerRoot>` rendered `<PlayerRoot />`,
+    //     but with a Promise as the payload.
+    //   - `launchParams.uri` was undefined on that Promise, so the
+    //     `bridge.loadFile(launchParams.uri)` call passed `undefined`
+    //     to Kotlin's `@NonNull String path`, which threw
+    //     `IllegalArgumentException` at the bridge boundary — a
+    //     RedBox on every tap-to-card.
+    //
+    // Wrap in `Promise.resolve` so the call site stays correct
+    // whether the bridge returns a Promise (the runtime case) or
+    // a plain value (the TS interface case, or older versions of
+    // the lib that surface the value synchronously through a
+    // legacy `NativeModules` shim).
+    let cancelled = false;
+    Promise.resolve(bridge.getLaunchParams())
+      .then((next) => {
+        if (cancelled) return;
+        setParams(next ?? null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setParams(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return params;

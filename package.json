@@ -1,6 +1,6 @@
 {
   "name": "@simba-dev/react-native-media-player",
-  "version": "1.5.7",
+  "version": "1.5.8",
   "description": "React Native video/audio player powered by libmpv — Picture-in-Picture, MediaSession, custom RN UI. **V16.0.8 patch release** (2026-09-14) — D-033 16 KB page-size alignment: add_link_options(\"-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384\") in CMakeLists.txt + ndkVersion r27+ so libsimbaplayer_mpv.so's LOAD segments are aligned to 16 KB (Android 14+ 16 KB page-size requirement). Without this, libsimbaplayer_mpv.so shows \"LOAD segment not aligned\" in the Android App Compatibility dialog and Android refuses to load it — which cascades to \"Unknown error\" for libmpv.so, libc++_shared.so, libav*.so (all transitively loaded via libsimbaplayer_mpv.so's NEEDED list), and the app boots to a white screen. v1.5.7 pre-load attempt was insufficient because the libs themselves weren't loading at all. See CHANGELOG.md for details.",
   "main": "src/index.ts",
   "types": "src/index.ts",

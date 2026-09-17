@@ -238,8 +238,22 @@ export interface PlayerCommands {
     type: 'video' | 'audio';
     startPositionMs?: number;
   }): Promise<boolean>;
-  /** One-shot accessor for the launch params the most recent `openPlayer` handed to `PlayerActivity`. */
-  getLaunchParams(): { uri: string; title: string; type: 'video' | 'audio'; startPositionMs: number } | null;
+  /**
+   * One-shot accessor for the launch params the most recent
+   * `openPlayer` handed to `PlayerActivity`.
+   *
+   * V22.0.0 / 1.5.8 (D-035 fix #6): now correctly typed as a
+   * Promise — the Kotlin bridge method is `@ReactMethod` async.
+   * The previous sync signature was a type lie that caused
+   * `setParams(<Promise>)` in the consumer and a downstream
+   * `loadFile(undefined)` RedBox. Callers should `await` this.
+   */
+  getLaunchParams(): Promise<{
+    uri: string;
+    title: string;
+    type: 'video' | 'audio';
+    startPositionMs: number;
+  } | null>;
 
   // Generic property access (used by audioSettingsService, metadataService)
   /** Get the value of an mpv property as a string. */
@@ -677,7 +691,14 @@ export function hydratePlayerState(
   // Title + artist + album (via media-title + metadata property)
   try {
     const title = bridge.getProperty('media-title');
-    if (title) {
+    // V22.0.0 / 1.5.8 (D-035 fix #2): mpv returns the JSON literal
+    // `null` (which crosses the JS bridge as the four-character
+    // string `"null"`) when no media is loaded. The previous
+    // `if (title)` truthiness check happily overwrote our
+    // 'Simba Player' default with `"null"`, surfacing as a
+    // header reading literally `null` (D-035 user regression).
+    // Filter the mpv sentinel out before assigning.
+    if (title && title !== 'null') {
       state.title = title;
     }
   } catch {

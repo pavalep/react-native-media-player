@@ -348,6 +348,29 @@ export function PlayerProvider({
   useEffect(() => {
     const bridge = getMpvPlayerModule();
 
+    // V22.0.0 / 1.5.7 (B-010 final / D-035): ensure the native mpv
+    // instance is created BEFORE the user can tap any playback
+    // control. The bridge's `play / pause / loadFile / seek*`
+    // methods all hit `ensurePtr()` first, which throws
+    // `IllegalStateException("MpvPlayerModule not initialized. Call
+    // initPlayer() first.")` when `nativePtr == 0`. Calling
+    // `initPlayer()` here in the provider's mount effect is
+    // idempotent (`nativePtr != 0` on the Kotlin side short-circuits
+    // with `return true`) so this is safe even if a future caller
+    // also initialises. Runs once per PlayerProvider mount.
+    try {
+      const ok = bridge.initPlayer();
+      if (!ok) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[simba-player] initPlayer returned false on provider mount - ' +
+            'the native mpv instance did not allocate. Check MpvBridgeModule logs.',
+        );
+      }
+    } catch (e) {
+      // The bridge is missing (jest / web) - fall through silently.
+    }
+
     // ── 1. Initial hydration from sync bridge getters ───────────────────
     try {
       const initial = hydratePlayerState(bridge);

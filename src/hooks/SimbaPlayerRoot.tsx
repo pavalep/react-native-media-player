@@ -59,6 +59,16 @@ export interface SimbaPlayerRootProps {
  * The activity-branch wrapper. Mounts `<PlayerRoot />` when the
  * activity was launched with playback params, otherwise renders
  * `children`. See `SimbaPlayerRootProps` for usage.
+ *
+ * V22.0.0 / 1.5.8 (D-035 fix #5 — `loadFile(null)` race): this
+ * component is the **single owner** of the one-shot `useLaunchParams()`
+ * queue. The hook reads `lastLaunchParams` once; a second consumer
+ * (PlayerRoot calling its own `useLaunchParams()`) would see `null`.
+ * We pass the resolved `launchParams` down to `<PlayerRoot>` as a
+ * prop, so the player root never re-reads the queue. Direct
+ * consumers that mount `<PlayerRoot>` without `<SimbaPlayerRoot>`
+ * still get the hook fallback (PlayerRoot's `launchParams?` prop is
+ * optional).
  */
 export function SimbaPlayerRoot({
   children,
@@ -66,7 +76,7 @@ export function SimbaPlayerRoot({
   const launchParams = useLaunchParams();
 
   if (launchParams) {
-    return <PlayerRoot />;
+    return <PlayerRoot launchParams={launchParams} />;
   }
 
   return <>{children}</>;

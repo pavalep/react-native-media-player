@@ -12,11 +12,13 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.ReactApplication
+import com.facebook.react.ReactRootView
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
@@ -329,6 +331,39 @@ class PlayerActivity : ReactActivity() {
     com.simba.player.mpv.MpvBridgeModule.currentActivityIsPlayer = true
     window.setBackgroundDrawable(ColorDrawable(Color.BLACK))
     super.onCreate(savedInstanceState)
+    // D-042: Phase 8 "transparent React UI" wiring. The activity content
+    // root is a FrameLayout (android.R.id.content) installed by
+    // AppCompat, with `android:windowBackground` set by the inherited
+    // AppCompat DayNight theme — by default an opaque color that hides
+    // the SurfaceView at index 0. Even with the ReactRootView at
+    // index 1, both the root frame AND the ReactRootView draw their
+    // own backgrounds BEFORE the JSX tree paints, so mpv's decoded
+    // frames never reach the screen unless we flip both to transparent
+    // here. The window background we just set above (`Color.BLACK`) is
+    // a brief pre-super fallback; the JSX tree paints a fully
+    // styled dark UI on top once the bundle loads.
+    val rootFrame = findViewById<ViewGroup>(android.R.id.content)
+    rootFrame?.setBackgroundColor(Color.TRANSPARENT)
+    // Find ReactRootView in the rootFrame and clear its background
+    // too — RN installs its own default color (white in light mode,
+    // gray in dark mode). Search recursively because the rootFrame
+    // wraps a ReactSurfaceView / ReactRootView inside another FrameLayout
+    // on bridgeless mode.
+    rootFrame?.let { root ->
+      for (i in 0 until root.childCount) {
+        val child = root.getChildAt(i)
+        if (child is ReactRootView || child.javaClass.name.contains("ReactSurfaceView")) {
+          (child as? View)?.setBackgroundColor(Color.TRANSPARENT)
+        } else if (child is ViewGroup) {
+          for (j in 0 until child.childCount) {
+            val grand = child.getChildAt(j)
+            if (grand is ReactRootView || grand.javaClass.name.contains("ReactSurfaceView")) {
+              (grand as? View)?.setBackgroundColor(Color.TRANSPARENT)
+            }
+          }
+        }
+      }
+    }
     Log.i(
       TAG,
       "onCreate: component=${mainComponentName} savedInstanceState=$savedInstanceState",
@@ -341,6 +376,20 @@ class PlayerActivity : ReactActivity() {
     Log.i(TAG, "launchType=$launchType")
     Log.i(TAG, "launchStartPositionMs=$launchStartPositionMs")
     Log.i(TAG, "PlayerActivity ready (uri='$launchUri', type='$launchType', startMs=$launchStartPositionMs)")
+    // D-039: push the Intent extras into the bridge's launchParams holder so
+    // JS `useLaunchParams()` / `bridge.getLaunchParams()` see the same params
+    // regardless of whether this activity was launched via `bridge.openPlayer`
+    // (which sets the holder in Kotlin before `startActivity`) or via Intent
+    // (deep link / app shortcut / `am start` / ADB, which never touches the
+    // bridge). Without this push, the launched React tree renders the empty
+    // `<PlayerRoot />` fallback and the video stays black even though mpv is
+    // initialised and the SurfaceView is mounted.
+    com.simba.player.mpv.MpvBridgeModule.setLaunchParamsFromIntent(
+        uri = launchUri,
+        title = launchTitle,
+        type = launchType,
+        startPositionMs = launchStartPositionMs,
+    )
     // Phase 40: register a ComponentCallbacks2 listener so the system
     // notifies us of memory-pressure events (Phase 38.7 + 39.0). When
     // the OS trims memory, we forward the level to MpvBridgeModule
@@ -526,18 +575,25 @@ class PlayerActivity : ReactActivity() {
 
   /**
    * Phase 7 helper: schedule another `wireNativePtr` attempt on the main
-   * thread 200ms later, capped at 5 retries (≈ 1s total). After 5 failed
-   * attempts we give up — the JS layer will surface the problem to the
-   * user via the normal error pipeline (onError event from mpv).
+   * thread. D-040: bump the retry budget from 5×200ms (1.2s, the V22
+   * baseline) to 200×300ms (60s) so a cold start of PlayerActivity's
+   * React tree — which can take 30+ seconds before the ReactApplication
+   * Context is ready — still succeeds. Without this, a direct
+   * `am start` / deep link / app-shortcut launch (where MainActivity is
+   * NOT warming React first) leaves MpvRenderView's nativePtr at 0 and
+   * the video stays black even though mpv initialised. After 200
+   * attempts we log + give up — a hung RN init is the only path that
+   * exhausts the budget and that scenario surfaces separately as the
+   * JS bundle failing to mount.
    */
   private fun maybeRetry(retryCount: Int) {
-    if (retryCount >= 5) {
-      Log.e(TAG, "wireNativePtr: giving up after ${retryCount + 1} attempts")
+    if (retryCount >= 200) {
+      Log.e(TAG, "wireNativePtr: giving up after ${retryCount + 1} attempts (~60s)")
       return
     }
     Handler(Looper.getMainLooper()).postDelayed(
       { wireNativePtr(retryCount + 1) },
-      200L,
+      300L,
     )
   }
 

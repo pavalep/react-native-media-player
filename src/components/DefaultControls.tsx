@@ -68,6 +68,14 @@ export interface DefaultControlsProps {
   subtitle?: string;
   onPlay?: () => void;
   onPause?: () => void;
+  /**
+   * V22.0.0 / 1.5.8 (D-035 fix #4): handler for the close ✕ button
+   * (top-left). PlayerRoot wires this to `bridge.exitPipAndFinish()`
+   * which dismisses the PlayerActivity. When omitted, the ✕ falls
+   * back to `onPause` (matches the V21 behaviour that had no
+   * dedicated close).
+   */
+  onClose?: () => void;
 }
 
 /** Format milliseconds as `H:MM:SS` or `M:SS`. */
@@ -91,7 +99,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export function DefaultControls(props: DefaultControlsProps = {}): React.ReactElement {
-  const { title, subtitle: subtitleProp, onPlay, onPause } = props;
+  const { title, subtitle: subtitleProp, onPlay, onPause, onClose } = props;
   const theme = useTheme();
   const { state, commands } = usePlayer();
   const { positionMs, durationMs } = usePlayerProgress();
@@ -206,6 +214,7 @@ export function DefaultControls(props: DefaultControlsProps = {}): React.ReactEl
   const effectiveTitle = title ?? state.title;
   const effectiveOnPlay = onPlay ?? commands.play;
   const effectiveOnPause = onPause ?? commands.pause;
+  const effectiveOnClose = onClose ?? effectiveOnPause;
   const subtitle =
     subtitleProp ??
     (state.artist && state.album
@@ -221,8 +230,43 @@ export function DefaultControls(props: DefaultControlsProps = {}): React.ReactEl
       // Animated.View as the inner wrapper so opacity tweens work
       // without affecting tap-handling on the root Pressable.
     >
+      {/*
+        V22.0.0 / 1.5.8 (D-036 — video-not-showing fix):
+
+        The previous version had `backgroundColor: 'rgba(0,0,0,0.001)'`
+        on the `fill` View, with the comment "ensure hit-tests
+        propagate". That hack made the Animated.View hit-testable so
+        outer Pressable's onPress=showControls fired. BUT on Android,
+        a near-opaque View sitting on top of the SurfaceView blocks
+        the SurfaceView's video frames — the compositor treats the
+        overlay as opaque and the GPU-rendered frames never reach
+        the screen. The user sees audio + controls + black where the
+        video should be.
+
+        Fix: use `pointerEvents="box-none"` so the Animated.View
+        never catches taps itself (only children do), and set the
+        fill background to transparent so the SurfaceView's video
+        frames composite through. The outer Pressable's onPress
+        still catches every tap on the empty area — Pressable's
+        hit-test machinery doesn't depend on its own backgroundColor
+        for that.
+
+        Previous behaviour preserved:
+        - Buttons (close, play/pause, skip) are inner Pressables
+          with their own hit testing — they still work.
+        - Tap-anywhere-shows-controls still fires via the outer
+          Pressable's onPress, identical to the rgba trick in
+          practice.
+        - Opacity tween is preserved (Animated.View + `opacity`
+          style).
+
+        Behaviour that's now strictly better:
+        - Video frames visible (this is the whole point).
+        - No "almost-opaque" hack to reason about — the View is
+          either fully transparent or fully opaque, no in-between.
+      */}
       <Animated.View
-        pointerEvents={visible ? 'auto' : 'none'}
+        pointerEvents="box-none"
         style={[styles.fill, { opacity }]}
       >
         {/* Top bar */}
@@ -230,7 +274,7 @@ export function DefaultControls(props: DefaultControlsProps = {}): React.ReactEl
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Close player"
-            onPress={effectiveOnPause}
+            onPress={effectiveOnClose}
             hitSlop={8}
             style={({ pressed }) => [
               styles.iconButton,
@@ -403,7 +447,11 @@ const styles = StyleSheet.create({
   },
   fill: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.001)', // ensure hit-tests propagate
+    // V22.0.0 / 1.5.8 (D-036): was 'rgba(0,0,0,0.001)' — that near-opaque
+    // black occluded the SurfaceView's video frames on Android. See the
+    // long-form comment on the Animated.View below for the full rationale.
+    // Hit-tests now reach the outer Pressable's onPress via `box-none`.
+    backgroundColor: 'transparent',
     justifyContent: 'space-between',
   },
   topBar: {

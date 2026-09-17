@@ -91,6 +91,36 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         private var lastLaunchParams: LaunchParams? = null
 
         /**
+         * D-039: PlayerActivity is the source of truth for launch
+         * params read from its Intent extras, but the JS tree inside
+         * the launched activity reads them back via [getLaunchParams]
+         * which inspects [lastLaunchParams]. Without this push, any
+         * PlayerActivity launch that bypasses [openPlayer] (deep link,
+         * app shortcut, `am start`, ADB) leaves JS `getLaunchParams()`
+         * returning null and `<PlayerRoot />` renders the empty
+         * fallback. Populated from [com.simba.player.PlayerActivity.onCreate]
+         * immediately after the `launchUri` / `launchTitle` /
+         * `launchType` / `launchStartPositionMs` lazy vals are first
+         * touched. No-op if `uri` is blank — MainActivity (which has
+         * no player intent extras) won't accidentally clobber a real
+         * launch in flight.
+         */
+        @JvmStatic
+        fun setLaunchParamsFromIntent(
+            uri: String,
+            title: String,
+            type: String,
+            startPositionMs: Long,
+        ) {
+            if (uri.isBlank()) return
+            lastLaunchParams = LaunchParams(uri, title, type, startPositionMs)
+            Log.i(
+                TAG,
+                "[PlaybackTrace][Bridge][setLaunchParamsFromIntent] populated from Intent extras uri='$uri' type='$type' startMs=$startPositionMs",
+            )
+        }
+
+        /**
          * Phase 13.3: simple value class for the launch params
          * cached for [getLaunchParams]. Mirrors the four intent
          * extras that PlayerActivity reads from its own `by lazy {}`

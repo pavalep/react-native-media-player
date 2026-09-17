@@ -335,7 +335,14 @@ export interface MpvPlayerModuleBridge {
    * when called from MainActivity or after the first read has
    * already consumed the value.
    */
-  getLaunchParams(): LaunchParams | null;
+  // V22.0.0 / 1.5.8 (D-035 fix #6): Kotlin declares this as a
+  // Promise-returning `@ReactMethod` (the legacy interface above
+  // lied about it being sync, which led to `setParams(<Promise>)`
+  // and the `loadFile(undefined)` RedBox). TurboModule codegen
+  // correctly emits `Promise<LaunchParams | null>`. We unwrap with
+  // `Promise.resolve(...)` in `useLaunchParams` so callers don't
+  // need to know about this.
+  getLaunchParams(): Promise<LaunchParams | null>;
 
   // V22.0.0 / 1.5.7 (D-034): activity-aware launchParams guard.
   //
@@ -561,7 +568,9 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
     void _startPositionMs;
     return Promise.resolve(false);
   },
-  getLaunchParams: () => null,
+  // V22.0.0 / 1.5.8 (D-035 fix #6): now matches the real
+  // Promise<LaunchParams | null> runtime return type.
+  getLaunchParams: () => Promise.resolve(null),
 
   // V22.0.0 / 1.5.7 (D-034): no-op fallback always reports "not a
   // player host" so jest tests + Storybook previews don't render

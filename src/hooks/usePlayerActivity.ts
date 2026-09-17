@@ -72,13 +72,21 @@ export interface UsePlayerActivityResult {
   openPlayer(opts: OpenPlayerOptions): Promise<boolean>;
   /**
    * One-shot accessor for the launch params the most recent
-   * `openPlayer` call handed to `PlayerActivity`. Returns
-   * `null` when called from MainActivity or after the first
-   * read has already consumed the value. The Kotlin side
-   * keeps a single-shot queue, so call this exactly once
-   * per `PlayerActivity.onCreate`.
+   * `openPlayer` call handed to `PlayerActivity`. Resolves
+   * with `null` when called from MainActivity or after the
+   * first read has already consumed the value. The Kotlin
+   * side keeps a single-shot queue, so call this exactly
+   * once per `PlayerActivity.onCreate`.
+   *
+   * V22.0.0 / 1.5.8 (D-035 fix #6): the runtime returns a
+   * Promise (Kotlin `@ReactMethod` async). The previous sync
+   * return type was a type lie — the hook stored the
+   * Promise in `useState`, `if (launchParams != null)` was
+   * true (Promise is truthy), and downstream `bridge.loadFile`
+   * got `undefined` → `IllegalArgumentException` at the
+   * Kotlin bridge. Callers must `await` this.
    */
-  getLaunchParams(): LaunchParams | null;
+  getLaunchParams(): Promise<LaunchParams | null>;
 }
 
 export function usePlayerActivity(): UsePlayerActivityResult {

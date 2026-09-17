@@ -3,12 +3,17 @@ import { StyleSheet, View } from 'react-native';
 
 export interface PlayerSurfaceProps {
   /**
-   * Background color for the placeholder. Defaults to `#000000` to
-   * match mpv's initial clear colour (the SurfaceView is black
-   * before the first frame is rendered). Consumers that want the
-   * placeholder to blend with their theme can override this — the
-   * actual video frames will paint over it once mpv's first frame
-   * is decoded.
+   * Background color for the placeholder. Defaults to
+   * `'transparent'` so the native SurfaceView (which sits at the
+   * activity root, beneath the React tree) shows through to the
+   * user. V11 used `#000000` here because the placeholder WAS the
+   * SurfaceView in that architecture — V12+ moved the SurfaceView
+   * out of the React tree and pinned it to `android.R.id.content`,
+   * so a black placeholder now covers every decoded frame.
+   * Consumers that want a colored backdrop (e.g. for branded
+   * splash screens while mpv initializes) can pass a non-transparent
+   * value — the actual video frames paint over it once mpv's
+   * first frame is decoded.
    */
   backgroundColor?: string;
 }
@@ -45,7 +50,7 @@ export interface PlayerSurfaceProps {
  * Surface is rendered natively by PlayerActivity.
  */
 export function PlayerSurface({
-  backgroundColor = '#000000',
+  backgroundColor = 'transparent',
 }: PlayerSurfaceProps): React.ReactElement {
   return (
     <View
