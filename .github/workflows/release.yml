@@ -183,7 +183,7 @@ jobs:
       # (default `latest`; no separate promote step). Consumers see
       # the release as soon as the workflow finishes.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.resolve.outputs.tag }}
           name: ${{ steps.resolve.outputs.tag }}
