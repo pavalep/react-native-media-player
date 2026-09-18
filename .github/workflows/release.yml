@@ -32,6 +32,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # full history for changelog/release-notes
+          # CRITICAL: `ref: ${{ github.ref }}` is required so a tag
+          # push actually checks out the tagged commit (not main).
+          # Without this, future version-aware steps would read
+          # main's package.json instead of the tag's. The current
+          # "Verify tag matches package.json version" step happens
+          # to work because it reads GITHUB_REF directly (env var,
+          # not file), but `softprops/action-gh-release@v2` and any
+          # subsequent file-based step would break on tag pushes.
+          ref: ${{ github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -48,6 +57,17 @@ jobs:
         run: npm ci
 
       - name: Verify tag matches package.json version
+        # Tag-only guard. The bash below derives `TAG_VERSION` by
+        # stripping the `refs/tags/v` prefix from `GITHUB_REF`, which
+        # only works when the trigger was a tag push. For
+        # `workflow_dispatch` runs, `GITHUB_REF = refs/heads/main`
+        # (always the default branch), the prefix doesn't match,
+        # and `${GITHUB_REF#refs/tags/v}` produces `refs/heads/main`
+        # — which never equals the package.json version, so the step
+        # would exit 1. Skipping here is correct: a workflow_dispatch
+        # re-run is meant to re-validate + re-publish an already-pushed
+        # tag, not to discover a tag from GITHUB_REF.
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
