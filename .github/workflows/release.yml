@@ -110,6 +110,33 @@ jobs:
       # `--provenance` requires OIDC trusted publishing (incompatible
       # with NPM_TOKEN), and `--access public` is already configured in
       # package.json via `publishConfig.access=public`.
+      - name: Debug NPM_TOKEN presence
+        # Diagnostic — verifies the NPM_TOKEN secret is actually being
+        # passed by GitHub Actions into the job env. We never print
+        # the token value itself, only its length and a fingerprint
+        # of the first 4 + last 4 characters (enough to compare
+        # against the value in .npmrc without exposing it). This step
+        # runs BEFORE the publish step so a missing/empty token fails
+        # fast with a clear message instead of an opaque npm 401.
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN secret is unset or empty. Set it at https://github.com/pavalep/react-native-media-player/settings/secrets/actions/NPM_TOKEN"
+            exit 1
+          fi
+          TOKEN_LEN=${#NPM_TOKEN}
+          TOKEN_HEAD="${NPM_TOKEN:0:4}"
+          TOKEN_TAIL="${NPM_TOKEN: -4}"
+          echo "NPM_TOKEN is set: length=$TOKEN_LEN head=$TOKEN_HEAD tail=$TOKEN_TAIL"
+          # npm automation tokens are 36 chars total (npm_ + 32 hex).
+          # Granular tokens are 36 chars too. Legacy auth tokens are
+          # ~40 chars and have a different prefix. Anything outside
+          # 36-50 chars likely indicates a copy-paste error.
+          if [ "$TOKEN_LEN" -lt 36 ] || [ "$TOKEN_LEN" -gt 60 ]; then
+            echo "::warning::NPM_TOKEN length $TOKEN_LEN is outside the expected 36-60 range. The token may have been truncated or have stray whitespace."
+          fi
+
       - name: Publish to npm (latest tag, idempotent)
         id: publish
         env:
