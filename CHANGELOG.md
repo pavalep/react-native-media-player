@@ -201,8 +201,11 @@ binary override + this v1.5.8 lib:
 Consolidated release that closes the white-screen-after-splash chain
 on the SIMBA player audit. The 1.5.5/6 staging attempts (which never
 landed because npm published 1.5.6 was the most recent live version)
-are folded into this single release with the 1.5.7+ libc++ and 1.5.7+
-D-034 fixes.
+are folded into this single release with the consolidated
+`libc++_shared.so` 1.6 MB NDK-r27 override (D-033 chain) and the
+`isCurrentActivityPlayer` guard that prevents the
+`MainActivity`-rooted React instance from claiming launch params
+destined for the freshly-launched `PlayerActivity` (D-034).
 
 ### Fixed - D-033 chain (libsimbaplayer_mpv.so on Android 14+)
 
