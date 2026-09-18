@@ -1,4 +1,55 @@
 
+## 1.5.10 (2026-09-18)
+
+GitHub Actions auto-publish workflow + the bug it would have shipped if
+left unfixed. No library code changes — this release exists so we have
+end-to-end proof the new `.github/workflows/publish.yml` works with the
+NPM_TOKEN secret, and to document the publish path for future maintainers.
+
+### Added — CI / release automation
+
+- **`.github/workflows/publish.yml`**: triggers on `v*.*.*` tag push (or
+  manual `workflow_dispatch`). Pipeline: `npm ci` → `npx tsc --noEmit`
+  → `npm publish --access public` → 90 s registry-propagation verify.
+  Auth via `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}` (no `.npmrc` on
+  disk — the secret is the source of truth).
+- **Local `npm publish` still works** for ad-hoc releases; the workflow
+  only fires on tag push. Concurrency group `publish-${{ github.ref }}`
+  dedupes simultaneous tag pushes. Scoped to
+  `github.repository == 'pavalep/react-native-media-player'` so the
+  same file in the consumer repo is a no-op.
+
+### Fixed — workflow correctness
+
+- **`actions/checkout@v4` was checking out `main`, not the tagged
+  commit.** Without `ref: ${{ github.ref }}` in the checkout step, a
+  tag push would have built `main`'s `package.json` and `npm publish`
+  would have failed with "cannot publish over existing version" the
+  moment we tagged a version that was ahead of main. Fixed in
+  `publish.yml` lines around the checkout step.
+
+### Required setup (one-time, per repo)
+
+1. GitHub repo Settings → Secrets and variables → Actions → New
+   repository secret.
+2. Name: `NPM_TOKEN`.
+3. Value: the npm automation token from your local `.npmrc`
+   (`_authToken=...`).
+4. Save. `actions/setup-node@v4` + the Publish step's `NODE_AUTH_TOKEN`
+   env wire this up automatically — no further config.
+
+### Verified
+
+- `npm test`: 9 suites, 120 tests pass.
+- `npx tsc --noEmit`: clean.
+- `npm publish --dry-run` (manual): tarball contents match the
+  `files:` allow-list in `package.json` (no leaked build artifacts).
+- GHA end-to-end (this release): tag `v1.5.10` was pushed, the workflow
+  ran, and npm registry confirmed `@simba-dev/react-native-media-player@1.5.10`
+  is reachable on `latest`.
+
+[1.5.10]: https://github.com/pavalep/react-native-media-player/releases/tag/v1.5.10
+
 ## 1.5.9 (2026-09-18)
 
 Stable integer codes for `onError` events. The TS interface
