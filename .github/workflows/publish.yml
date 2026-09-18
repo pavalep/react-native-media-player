@@ -33,20 +33,28 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # The npm token must be available at .npmrc for npm to
-          # authenticate. We can't write the actual .npmrc from a
-          # secret (write permission to disk requires a workaround),
-          # so we use the official npm setup-node action which
-          # handles this cleanly.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # CRITICAL: `ref: ${{ github.ref }}` is required so a tag
+          # push actually checks out the tagged commit (not main).
+          # Without this, `actions/checkout@v4` defaults to the
+          # default branch and would publish main's package.json
+          # version instead of the tag's - which fails if you tag
+          # a version that's ahead of main (e.g. v1.6.0 commit not
+          # yet merged back).
+          ref: ${{ github.ref }}
+          # No `token:` override - the default `${{ github.token }}`
+          # works for a public repo and is sufficient to clone.
+          # Private repos would need `token: ${{ secrets.GITHUB_TOKEN }}`.
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # `registry-url` + `NPM_TOKEN` env wires up npm auth without
-          # leaving a .npmrc on disk. See
-          # https://docs.github.com/en/actions/publishing-packages/publishing-nodejs-packages
+          # `registry-url` sets the npm registry endpoint (so `npm
+          # publish` doesn't fall back to a private registry or fail
+          # with EAI_AGAIN). Auth is handled separately by the
+          # `NODE_AUTH_TOKEN` env var in the Publish step below -
+          # setup-node's registry-url alone does NOT authenticate.
+          # See https://docs.github.com/en/actions/publishing-packages/publishing-nodejs-packages
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
