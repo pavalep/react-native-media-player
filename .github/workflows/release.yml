@@ -78,12 +78,23 @@ jobs:
       - name: Resolve and verify release version
         id: resolve
         # Derives a canonical `version` (no leading `v`) and `tag`
-        # (with leading `v`) from the input, fails fast if it doesn't
-        # match package.json. Outputs are consumed by the publish and
-        # GitHub Release steps.
+        # (with leading `v`) from one of:
+        #   - workflow_dispatch: `inputs.version` (user typed it)
+        #   - tag push: `github.ref_name` (the tag itself, e.g. v1.5.11)
+        # Fails fast if neither matches package.json. Outputs are
+        # consumed by the publish and GitHub Release steps.
         shell: bash
         run: |
+          # Prefer the workflow_dispatch input when present (manual
+          # runs); otherwise derive from the pushed tag. `github.ref_name`
+          # is the tag name on a tag push (e.g. "v1.5.11") and the
+          # branch name on a workflow_dispatch (e.g. "main") — but on
+          # workflow_dispatch `inputs.version` takes precedence, so
+          # the github.ref_name fallback only fires for tag pushes.
           INPUT_VERSION="${{ inputs.version }}"
+          if [ -z "$INPUT_VERSION" ]; then
+            INPUT_VERSION="${GITHUB_REF_NAME}"
+          fi
           # Strip leading 'v' if user typed it (accept both "1.5.10" and "v1.5.10")
           INPUT_VERSION="${INPUT_VERSION#v}"
           PKG_VERSION="$(node -p "require('./package.json').version")"
@@ -157,7 +168,12 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.resolve.outputs.version }}"
+          # Default to `latest` for tag pushes (no input provided)
+          # and `latest` for workflow_dispatch when the input is
+          # omitted. Inputs are validated at the workflow_dispatch
+          # level; this is just belt-and-braces for the empty case.
           DIST_TAG="${{ inputs.npm_dist_tag }}"
+          DIST_TAG="${DIST_TAG:-latest}"
           if npm view "@simba-dev/react-native-media-player@${VERSION}" version >/dev/null 2>&1; then
             echo "::notice::Version ${VERSION} is already published to npm. Skipping publish step (likely a manual \`npm publish\` was used). Continuing to GitHub Release."
             echo "skipped=true" >> "$GITHUB_OUTPUT"
@@ -197,7 +213,9 @@ jobs:
           name: ${{ steps.resolve.outputs.tag }}
           generate_release_notes: true
           draft: false
-          prerelease: ${{ inputs.npm_dist_tag != 'latest' }}
+          # Treat empty `npm_dist_tag` (tag push trigger) as `latest`
+          # so the release is published, not marked prerelease.
+          prerelease: ${{ inputs.npm_dist_tag != '' && inputs.npm_dist_tag != 'latest' }}
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
