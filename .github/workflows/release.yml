@@ -1,29 +1,49 @@
 name: Release (publish to npm + create GitHub Release)
 
+# Manual-only — triggered from the GitHub UI via "Run workflow" with
+# the version as input. Replaces the previous `push: tags: ['v*.*.*']`
+# trigger, which was both:
+#   - racing with local `npm publish` from the dev machine (causing
+#     split-brain npm dist-tags in past releases);
+#   - silently failing on tag push because the `NPM_TOKEN` secret
+#     wasn't being read (the secret exists in GitHub UI but the
+#     workflow saw it as empty — debug step confirmed this).
+#
+# The manual trigger gives the maintainer a checkpoint to verify the
+# version + changelog before publishing, mirrors the user's preferred
+# "build I will manually do" pattern, and decouples npm publish from
+# tag push (so the same tag can be re-released without re-pushing).
 on:
-  push:
-    tags:
-      - 'v*.*.*'   # matches v1.0.0, v1.2.3, etc.
-  workflow_dispatch: # allow manually re-running for an existing tag (idempotent)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. "1.5.10" or "v1.5.10"). Must match the version in package.json on main.'
+        required: true
+        type: string
+      npm_dist_tag:
+        description: 'npm dist-tag to apply (default: latest). Use "next" or "beta" for pre-releases.'
+        required: false
+        default: 'latest'
+        type: string
 
-# Authentication: NPM_TOKEN secret (Automation scope, configured on the
-# GitHub repo at Settings → Secrets and variables → Actions). Token must
+# Authentication: `secrets.NPM_TOKEN` (Automation scope, configured at
+# Settings → Secrets and variables → Actions on this repo). Token must
 # have publish rights on the @simba-dev org scope.
 #
-# `contents: write` is needed so the GitHub Release step can create releases.
-# `id-token: write` is no longer required (we dropped OIDC trusted
-# publishing in favour of the NPM_TOKEN path, so the version can go
-# straight to `latest` without a separate promote step).
+# `contents: write` is needed so the workflow can create the git tag
+# (if missing) and the GitHub Release step can publish the release.
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false   # never cancel a release mid-flight
+  # Single in-flight release at a time (manual runs are rare; safety
+  # against accidental double-clicks in the GitHub UI).
+  group: release-manual
+  cancel-in-progress: false
 
 jobs:
   release:
-    name: Publish to npm latest + create GitHub Release
+    name: Publish to npm + create GitHub Release
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -32,15 +52,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # full history for changelog/release-notes
-          # CRITICAL: `ref: ${{ github.ref }}` is required so a tag
-          # push actually checks out the tagged commit (not main).
-          # Without this, future version-aware steps would read
-          # main's package.json instead of the tag's. The current
-          # "Verify tag matches package.json version" step happens
-          # to work because it reads GITHUB_REF directly (env var,
-          # not file), but `softprops/action-gh-release@v2` and any
-          # subsequent file-based step would break on tag pushes.
-          ref: ${{ github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -56,28 +67,26 @@ jobs:
           NODE_ENV: development
         run: npm ci
 
-      - name: Verify tag matches package.json version
-        # Tag-only guard. The bash below derives `TAG_VERSION` by
-        # stripping the `refs/tags/v` prefix from `GITHUB_REF`, which
-        # only works when the trigger was a tag push. For
-        # `workflow_dispatch` runs, `GITHUB_REF = refs/heads/main`
-        # (always the default branch), the prefix doesn't match,
-        # and `${GITHUB_REF#refs/tags/v}` produces `refs/heads/main`
-        # — which never equals the package.json version, so the step
-        # would exit 1. Skipping here is correct: a workflow_dispatch
-        # re-run is meant to re-validate + re-publish an already-pushed
-        # tag, not to discover a tag from GITHUB_REF.
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Resolve and verify release version
+        id: resolve
+        # Derives a canonical `version` (no leading `v`) and `tag`
+        # (with leading `v`) from the input, fails fast if it doesn't
+        # match package.json. Outputs are consumed by the publish and
+        # GitHub Release steps.
         shell: bash
         run: |
-          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          INPUT_VERSION="${{ inputs.version }}"
+          # Strip leading 'v' if user typed it (accept both "1.5.10" and "v1.5.10")
+          INPUT_VERSION="${INPUT_VERSION#v}"
           PKG_VERSION="$(node -p "require('./package.json').version")"
-          echo "tag version     = v${TAG_VERSION}"
+          echo "input version   = v${INPUT_VERSION}"
           echo "package version = ${PKG_VERSION}"
-          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
-            echo "::error::Git tag v${TAG_VERSION} does not match package.json version ${PKG_VERSION}."
+          if [ "$INPUT_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Input version v${INPUT_VERSION} does not match package.json version ${PKG_VERSION}."
             exit 1
           fi
+          echo "version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Typecheck
         run: npm run typecheck
@@ -91,33 +100,13 @@ jobs:
       - name: Verify package contents (dry-run)
         run: npm pack --dry-run
 
-      # ---- publish (latest tag, idempotent) ------------------------------
-      #
-      # Authentication: NPM_TOKEN secret (configured at Settings → Secrets
-      # and variables → Actions on this repo). Token must have publish
-      # rights on the @simba-dev org scope. Create at
-      # https://www.npmjs.com/settings/pavalep/tokens (Automation type,
-      # 90-day expiry, "Publish packages" scope = @simba-dev).
-      #
-      # Idempotency: if the version is already published to npm (e.g. the
-      # author ran `npm publish --access public` manually before pushing
-      # the tag), the publish step is skipped and the workflow continues
-      # to create the GitHub Release. This avoids the 409 "version
-      # already exists" failure that previously blocked the GH Release
-      # step from running.
-      #
-      # `--provenance` and `--access public` are intentionally OMITTED —
-      # `--provenance` requires OIDC trusted publishing (incompatible
-      # with NPM_TOKEN), and `--access public` is already configured in
-      # package.json via `publishConfig.access=public`.
+      # ---- debug: confirm NPM_TOKEN is reachable -------------------------
+      # Diagnostic step. NEVER print the token value — only its length
+      # and a fingerprint (head + tail) for cross-checking against the
+      # value in `react-native-media-player/.npmrc` without exposing it.
+      # Runs BEFORE the publish step so a missing/empty token fails
+      # fast with a clear message instead of an opaque npm 401.
       - name: Debug NPM_TOKEN presence
-        # Diagnostic — verifies the NPM_TOKEN secret is actually being
-        # passed by GitHub Actions into the job env. We never print
-        # the token value itself, only its length and a fingerprint
-        # of the first 4 + last 4 characters (enough to compare
-        # against the value in .npmrc without exposing it). This step
-        # runs BEFORE the publish step so a missing/empty token fails
-        # fast with a clear message instead of an opaque npm 401.
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -137,32 +126,70 @@ jobs:
             echo "::warning::NPM_TOKEN length $TOKEN_LEN is outside the expected 36-60 range. The token may have been truncated or have stray whitespace."
           fi
 
-      - name: Publish to npm (latest tag, idempotent)
+      # ---- publish (idempotent) -------------------------------------------
+      # Authentication: NPM_TOKEN secret (configured at Settings → Secrets
+      # and variables → Actions on this repo). Token must have publish
+      # rights on the @simba-dev org scope. Create at
+      # https://www.npmjs.com/settings/pavalep/tokens (Automation type,
+      # "Publish packages" scope = @simba-dev).
+      #
+      # Idempotency: if the version is already published to npm (e.g. the
+      # author ran `npm publish --access public` manually before
+      # triggering this workflow), the publish step is skipped and the
+      # workflow continues to create the GitHub Release. This avoids the
+      # 409 "version already exists" failure.
+      #
+      # `--provenance` and `--access public` are intentionally OMITTED —
+      # `--provenance` requires OIDC trusted publishing (incompatible
+      # with NPM_TOKEN), and `--access public` is already configured in
+      # package.json via `publishConfig.access=public`.
+      - name: Publish to npm
         id: publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          PKG_VERSION="$(node -p "require('./package.json').version")"
-          if npm view "@simba-dev/react-native-media-player@${PKG_VERSION}" version >/dev/null 2>&1; then
-            echo "::notice::Version ${PKG_VERSION} is already published to npm. Skipping publish step (likely a manual `npm publish --access public` was used). Continuing to GitHub Release."
+          VERSION="${{ steps.resolve.outputs.version }}"
+          DIST_TAG="${{ inputs.npm_dist_tag }}"
+          if npm view "@simba-dev/react-native-media-player@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::Version ${VERSION} is already published to npm. Skipping publish step (likely a manual \`npm publish\` was used). Continuing to GitHub Release."
             echo "skipped=true" >> "$GITHUB_OUTPUT"
           else
-            npm publish --tag=latest
+            npm publish --tag="${DIST_TAG}"
             echo "skipped=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # ---- ensure git tag exists for the GitHub Release step ------------
+      # `softprops/action-gh-release@v2` requires the tag to exist in
+      # the repo. If the user pushed the tag locally before triggering,
+      # we reuse it. If not (e.g. local-only bump + manual trigger), we
+      # create + push the tag now from the current HEAD on main.
+      - name: Ensure release tag exists
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists locally. Skipping create."
+          else
+            echo "Creating tag $TAG at current HEAD on main..."
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+
       # ---- github release (published, not draft) -------------------------
-      # Now non-draft because we publish directly to `latest` (no separate
-      # promote step). Consumers see the "Latest" badge pointing at this
-      # release as soon as the workflow finishes.
+      # Non-draft because we publish directly to the chosen dist-tag
+      # (default `latest`; no separate promote step). Consumers see
+      # the release as soon as the workflow finishes.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ steps.resolve.outputs.tag }}
+          name: ${{ steps.resolve.outputs.tag }}
           generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ inputs.npm_dist_tag != 'latest' }}
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
