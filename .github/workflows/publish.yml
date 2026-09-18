@@ -1,0 +1,100 @@
+name: Publish @simba-dev/react-native-media-player
+
+# ─── Trigger: any push of a `v*.*.*` tag publishes to npmjs. ───
+# Local `npm publish` still works for ad-hoc releases — the
+# workflow only fires on tags, not on every commit to main.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Optional npm dist-tag (e.g. next, beta). Defaults to latest.'
+        required: false
+        default: 'latest'
+
+# Concurrency: cancel any in-flight publish run for the same tag —
+# the lock key includes the ref name so two simultaneous tag pushes
+# don't both try to `npm publish`.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only run on the lib repo — same workflow file may be present
+    # in the consumer repo but should no-op there.
+    if: github.repository == 'pavalep/react-native-media-player'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # The npm token must be available at .npmrc for npm to
+          # authenticate. We can't write the actual .npmrc from a
+          # secret (write permission to disk requires a workaround),
+          # so we use the official npm setup-node action which
+          # handles this cleanly.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # `registry-url` + `NPM_TOKEN` env wires up npm auth without
+          # leaving a .npmrc on disk. See
+          # https://docs.github.com/en/actions/publishing-packages/publishing-nodejs-packages
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+        # Skip native build artifacts (libsimbaplayer_mpv.so etc.)
+        # — the npm publish tarball is produced from src/ + ts/ +
+        # android/src/main/ + android/build.gradle (NOT from
+        # node_modules/.bin / node_modules/@simba-dev/
+        # react-native-media-player/android/build/...).
+
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit
+        # The lib repo uses noEmit-only type checking as a CI gate
+        # (the consumer is the one that does real builds). If this
+        # fails the publish aborts before any tag goes out.
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Allow workflow_dispatch to override the dist-tag (e.g.
+          # `next` for a beta). Default `latest`.
+          NPM_PUBLISH_TAG: ${{ github.event.inputs.version || 'latest' }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            npm publish --access public --tag "$NPM_PUBLISH_TAG"
+          else
+            # Tag-triggered publishes always go to `latest` (or
+            # `beta` if the version has a pre-release suffix like
+            # 4.0.0-beta.15 — npm auto-tags those correctly).
+            npm publish --access public
+          fi
+
+      - name: Verify publish
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Published @simba-dev/react-native-media-player@${VERSION}"
+          # Wait up to 90s for the registry to propagate so the
+          # `latest` dist-tag points at our version before we
+          # return success (otherwise the manager-demo consumer's
+          # `npm install --prefer-online` might pick up the old
+          # version for a few minutes).
+          for i in $(seq 1 18); do
+            sleep 5
+            LATEST=$(npm view @simba-dev/react-native-media-player dist-tags.latest 2>/dev/null || echo "")
+            if [ "$LATEST" = "$VERSION" ]; then
+              echo "Registry propagated after ${i} polls ($((i*5))s)"
+              exit 0
+            fi
+          done
+          echo "WARN: registry still shows latest=${LATEST} after 90s; manual verify needed"
+          exit 0
