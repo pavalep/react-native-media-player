@@ -1,4 +1,47 @@
 
+## 1.5.9 (2026-09-18)
+
+Stable integer codes for `onError` events. The TS interface
+already declared `code: number`; the Kotlin side was emitting a
+string code, which JS consumers had to coerce with `Number()`
+on a string that looked like `"E_NOT_INITIALIZED"`. The erase
+boundary was clean — change the bridge payload once, change
+the TS shape once, and downstream consumers get a real integer.
+
+### Fixed - T28.03 (numeric error codes)
+
+- **`emitErrorEvent` payload now emits both `code: Int` and
+  `codeName: String`** instead of just `code: String`. The
+  string is kept under `codeName` so logging stays grep-friendly;
+  programmatic handlers switch on the integer. Stable mapping:
+  - `E_NOT_INITIALIZED` → 1001 (1xxx — initialization)
+  - `E_ACTIVITY_NOT_FOUND` → 2001 (2xxx — activity / launch)
+  - `E_SECURITY` → 2002
+  - `E_OPEN_PLAYER_FAILED` → 2003
+  - `E_CONFIG_PARSE_FAILED` → 4001 (4xxx — configuration)
+- **`codeToNumeric()` helper** added to `MpvBridgeModule.kt`
+  with documented ranges. Numeric codes are PERMANENT — do
+  not reuse a number once it ships. Returns 0 for unknown
+  strings (degrades to a single sentinel rather than
+  throwing).
+- **TS `onError` interface** in `MpvPlayerModule.ts` extended
+  with `codeName?: string`. The `player.error` shape in
+  `types/player.ts` extends the same way and the bridge
+  event handler forwards `codeName` through.
+- **`Promise.reject` paths unchanged**: still use the string
+  code as the rejection code (React Native's Promise
+  rejection plumbing expects a string identifier). Numeric
+  code is the onError-event path only.
+
+### Verified
+
+- `tsc --noEmit` clean against the consumer type-check.
+- No consumer code change required to USE the new shape —
+  existing `if (error.code === 1001)` switches will start
+  matching. Existing `code` field stays numeric.
+- The `codeName` field is optional; old consumers that
+  destructured `error.code` keep working.
+
 ## 1.5.8 (2026-09-15)
 
 JS-side wiring fixes for `PlayerActivity` on SIMBA V22 + four

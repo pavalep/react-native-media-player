@@ -1818,13 +1818,22 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * For Promise-returning methods, the exception is converted to a
      * Promise.reject with the structured `E_NOT_INITIALIZED` (or whatever
      * the actual cause was) error code.
+     *
+     * T28.03: emit BOTH a human-readable `codeName` (the original string
+     * like `"E_NOT_INITIALIZED"`) AND a numeric `code` (a stable
+     * integer) in the payload. The TS `onError` interface declares
+     * `code: number; codeName?: string` — programmatic handlers switch
+     * on the integer; logging keeps the string for grep-friendliness.
+     * Numeric codes are stable across versions (do not reuse a number
+     * for a different meaning once shipped).
      */
     private fun emitErrorEvent(code: String, message: String, throwable: Throwable? = null) {
-        Log.w(TAG, "[PlaybackTrace][Bridge][error] code=$code message=$message", throwable)
+        Log.w(TAG, "[PlaybackTrace][Bridge][error] code=$code numeric=${codeToNumeric(code)} message=$message", throwable)
         try {
             val ctx = reactApplicationContext
             val payload = Arguments.createMap().apply {
-                putString("code", code)
+                putInt("code", codeToNumeric(code))
+                putString("codeName", code)
                 putString("message", message)
                 if (throwable != null) {
                     putString("exception", throwable.javaClass.simpleName)
@@ -1960,5 +1969,35 @@ internal object JsonUtil {
             }
         }
         return map
+    }
+
+    /**
+     * T28.03: stable integer mapping for the structured error codes emitted
+     * by [emitErrorEvent]. The TS `onError` interface declares `code: number`
+     * — this helper provides the integer so programmatic handlers can switch
+     * on a stable value across versions. Numeric codes are PERMANENT: do
+     * not reuse a number once it ships (use a new range instead). Ranges:
+     *
+     *   1xxx — Initialization lifecycle (mount order, warm-up, ensurePtr)
+     *   2xxx — Activity / Intent / launch failures (PlayerActivity missing,
+     *          SecurityException, manifest mismatches)
+     *   3xxx — Playback control errors (loadFile failures, command queue
+     *          overflow, seek out-of-range) — reserved for future use
+     *   4xxx — Configuration / IPC errors (setConfig parse failures,
+     *          bridge serialisation mismatches)
+     *
+     * Returns `0` for unknown codes so unrecognised values degrade to
+     * a single sentinel rather than throwing.
+     */
+    private fun codeToNumeric(code: String): Int = when (code) {
+        // 1xxx — Initialization
+        "E_NOT_INITIALIZED" -> 1001
+        // 2xxx — Activity / Intent / launch
+        "E_ACTIVITY_NOT_FOUND" -> 2001
+        "E_SECURITY" -> 2002
+        "E_OPEN_PLAYER_FAILED" -> 2003
+        // 4xxx — Configuration
+        "E_CONFIG_PARSE_FAILED" -> 4001
+        else -> 0
     }
 }

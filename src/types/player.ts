@@ -87,7 +87,7 @@ export interface PlayerState {
   /** Video stream params (resolution, fps, codec). null for audio-only files. */
   videoParams: MpvVideoParams | null;
   /** Last error reported by mpv. Cleared on the next `onFileLoaded`. */
-  error: { code: number; recoverable: boolean; message: string } | null;
+  error: { code: number; codeName?: string; recoverable: boolean; message: string } | null;
 }
 
 /**
@@ -948,6 +948,7 @@ export function applyPlayerEvent(
           ...state,
           error: {
             code: Number(p.code ?? 0),
+            codeName: p.codeName != null ? String(p.codeName) : undefined,
             recoverable: Boolean(p.recoverable ?? false),
             message: String(p.message ?? ''),
           },

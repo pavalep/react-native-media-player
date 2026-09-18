@@ -125,7 +125,13 @@ export interface PlayerEventPayloads {
   onTracksChanged: { tracks: MpvTrack[] };
   onChapterChanged: { chapter: MpvChapter | null };
   onVideoParamsChanged: { params: MpvVideoParams };
-  onError: { code: number; recoverable: boolean; message: string; requestId?: string };
+  onError: {
+    code: number;
+    codeName?: string;
+    recoverable: boolean;
+    message: string;
+    requestId?: string;
+  };
   onBuffering: { percent: number; isBuffering?: boolean };
   onCacheState: { ranges: Array<{ start: number; end: number }>; fill: number };
   onSeekable: { seekable: boolean };
