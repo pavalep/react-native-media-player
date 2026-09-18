@@ -72,7 +72,7 @@
     "react": "19.2.3",
     "react-native": "0.86.0",
     "react-test-renderer": "19.2.3",
-    "typescript": "5.5.4"
+    "typescript": "7.0.2"
   },
   "codegenConfig": {
     "name": "SimbaPlayerSpec",
