@@ -1,4 +1,51 @@
 
+## 1.5.11 (2026-09-18)
+
+End-to-end validated GitHub Actions auto-publish. The workflow has
+been running on tag push since v1.5.7 but **silently failing** at
+`npm publish` (auth token wasn't being read). v1.5.11 is the first
+release published via the corrected workflow (a manual workflow_dispatch
+verified the auth path; this release verifies the tag-push path).
+
+### Fixed — release.yml
+
+- **Job now binds to `environment: production`**. The `NPM_TOKEN`
+  secret is configured at the production environment scope (Settings
+  → Environments → production → Secrets), not repo scope. Without
+  `environment: production` on the job, only repo-scoped secrets are
+  visible and the workflow reports NPM_TOKEN as empty even though the
+  secret exists in the UI. Adding the env binding makes the secret
+  readable. Verified by manual workflow_dispatch (run 35342325825).
+- **`actions/checkout@v4` now follows `github.ref`** (`ref: ${{ github.ref }}`).
+  Without this, a tag push checks out main instead of the tagged
+  commit. With it, checkout follows the pushed tag and the
+  publish/version/verify are consistent.
+- **Trigger restored to `v*.*.*` tag push** (was workflow_dispatch
+  only while we were diagnosing the auth issue). `workflow_dispatch`
+  is kept for manual retries. Concurrency group `release-manual` so
+  manual and tag-triggered runs don't block each other.
+
+### Added — Debug NPM_TOKEN presence step
+
+- Always runs before the publish step. Prints `length=<n> head=<4>
+  tail=<4>` (never the token value itself). Fails fast with a clear
+  error message naming both the repo-scope and env-scope URLs if the
+  secret is missing/empty. Catches the next token rotation immediately
+  instead of failing opaquely at `npm publish`.
+
+### Verified
+
+- v1.5.10 (the previous release) was published to npm via manual
+  workflow_dispatch (run 35342325825) — confirms the env-binding fix
+  works. v1.5.11 (this release) is published via tag push to confirm
+  the auto-trigger works end-to-end.
+- `npm test --`: 9 suites, 120 tests pass.
+- `npx tsc --noEmit`: clean.
+- `npm publish --dry-run` (manual): tarball contents match the
+  `files:` allow-list in `package.json`.
+
+[1.5.11]: https://github.com/pavalep/react-native-media-player/releases/tag/v1.5.11
+
 ## 1.5.10 (2026-09-18)
 
 GitHub Actions auto-publish workflow + the bug it would have shipped if

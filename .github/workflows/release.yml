@@ -1,19 +1,18 @@
 name: Release (publish to npm + create GitHub Release)
 
-# Manual-only — triggered from the GitHub UI via "Run workflow" with
-# the version as input. Replaces the previous `push: tags: ['v*.*.*']`
-# trigger, which was both:
-#   - racing with local `npm publish` from the dev machine (causing
-#     split-brain npm dist-tags in past releases);
-#   - silently failing on tag push because the `NPM_TOKEN` secret
-#     wasn't being read (the secret exists in GitHub UI but the
-#     workflow saw it as empty — debug step confirmed this).
+# Auto-triggers on `v*.*.*` tag push. Also accepts manual
+# `workflow_dispatch` for re-runs (e.g. retry a release after a
+# transient registry issue).
 #
-# The manual trigger gives the maintainer a checkpoint to verify the
-# version + changelog before publishing, mirrors the user's preferred
-# "build I will manually do" pattern, and decouples npm publish from
-# tag push (so the same tag can be re-released without re-pushing).
+# The `production` GitHub Environment binding on the job is what
+# makes NPM_TOKEN readable — the secret is set at environment scope,
+# not repo scope. The Debug NPM_TOKEN presence step verifies the
+# secret is reachable BEFORE the publish step so a missing token
+# fails fast with a clear message instead of an opaque npm 401.
 on:
+  push:
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       version:
