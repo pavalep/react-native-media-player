@@ -46,6 +46,15 @@ jobs:
     name: Publish to npm + create GitHub Release
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Bind to the `production` GitHub Environment so the job reads
+    # environment-scoped secrets (e.g. `production.NPM_TOKEN` set at
+    # Settings → Environments → production → Secrets) instead of
+    # only repo-scoped secrets. Without this, an environment-only
+    # NPM_TOKEN is invisible to the job and the Debug step reports
+    # it as unset (even though the secret exists in the UI).
+    environment:
+      name: production
+      url: https://www.npmjs.com/package/@simba-dev/react-native-media-player
 
     steps:
       - name: Checkout
@@ -111,7 +120,7 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if [ -z "$NPM_TOKEN" ]; then
-            echo "::error::NPM_TOKEN secret is unset or empty. Set it at https://github.com/pavalep/react-native-media-player/settings/secrets/actions/NPM_TOKEN"
+            echo "::error::NPM_TOKEN secret is unset or empty. Checked: \${{ secrets.NPM_TOKEN }} returned empty. Verify (1) the secret is set at https://github.com/pavalep/react-native-media-player/settings/secrets/actions/NPM_TOKEN (repo scope) OR at https://github.com/pavalep/react-native-media-player/settings/environments/production/secrets/NPM_TOKEN (production env scope, since this workflow's job is bound to the production environment)."
             exit 1
           fi
           TOKEN_LEN=${#NPM_TOKEN}
