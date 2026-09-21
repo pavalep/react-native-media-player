@@ -267,8 +267,16 @@ jobs:
           printf '%s  jniLibs.tar.gz\n' "$SHA" > jniLibs.tar.gz.sha256
           echo "jniLibs.tar.gz size: $(stat -c%s jniLibs.tar.gz) bytes"
           echo "jniLibs.tar.gz sha256: ${SHA}"
+          # Sanity check that internal paths are correct. We use `>file` +
+          # `head` instead of `tar -tzf | head -5` because the pipe causes
+          # SIGPIPE on tar (head closes its stdin after 5 lines), which —
+          # combined with `set -euo pipefail` — fails the step even though
+          # the tarball itself is fine. The `|| true` below is belt-and-braces
+          # against any other head/tar SIGPIPE-related quirk.
+          tar -tzf jniLibs.tar.gz > /tmp/tarlist.txt
           echo "---first 5 internal paths (sanity check)---"
-          tar -tzf jniLibs.tar.gz | head -5
+          head -5 /tmp/tarlist.txt || true
+          rm -f /tmp/tarlist.txt
           cat jniLibs.tar.gz.sha256
 
       - name: Upload jniLibs.tar.gz as workflow artifact
