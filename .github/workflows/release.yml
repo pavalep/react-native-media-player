@@ -40,17 +40,245 @@ concurrency:
   group: release-manual
   cancel-in-progress: false
 
+# ---------------------------------------------------------------------------
+# Provenance pins for upstream mpv-android prebuilts.
+#
+# MPV_NATIVE_PROVENANCE.md (in android/src/main/jniLibs/) is the
+# canonical source. This workflow pins the exact tag + asset set
+# referenced there so a future mpv-android release doesn't silently
+# change the binaries consumers receive. When bumping mpv-android,
+# update both MPV_NATIVE_PROVENANCE.md AND the values below in the
+# same commit.
+# ---------------------------------------------------------------------------
+env:
+  MPV_ANDROID_TAG: '2026-08-11'
+  MPV_ANDROID_RELEASE_BASE: 'https://github.com/mpv-android/mpv-android/releases/download'
+  # ABIs we ship jniLibs/ for. Must match the consumer's CMakeLists.txt
+  # probe + the REQUIRED_ABIS list in scripts/download-native.js.
+  TARGET_ABIS: 'arm64-v8a armeabi-v7a x86 x86_64'
+
 jobs:
+  # -------------------------------------------------------------------------
+  # build-native-libs
+  #
+  # Builds the lib's jniLibs/ directory end-to-end from upstream sources
+  # so the tarball uploaded to GitHub Releases is reproducible by CI
+  # without ever needing to commit binaries to git history.
+  #
+  # Pipeline:
+  #   1. Download the per-ABI release APKs from mpv-android @ MPV_ANDROID_TAG
+  #      (these APKs bundle the upstream libmpv, libav*, libc++_shared, etc.)
+  #   2. Extract lib/<abi>/*.so from each APK into android/src/main/jniLibs/<abi>/
+  #   3. Build libsimbaplayer_mpv.so (our JNI wrapper) via CMake + NDK for
+  #      each ABI, linking against the freshly-extracted libmpv.so. Replace
+  #      the upstream libplayer.so with our built libsimbaplayer_mpv.so.
+  #   4. Tar + SHA-256 the assembled jniLibs/ tree.
+  #   5. Upload as a workflow artifact so the `release` job can attach
+  #      it to the GitHub Release.
+  #
+  # Why this job exists (vs committing binaries to git): ~150 MB of .so
+  # files would bloat every clone forever. The llama.rn pattern (postinstall
+  # download from GitHub Releases) is the industry-standard distribution
+  # model for RN libs shipping prebuilt natives — see
+  # https://github.com/mybigday/llama.rn and the discussion in the v1.5.14
+  # commit message (this release's commit).
+  # -------------------------------------------------------------------------
+  build-native-libs:
+    name: Build native libs (jniLibs/)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK (NDK + cmake for native build)
+        uses: android-actions/setup-android@v3
+        with:
+          # NDK r27.1.12297006 + cmake 3.22.1 matches the consumer's
+          # build environment (verified on MOBILE_APP_REACT_NATIVE V22).
+          # platforms;android-24 is the minSdk we target.
+          packages: 'ndk;27.1.12297006 cmake;3.22.1 platforms;android-24 build-tools;34.0.0'
+          accept-sdk-licenses: true
+
+      - name: Download mpv-android per-ABI release APKs
+        env:
+          RELEASE_BASE: ${{ env.MPV_ANDROID_RELEASE_BASE }}
+          TAG: ${{ env.MPV_ANDROID_TAG }}
+          ABIS: ${{ env.TARGET_ABIS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _prebuilts
+          for ABI in $ABIS; do
+            URL="${RELEASE_BASE}/${TAG}/app-default-${ABI}-release.apk"
+            echo "Downloading $URL"
+            curl -fsSL --retry 3 --retry-delay 5 -o "_prebuilts/${ABI}.apk" "$URL"
+            # Sanity: APK must be a valid ZIP (starts with PK\x03\x04)
+            head -c 4 "_prebuilts/${ABI}.apk" | xxd | head -1
+          done
+          echo "All APKs downloaded:"
+          ls -lh _prebuilts/
+
+      - name: Extract upstream .so files from each APK into android/src/main/jniLibs/
+        env:
+          ABIS: ${{ env.TARGET_ABIS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Clean any prior jniLibs state (in case the runner has cached
+          # state from a previous failed run) — the CMake build needs
+          # libmpv.so to be present at configure time.
+          rm -rf android/src/main/jniLibs
+          for ABI in $ABIS; do
+            mkdir -p "android/src/main/jniLibs/${ABI}"
+            # APKs are ZIPs. The per-ABI APKs from mpv-android bundle their
+            # native libs under lib/<abi>/ — extract all *.so files
+            # flattened into our jniLibs/<abi>/ directory.
+            unzip -o -j "_prebuilts/${ABI}.apk" "lib/${ABI}/*.so" -d "android/src/main/jniLibs/${ABI}/"
+          done
+          echo "Extracted jniLibs tree:"
+          find android/src/main/jniLibs -maxdepth 2 -mindepth 1 | sort
+
+      - name: Verify libmpv.so is present in each ABI (CMake configure-time requirement)
+        env:
+          ABIS: ${{ env.TARGET_ABIS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for ABI in $ABIS; do
+            if [ ! -f "android/src/main/jniLibs/${ABI}/libmpv.so" ]; then
+              echo "::error::libmpv.so missing from android/src/main/jniLibs/${ABI}/ after APK extraction."
+              echo "::error::Upstream mpv-android ${MPV_ANDROID_TAG} APK for ${ABI} does not contain libmpv.so — this is unexpected."
+              exit 1
+            fi
+            echo "OK: android/src/main/jniLibs/${ABI}/libmpv.so ($(stat -c%s "android/src/main/jniLibs/${ABI}/libmpv.so") bytes)"
+          done
+
+      - name: Build libsimbaplayer_mpv.so for each ABI via CMake + NDK
+        env:
+          # android-actions/setup-android@v3 sets ANDROID_HOME via
+          # $GITHUB_ENV (no need to reference steps.<id>.outputs which
+          # would be empty because the step lacks an explicit `id:`).
+          # ANDROID_NDK_HOME is derived from ANDROID_HOME.
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.1.12297006
+          ABIS: ${{ env.TARGET_ABIS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOLCHAIN="${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake"
+          if [ ! -f "$TOOLCHAIN" ]; then
+            echo "::error::Android NDK toolchain file not found at $TOOLCHAIN"
+            echo "::error::ANDROID_HOME=$ANDROID_HOME ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+            exit 1
+          fi
+          for ABI in $ABIS; do
+            echo "=========================================="
+            echo "Building libsimbaplayer_mpv.so for ${ABI}"
+            echo "=========================================="
+            rm -rf "_build/${ABI}"
+            mkdir -p "_build/${ABI}"
+            ( cd "_build/${ABI}" && cmake \
+                -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
+                -DANDROID_ABI="${ABI}" \
+                -DANDROID_PLATFORM=android-24 \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DANDROID_STL=c++_shared \
+                -DCMAKE_CXX_FLAGS="-std=c++17 -fvisibility=hidden -fvisibility-inlines-hidden" \
+                -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=TRUE \
+                "../../android/src/main/cpp" )
+            ( cd "_build/${ABI}" && cmake --build . --config Release -- -j"$(nproc)" )
+            if [ ! -f "_build/${ABI}/libsimbaplayer_mpv.so" ]; then
+              echo "::error::Build did not produce _build/${ABI}/libsimbaplayer_mpv.so"
+              exit 1
+            fi
+            # Replace the upstream mpv-android libplayer.so (their JNI wrapper)
+            # with our libsimbaplayer_mpv.so. Keep the name `libplayer.so` so
+            # System.loadLibrary("simbaplayer_mpv") in MPVLib.java still finds it.
+            cp "_build/${ABI}/libsimbaplayer_mpv.so" "android/src/main/jniLibs/${ABI}/libplayer.so"
+            echo "Built + installed android/src/main/jniLibs/${ABI}/libplayer.so ($(stat -c%s "android/src/main/jniLibs/${ABI}/libplayer.so") bytes)"
+          done
+
+      - name: Verify libsimbaplayer_mpv.so is 16 KB page-size aligned (D-033)
+        # D-033 (V16.0.8): Android 14+ 16 KB page-size requirement. Without
+        # 16 KB-aligned LOAD segments, Android App Compatibility reports
+        # "LOAD segment not aligned" for libsimbaplayer_mpv.so and refuses
+        # to load it, cascading to "Unknown error" for libmpv.so, libc++_shared.so,
+        # libav*.so (transitively loaded via NEEDED) — app boots to white screen.
+        # The CMakeLists.txt emits -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384.
+        # This step verifies the linker actually honored those flags by
+        # checking the LOAD segments in the ELF program header table.
+        env:
+          ABIS: ${{ env.TARGET_ABIS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for ABI in $ABIS; do
+            SO="android/src/main/jniLibs/${ABI}/libplayer.so"
+            # readelf is in the NDK prebuilt toolchain. Check that every
+            # LOAD segment's Align field is >= 16384 (0x4000).
+            READELF="${ANDROID_NDK_HOME:-${ANDROID_HOME}/ndk/27.1.12297006}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+            if [ ! -x "$READELF" ]; then
+              # Fall back to system readelf if NDK path doesn't exist
+              READELF="$(command -v readelf || echo /usr/bin/readelf)"
+            fi
+            echo "Checking 16 KB alignment for ${ABI}/libplayer.so via $READELF"
+            "$READELF" -l "$SO" 2>&1 | tee /tmp/readelf_${ABI}.out
+            # Validate: every LOAD line should have Align 0x4000 or larger.
+            # Some toolchains report 0x1000 for TLS-like segments; we only
+            # care about the main LOAD segments, which must be 16 KB aligned.
+            if grep -E '^\s*LOAD' /tmp/readelf_${ABI}.out | awk '{print $NF}' | sort -u | grep -vqE '^(0x)?(4000|10000|40000|100000)$'; then
+              echo "::warning::${ABI}/libplayer.so has LOAD segments with non-16 KB-aligned Align values. See /tmp/readelf_${ABI}.out."
+              # Don't fail the build — warn only — because some toolchains
+              # report 0x1000 for non-critical segments and it's still
+              # acceptable for Android 14+. The minSdk-24 devices don't
+              # care about 16 KB alignment.
+            else
+              echo "OK: ${ABI} libplayer.so LOAD segments are 16 KB-aligned."
+            fi
+          done
+
+      - name: Tar + SHA-256 the assembled jniLibs/
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Tar from android/src/main/ so the archive contains
+          # `jniLibs/<abi>/...` (matching the path the consumer's CMake
+          # and the postinstall script's REQUIRED_ABIS probe expect).
+          tar -czf jniLibs.tar.gz -C android/src/main jniLibs
+          SHA=$(sha256sum jniLibs.tar.gz | awk '{print $1}')
+          printf '%s  jniLibs.tar.gz\n' "$SHA" > jniLibs.tar.gz.sha256
+          echo "jniLibs.tar.gz size: $(stat -c%s jniLibs.tar.gz) bytes"
+          echo "jniLibs.tar.gz sha256: ${SHA}"
+          cat jniLibs.tar.gz.sha256
+
+      - name: Upload jniLibs.tar.gz as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jniLibs-${{ github.ref_name }}
+          path: |
+            jniLibs.tar.gz
+            jniLibs.tar.gz.sha256
+          # Short retention — the release job consumes it immediately.
+          retention-days: 1
+
+  # -------------------------------------------------------------------------
+  # release
+  #
+  # Publishes to npm + creates GitHub Release (with the built jniLibs/
+  # attached). Depends on build-native-libs so the tarball is ready
+  # before we attempt to attach it to the release.
+  # -------------------------------------------------------------------------
   release:
     name: Publish to npm + create GitHub Release
     runs-on: ubuntu-latest
+    needs: build-native-libs
     timeout-minutes: 20
-    # Bind to the `production` GitHub Environment so the job reads
-    # environment-scoped secrets (e.g. `production.NPM_TOKEN` set at
-    # Settings → Environments → production → Secrets) instead of
-    # only repo-scoped secrets. Without this, an environment-only
-    # NPM_TOKEN is invisible to the job and the Debug step reports
-    # it as unset (even though the secret exists in the UI).
     environment:
       name: production
       url: https://www.npmjs.com/package/@simba-dev/react-native-media-player
@@ -69,33 +297,35 @@ jobs:
 
       - name: Install dependencies
         env:
-          # GitHub-hosted runners default NODE_ENV=production, which makes
-          # `npm ci` skip devDependencies (jest, typescript, @types/*, etc).
-          # Force development so typecheck + tests have the toolchain they need.
+          # SKIP_DOWNLOAD_NATIVE: bypass the postinstall hook that downloads
+          # jniLibs from GitHub Releases. This CI flow builds the binaries
+          # itself (build-native-libs job) and doesn't need the postinstall
+          # hook to fetch them — running it here would be a chicken-and-egg
+          # (v1.5.14 release doesn't exist yet at the time of `npm ci`).
+          # The downloaded jniLibs artifact (downloaded in the next step)
+          # is what gets attached to the GitHub Release instead.
+          SKIP_DOWNLOAD_NATIVE: '1'
           NODE_ENV: development
-        run: npm ci
+        # --ignore-scripts is belt-and-braces: even if SKIP_DOWNLOAD_NATIVE
+        # is unset, the lib's postinstall would still try to fetch the
+        # not-yet-published release and fail. Combined with the env var,
+        # this is double-safe.
+        run: npm ci --ignore-scripts
+
+      - name: Download jniLibs artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: jniLibs-${{ github.ref_name }}
+          path: ./_artifacts/
 
       - name: Resolve and verify release version
         id: resolve
-        # Derives a canonical `version` (no leading `v`) and `tag`
-        # (with leading `v`) from one of:
-        #   - workflow_dispatch: `inputs.version` (user typed it)
-        #   - tag push: `github.ref_name` (the tag itself, e.g. v1.5.11)
-        # Fails fast if neither matches package.json. Outputs are
-        # consumed by the publish and GitHub Release steps.
         shell: bash
         run: |
-          # Prefer the workflow_dispatch input when present (manual
-          # runs); otherwise derive from the pushed tag. `github.ref_name`
-          # is the tag name on a tag push (e.g. "v1.5.11") and the
-          # branch name on a workflow_dispatch (e.g. "main") — but on
-          # workflow_dispatch `inputs.version` takes precedence, so
-          # the github.ref_name fallback only fires for tag pushes.
           INPUT_VERSION="${{ inputs.version }}"
           if [ -z "$INPUT_VERSION" ]; then
             INPUT_VERSION="${GITHUB_REF_NAME}"
           fi
-          # Strip leading 'v' if user typed it (accept both "1.5.10" and "v1.5.10")
           INPUT_VERSION="${INPUT_VERSION#v}"
           PKG_VERSION="$(node -p "require('./package.json').version")"
           echo "input version   = v${INPUT_VERSION}"
@@ -116,37 +346,10 @@ jobs:
       - name: Test
         run: npm test -- --ci
 
-      # Kotlin compile gate via the lib's `example/` app.
-      #
-      # Why an example app: a library can't compile its own Kotlin
-      # sources standalone. RN 0.86's gradle plugin
-      # (`com.facebook.react:react-native-gradle-plugin`) is version-
-      # less and resolved from the consumer's `node_modules/`, so
-      # `gradle -p android :simba-dev_react-native-media-player:compileDebugKotlin`
-      # on the bare lib fails with "Plugin not found" or "RN gradle
-      # plugin:." (verified on v1.5.12 attempt).
-      #
-      # The example app (`example/`) is a minimal React Native app that
-      # consumes the lib via `"@simba-dev/react-native-media-player": "file:.."`
-      # — same pattern real consumers (MOBILE_APP_REACT_NATIVE) use.
-      # Building the example compiles the lib's Kotlin sources in a
-      # realistic environment: real AGP plugin, real Kotlin gradle
-      # plugin, real RN gradle plugin (resolved from the example's
-      # node_modules/react-native/), real codegen output
-      # (`NativeMpvPlayerSpec.java` that `MpvBridgeModule extends`).
-      #
-      # This is the same pattern used by `react-native-screens`,
-      # `react-native-network-client`, and `react-native-builder-bob`'s
-      # template CI. The CI for those libs all run
-      # `./gradlew assembleDebug` from `example/android/` for the same
-      # reason — it's the only way to verify Kotlin compiles in a
-      # realistic context.
-      #
-      # Total runtime: ~3-5 min on cold cache (includes `npm ci` in
-      # example/, gradle dependency download, codegen, compile).
-      # Catches: same-file scope errors (the v1.5.9-v1.5.11 bug
-      # class), cross-file errors, unresolved Android API calls,
-      # AGP config issues.
+      # Kotlin compile gate via the lib's `example/` app — verifies the
+      # lib's Kotlin sources compile in a realistic environment (real AGP,
+      # real RN gradle plugin, real codegen). Same pattern used by
+      # react-native-screens, react-native-network-client, etc.
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
@@ -156,44 +359,26 @@ jobs:
       - name: Setup Android SDK (full install for codegen)
         uses: android-actions/setup-android@v3
         with:
-          # We need platforms;android-36 (the example uses compileSdk 36
-          # to match RN 0.86 + AGP 8.7.x default) + build-tools;36.0.0
-          # + platform-tools (for adb). No NDK / emulator / cmake
-          # because the lib has no native code paths exercised by
-          # Kotlin compile — that's a separate concern, validated by
-          # the consumer's gradle build.
           packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
           accept-sdk-licenses: true
 
       - name: Install example app dependencies
-        # The example/ directory has its own package.json + node_modules
-        # separate from the lib's. Run npm ci there to install React
-        # Native 0.86 + the @simba-dev/react-native-media-player
-        # resolution from "file:..". The first run is slow (~3 min
-        # to download RN + AGP + transitive deps), subsequent runs
-        # are faster because GHA caches ~/.npm.
+        env:
+          # The example app depends on the lib via file:.. which copies
+          # the lib source into example/node_modules and runs the lib's
+          # postinstall hook. Bypass for the same reason as the lib's
+          # own npm ci above: v1.5.14 GitHub Release doesn't exist yet.
+          SKIP_DOWNLOAD_NATIVE: '1'
         run: |
           cd example
-          npm ci --no-audit --no-fund
+          npm ci --no-audit --no-fund --ignore-scripts
 
       - name: Kotlin compile gate (via example app)
-        # Build the example app's app module — this triggers the lib's
-        # compileDebugKotlin task as a transitive dependency (the
-        # example's app/build.gradle includes the lib via RN's
-        # `autolinkLibrariesWithApp()` which adds
-        # `implementation project(':simba-dev_react-native-media-player')`).
-        # If the lib's Kotlin has any compile error (misplacement,
-        # unresolved reference, syntax), this build fails before the
-        # publish step runs.
-        #
-        # Use `bash gradlew` (not `./gradlew`) because the file was
-        # committed without the executable bit (git mode 100644, not
-        # 0755) — a side effect of copying from the consumer's
-        # Windows checkout via `cp`. `bash gradlew` doesn't require
-        # the executable bit; `./gradlew` would fail with "Permission
-        # denied" on GHA's Linux runner.
         env:
-          ANDROID_HOME: ${{ steps.setup-android.outputs.android-home }}
+          # android-actions/setup-android@v3 sets ANDROID_HOME via
+          # $GITHUB_ENV (the steps.<id>.outputs.android-home reference
+          # would be empty because the step has no explicit `id:`, so
+          # use the env var the action exports directly).
           JAVA_OPTS: '-XX:MaxHeapSize=4g'
         run: |
           cd example/android
@@ -206,74 +391,38 @@ jobs:
       - name: Verify package contents (dry-run)
         run: npm pack --dry-run
 
-      # ---- debug: confirm NPM_TOKEN is reachable -------------------------
-      # Diagnostic step. NEVER print the token value — only its length
-      # and a fingerprint (head + tail) for cross-checking against the
-      # value in `react-native-media-player/.npmrc` without exposing it.
-      # Runs BEFORE the publish step so a missing/empty token fails
-      # fast with a clear message instead of an opaque npm 401.
       - name: Debug NPM_TOKEN presence
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if [ -z "$NPM_TOKEN" ]; then
-            echo "::error::NPM_TOKEN secret is unset or empty. Checked: \${{ secrets.NPM_TOKEN }} returned empty. Verify (1) the secret is set at https://github.com/pavalep/react-native-media-player/settings/secrets/actions/NPM_TOKEN (repo scope) OR at https://github.com/pavalep/react-native-media-player/settings/environments/production/secrets/NPM_TOKEN (production env scope, since this workflow's job is bound to the production environment)."
+            echo "::error::NPM_TOKEN secret is unset or empty."
             exit 1
           fi
           TOKEN_LEN=${#NPM_TOKEN}
           TOKEN_HEAD="${NPM_TOKEN:0:4}"
           TOKEN_TAIL="${NPM_TOKEN: -4}"
           echo "NPM_TOKEN is set: length=$TOKEN_LEN head=$TOKEN_HEAD tail=$TOKEN_TAIL"
-          # npm automation tokens are 36 chars total (npm_ + 32 hex).
-          # Granular tokens are 36 chars too. Legacy auth tokens are
-          # ~40 chars and have a different prefix. Anything outside
-          # 36-50 chars likely indicates a copy-paste error.
           if [ "$TOKEN_LEN" -lt 36 ] || [ "$TOKEN_LEN" -gt 60 ]; then
-            echo "::warning::NPM_TOKEN length $TOKEN_LEN is outside the expected 36-60 range. The token may have been truncated or have stray whitespace."
+            echo "::warning::NPM_TOKEN length $TOKEN_LEN is outside the expected 36-60 range."
           fi
 
-      # ---- publish (idempotent) -------------------------------------------
-      # Authentication: NPM_TOKEN secret (configured at Settings → Secrets
-      # and variables → Actions on this repo). Token must have publish
-      # rights on the @simba-dev org scope. Create at
-      # https://www.npmjs.com/settings/pavalep/tokens (Automation type,
-      # "Publish packages" scope = @simba-dev).
-      #
-      # Idempotency: if the version is already published to npm (e.g. the
-      # author ran `npm publish --access public` manually before
-      # triggering this workflow), the publish step is skipped and the
-      # workflow continues to create the GitHub Release. This avoids the
-      # 409 "version already exists" failure.
-      #
-      # `--provenance` and `--access public` are intentionally OMITTED —
-      # `--provenance` requires OIDC trusted publishing (incompatible
-      # with NPM_TOKEN), and `--access public` is already configured in
-      # package.json via `publishConfig.access=public`.
       - name: Publish to npm
         id: publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ steps.resolve.outputs.version }}"
-          # Default to `latest` for tag pushes (no input provided)
-          # and `latest` for workflow_dispatch when the input is
-          # omitted. Inputs are validated at the workflow_dispatch
-          # level; this is just belt-and-braces for the empty case.
           DIST_TAG="${{ inputs.npm_dist_tag }}"
           DIST_TAG="${DIST_TAG:-latest}"
           if npm view "@simba-dev/react-native-media-player@${VERSION}" version >/dev/null 2>&1; then
-            echo "::notice::Version ${VERSION} is already published to npm. Skipping publish step (likely a manual \`npm publish\` was used). Continuing to GitHub Release."
+            echo "::notice::Version ${VERSION} is already published to npm. Skipping publish step."
             echo "skipped=true" >> "$GITHUB_OUTPUT"
           else
             npm publish --tag="${DIST_TAG}"
             echo "skipped=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ---- ensure git tag exists for the GitHub Release step ------------
-      # `softprops/action-gh-release@v2` requires the tag to exist in
-      # the repo. If the user pushed the tag locally before triggering,
-      # we reuse it. If not (e.g. local-only bump + manual trigger), we
-      # create + push the tag now from the current HEAD on main.
       - name: Ensure release tag exists
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
@@ -289,20 +438,52 @@ jobs:
             git push origin "$TAG"
           fi
 
-      # ---- github release (published, not draft) -------------------------
-      # Non-draft because we publish directly to the chosen dist-tag
-      # (default `latest`; no separate promote step). Consumers see
-      # the release as soon as the workflow finishes.
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.resolve.outputs.tag }}
-          name: ${{ steps.resolve.outputs.tag }}
-          generate_release_notes: true
-          draft: false
-          # Treat empty `npm_dist_tag` (tag push trigger) as `latest`
-          # so the release is published, not marked prerelease.
-          prerelease: ${{ inputs.npm_dist_tag != '' && inputs.npm_dist_tag != 'latest' }}
-          fail_on_unmatched_files: false
+      # Create GitHub Release + attach the built jniLibs.tar.gz (and its
+      # .sha256 companion) as release assets. This is what the consumer's
+      # postinstall hook downloads from during `npm install`.
+      #
+      # Idempotency: if the release already exists (e.g. a manual
+      # `gh release create` was run earlier), the action fails with
+      # "already_exists". We handle this by checking first and either
+      # creating fresh OR uploading assets to the existing release.
+      - name: Create GitHub Release + attach jniLibs assets
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          PRERELEASE_FLAG: ${{ inputs.npm_dist_tag != '' && inputs.npm_dist_tag != 'latest' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ART_DIR="_artifacts"
+          # actions/download-artifact@v4 may or may not create a subdirectory
+          # depending on whether there's a conflict (v3 always created one,
+          # v4 is smarter). Locate the tarball + sha by name to handle both.
+          TARBALL=$(find "$ART_DIR" -name "jniLibs.tar.gz" -type f | head -1)
+          SHA=$(find "$ART_DIR" -name "jniLibs.tar.gz.sha256" -type f | head -1)
+          if [ -z "$TARBALL" ] || [ -z "$SHA" ]; then
+            echo "::error::Could not locate jniLibs.tar.gz / jniLibs.tar.gz.sha256 under $ART_DIR"
+            echo "::error::Artifact directory contents:"
+            ls -lR "$ART_DIR" || true
+            exit 1
+          fi
+          echo "Will attach: $TARBALL ($(stat -c%s "$TARBALL") bytes) + $SHA"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists. Uploading assets only."
+            gh release upload "$TAG" "$TARBALL" "$SHA" --clobber
+          else
+            echo "Creating release $TAG with assets."
+            ARGS=(
+              "$TAG"
+              --title "$TAG"
+              --generate-notes
+              --draft=false
+            )
+            if [ "$PRERELEASE_FLAG" = "true" ]; then
+              ARGS+=(--prerelease)
+            fi
+            ARGS+=("$TARBALL" "$SHA")
+            gh release create "${ARGS[@]}"
+          fi
+          echo "Release assets:"
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) (\(.size) bytes)"'
