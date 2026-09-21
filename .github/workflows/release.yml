@@ -185,12 +185,19 @@ jobs:
         # If the lib's Kotlin has any compile error (misplacement,
         # unresolved reference, syntax), this build fails before the
         # publish step runs.
+        #
+        # Use `bash gradlew` (not `./gradlew`) because the file was
+        # committed without the executable bit (git mode 100644, not
+        # 0755) — a side effect of copying from the consumer's
+        # Windows checkout via `cp`. `bash gradlew` doesn't require
+        # the executable bit; `./gradlew` would fail with "Permission
+        # denied" on GHA's Linux runner.
         env:
           ANDROID_HOME: ${{ steps.setup-android.outputs.android-home }}
           JAVA_OPTS: '-XX:MaxHeapSize=4g'
         run: |
           cd example/android
-          ./gradlew :simba-dev_react-native-media-player:compileDebugKotlin --no-daemon --console=plain 2>&1 | tail -80
+          bash gradlew :simba-dev_react-native-media-player:compileDebugKotlin --no-daemon --console=plain 2>&1 | tail -80
           if [ "${PIPESTATUS[0]}" -ne 0 ]; then
             echo "::error::Kotlin compile gate failed. The lib's Kotlin sources did not compile in a realistic environment. See log above for the exact error."
             exit 1
