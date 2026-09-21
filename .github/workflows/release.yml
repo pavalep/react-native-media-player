@@ -122,14 +122,26 @@ jobs:
       # time, never in the lib's own CI (which only ran `npm test`).
       # This step compiles the lib's Kotlin sources in isolation so a
       # misplacement like that fails the publish before it ships.
-      # Uses the JDK + Gradle already on the runner; no extra setup.
+      # The lib repo doesn't ship a gradle wrapper (it's a library
+      # module, not a standalone app), so we install Gradle via
+      # gradle/actions/setup-gradle and use it directly. Also
+      # installs JDK 17 explicitly because the default GH Actions
+      # JDK 11 doesn't match RN 0.86 / Android Gradle Plugin 8.x.
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
       - name: Kotlin compile (lib in isolation)
         run: |
           cd android
-          # Compile only this lib module — avoids pulling the consumer
-          # app's build context. Uses the gradle wrapper from the
-          # lib repo (we're already in it via `cd android`).
-          ./gradlew :simba-dev_react-native-media-player:compileDebugKotlin --no-daemon --console=plain 2>&1 | tail -50
+          gradle :simba-dev_react-native-media-player:compileDebugKotlin --no-daemon --console=plain 2>&1 | tail -80
           if [ "${PIPESTATUS[0]}" -ne 0 ]; then
             echo "::error::Kotlin compilation failed. Lib code may have a misplacement or syntax error. See log above."
             exit 1
