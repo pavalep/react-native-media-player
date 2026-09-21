@@ -93,6 +93,27 @@ function fail(msg, details) {
   process.exit(1);
 }
 
+/**
+ * Returns an Authorization header value if a GitHub token is available
+ * in the environment, else undefined (unauthenticated request).
+ *
+ * Recognized env vars (in priority order):
+ *   - GH_TOKEN         (gh CLI convention; recommended)
+ *   - GITHUB_TOKEN     (Actions convention; same value, different name)
+ *   - RNMP_GH_TOKEN    (lib-specific override; useful when GH_TOKEN is set
+ *                       for the gh CLI but you want to use a different
+ *                       token for this lib — e.g. a per-org PAT).
+ *
+ * Authenticated requests raise the API rate limit from 60/hr to
+ * 5000/hr per token. The token is sent only to api.github.com /
+ * objects.githubusercontent.com — never to the asset CDN (S3) which
+ * doesn't need auth.
+ */
+function githubAuthHeader() {
+  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || process.env.RNMP_GH_TOKEN;
+  return token ? { Authorization: `Bearer ${token}` } : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Step 1: Resolve package version
 // ---------------------------------------------------------------------------
@@ -138,12 +159,16 @@ if (SKIP_DOWNLOAD) {
 /**
  * Performs an HTTPS GET, follows up to 5 redirects, and streams the
  * response body into the writable `dest` (file path or Writable stream).
+ * Optional `headers` (e.g. { Authorization: 'Bearer ...' }) are attached
+ * to the FIRST request only — redirects go to S3/fastly which doesn't
+ * accept the GitHub auth header anyway.
  * Resolves with { statusCode, headers } on success; rejects on network
  * error or non-2xx final status.
  */
-function httpsGetStream(url, dest, redirectsLeft = 5) {
+function httpsGetStream(url, dest, options = {}, redirectsLeft = 5) {
+  const { headers = {}, extraRedirects = 0 } = options;
   return new Promise((resolve, reject) => {
-    const req = https.get(url, (res) => {
+    const req = https.get(url, { headers }, (res) => {
       // Handle redirects — GitHub Releases redirect download URLs to
       // S3-backed object storage.
       if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
@@ -151,7 +176,7 @@ function httpsGetStream(url, dest, redirectsLeft = 5) {
         const next = res.headers.location;
         if (!next) return reject(new Error(`Redirect from ${url} with no Location header`));
         if (redirectsLeft <= 0) return reject(new Error(`Too many redirects starting from ${url}`));
-        return resolve(httpsGetStream(next, dest, redirectsLeft - 1));
+        return resolve(httpsGetStream(next, dest, { extraRedirects: extraRedirects + 1 }, redirectsLeft - 1));
       }
       if (res.statusCode !== 200) {
         res.resume();
@@ -169,26 +194,28 @@ function httpsGetStream(url, dest, redirectsLeft = 5) {
       });
     });
     req.on('error', reject);
-    req.setTimeout(60_000, () => {
-      req.destroy(new Error(`Request timed out after 60s: ${url}`));
+    req.setTimeout(120_000, () => {
+      req.destroy(new Error(`Request timed out after 120s: ${url}`));
     });
   });
 }
 
 /**
  * Performs an HTTPS GET and resolves with the response body as a string.
- * Used for small JSON / sha256 responses (GitHub API + companion .sha256
- * file). Rejects on non-2xx.
+ * Used for small JSON / sha256 responses. Rejects on non-2xx.
+ * Same redirect handling as httpsGetStream; `headers` apply to the first
+ * request only.
  */
-function httpsGetText(url, redirectsLeft = 5) {
+function httpsGetText(url, options = {}, redirectsLeft = 5) {
+  const { headers = {}, extraRedirects = 0 } = options;
   return new Promise((resolve, reject) => {
-    const req = https.get(url, (res) => {
+    const req = https.get(url, { headers }, (res) => {
       if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
         res.resume();
         const next = res.headers.location;
         if (!next) return reject(new Error(`Redirect from ${url} with no Location header`));
         if (redirectsLeft <= 0) return reject(new Error(`Too many redirects starting from ${url}`));
-        return resolve(httpsGetText(next, redirectsLeft - 1));
+        return resolve(httpsGetText(next, { extraRedirects: extraRedirects + 1 }, redirectsLeft - 1));
       }
       if (res.statusCode !== 200) {
         res.resume();
@@ -201,8 +228,8 @@ function httpsGetText(url, redirectsLeft = 5) {
       res.on('error', reject);
     });
     req.on('error', reject);
-    req.setTimeout(30_000, () => {
-      req.destroy(new Error(`Request timed out after 30s: ${url}`));
+    req.setTimeout(60_000, () => {
+      req.destroy(new Error(`Request timed out after 60s: ${url}`));
     });
   });
 }
@@ -212,65 +239,77 @@ function httpsGetText(url, redirectsLeft = 5) {
 // ---------------------------------------------------------------------------
 
 async function findRelease() {
-  // GitHub's release-by-tag API: GET /repos/{owner}/{repo}/releases/tags/{tag}
+  // GitHub release assets follow a stable, predictable URL pattern:
+  //   https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>
+  //
+  // Constructing the URL directly (instead of looking it up via the
+  // GitHub Releases API) bypasses the API rate limit entirely — the
+  // asset CDN doesn't have the same 60/hr cap as api.github.com, and
+  // asset URLs are deterministic per (repo, tag, asset-name) triple.
+  //
+  // If the URL 404s, fall back to the API for a richer error message
+  // (so we can tell apart "release missing" vs "asset missing" vs
+  // "auth needed" instead of a generic 404).
+  const downloadUrl = `${RELEASE_BASE}/releases/download/${tag}/${ASSET_BASENAME}`;
+  debug(`Constructed asset URL: ${downloadUrl}`);
+  return downloadUrl;
+}
+
+/**
+ * Optional API-based diagnostic. Called only when the direct asset
+ * download 404s, to produce a more helpful error message (distinguish
+ * "release missing" from "asset missing" from "wrong repo").
+ */
+async function diagnoseRelease404(downloadErr) {
   const apiUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/tags/${tag}`;
-  debug(`Looking up release via ${apiUrl}`);
-  let body;
+  const authHeader = githubAuthHeader();
+  debug(`Diagnosing 404 via ${apiUrl} (auth=${authHeader ? 'yes' : 'no'})`);
   try {
-    body = await httpsGetText(apiUrl);
-  } catch (e) {
-    // Improve the most common failure: 404 = release not found yet.
-    if (/HTTP 404/.test(e.message)) {
+    const body = await httpsGetText(apiUrl, { headers: authHeader || {} });
+    const release = JSON.parse(body);
+    const assets = (release.assets || []).map((a) => a.name);
+    const assetList = assets.length ? assets.join(', ') : '(none)';
+    fail(
+      `GitHub release ${tag} exists but does NOT contain the expected asset "${ASSET_BASENAME}".\n` +
+      `Assets found in this release: ${assetList}\n\n` +
+      `Possible causes:\n` +
+      `  (a) The release was published before the postinstall pattern was added (pre-v1.5.14).\n` +
+      `      Upgrade to a version whose release has ${ASSET_BASENAME} + ${ASSET_BASENAME}${SHA_SUFFIX}.\n` +
+      `  (b) The release.yml workflow's upload step failed. Check the latest release run at\n` +
+      `      https://github.com/${REPO_OWNER}/${REPO_NAME}/actions/workflows/release.yml.\n` +
+      `  (c) You're consuming from a fork or mirror. Set RNMP_RELEASE_BASE.\n\n` +
+      `Underlying error: ${downloadErr}`
+    );
+  } catch (apiErr) {
+    if (/HTTP 404/.test(apiErr.message)) {
       fail(
-        `GitHub release ${tag} does not exist yet.\n` +
-        `This means the release was either never published, OR was published but the\n` +
-        `tag/asset is on a different repo (fork, mirror). Check:\n` +
+        `GitHub release ${tag} does not exist on ${RELEASE_BASE}.\n` +
+        `This means the release was never published, OR was published but the tag is on\n` +
+        `a different repo (fork, mirror). Check:\n` +
         `  - ${RELEASE_BASE}/releases/tag/${tag}\n\n` +
         `If you're consuming from a fork or private mirror, set RNMP_RELEASE_BASE to\n` +
-        `the base URL of your mirror (e.g. https://your-mirror.example.com/owner/repo).`
+        `the base URL of your mirror (e.g. https://your-mirror.example.com/owner/repo).\n\n` +
+        `Underlying error: ${downloadErr}`
       );
     }
-    if (/HTTP 403/.test(e.message)) {
+    if (/HTTP 403/.test(apiErr.message)) {
       fail(
-        `GitHub API returned 403 (rate limit or auth required) for ${apiUrl}.\n` +
-        `Unauthenticated requests are limited to 60/hour per IP. If this is happening\n` +
-        `during CI, either:\n` +
-        `  - Wait a few minutes and retry.\n` +
-        `  - Use an authenticated request via the GH_TOKEN env var (NOT implemented yet).\n` +
-        `  - Pre-stage the binaries via a different mechanism (mount, cache, manual\n` +
-        `    copy) and set SKIP_DOWNLOAD_NATIVE=1.\n\n` +
-        `Underlying error: ${e.message}`
+        `Both the direct asset URL AND the GitHub API returned errors.\n` +
+        `  Asset URL error: ${downloadErr}\n` +
+        `  API error:       ${apiErr.message}\n\n` +
+        `The API 403 is likely the 60/hr unauthenticated rate limit (api.github.com).\n` +
+        `Set GH_TOKEN (or GITHUB_TOKEN) to a personal access token to raise the limit\n` +
+        `to 5000/hr. Authenticated requests use the token ONLY against api.github.com —\n` +
+        `never against the asset CDN, which doesn't need auth.`
       );
     }
-    throw e;
-  }
-  let release;
-  try {
-    release = JSON.parse(body);
-  } catch (e) {
-    fail(`Failed to parse GitHub API response for tag ${tag}. ` +
-      `This usually means the response was an error page (e.g. rate limit). ` +
-      `Response starts with: ${body.slice(0, 200)}`);
-  }
-  const assets = (release.assets || []).map((a) => a.name);
-  debug(`Release ${tag} has ${assets.length} assets: ${assets.join(', ')}`);
-  const expectedAsset = ASSET_BASENAME;
-  if (!assets.includes(expectedAsset)) {
     fail(
-      `GitHub release ${tag} does not contain the expected asset "${expectedAsset}".\n` +
-      `Assets found: ${assets.length ? assets.join(', ') : '(none)'}\n\n` +
-      `This usually means one of:\n` +
-      `  (a) The release was published before the postinstall pattern was added (pre-v1.5.14).\n` +
-      `      The fix is to upgrade to a version that has the postinstall + matching asset\n` +
-      `      (check ${RELEASE_BASE}/releases/tag/${tag}).\n` +
-      `  (b) The release.yml workflow's upload step failed silently. Check the latest release\n` +
-      `      workflow run at https://github.com/${REPO_OWNER}/${REPO_NAME}/actions/workflows/release.yml.\n` +
-      `  (c) You're installing from a fork or local checkout that doesn't have a GitHub Release\n` +
-      `      for this version. Set RNMP_RELEASE_BASE to your fork's release URL.`
+      `Direct asset URL 404ed and the API diagnostic also failed:\n` +
+      `  Asset URL: ${downloadErr}\n` +
+      `  API:       ${apiErr.message}\n\n` +
+      `Try setting GH_TOKEN / GITHUB_TOKEN to a personal access token, or wait and retry.`
     );
   }
-  const asset = release.assets.find((a) => a.name === expectedAsset);
-  return asset.browser_download_url;
 }
 
 // ---------------------------------------------------------------------------
@@ -286,16 +325,27 @@ async function downloadAndExtract() {
   const shaPath = path.join(tmpDir, ASSET_BASENAME + SHA_SUFFIX);
 
   try {
-    // 1) Download the tarball
+    // 1) Download the tarball via the direct asset URL. The asset CDN
+    //    (S3-backed) has much higher rate limits than api.github.com,
+    //    so we avoid the API lookup for the common path.
     debug(`Downloading ${downloadUrl} -> ${tarPath}`);
-    await httpsGetStream(downloadUrl, tarPath);
+    try {
+      await httpsGetStream(downloadUrl, tarPath);
+    } catch (e) {
+      // If the direct URL 404s, fall back to the API for a richer
+      // error message that distinguishes "release missing" vs
+      // "asset missing" vs "rate-limited".
+      if (/HTTP 404/.test(e.message)) {
+        await diagnoseRelease404(e.message);
+      }
+      throw e;
+    }
     const tarSize = fs.statSync(tarPath).size;
     log(`Downloaded ${(tarSize / 1024 / 1024).toFixed(1)} MB tarball.`);
 
     // 2) Download the companion .sha256 file from the same release.
     //    GitHub's asset URLs are deterministic — we can swap the filename
-    //    in the URL. If that fails (e.g. CDN doesn't expose it), fall
-    //    back to the GitHub API's `digest` field on the asset object.
+    //    in the URL. The asset CDN doesn't need auth.
     const shaUrl = downloadUrl.replace(/\/[^/]+$/, `/${ASSET_BASENAME}${SHA_SUFFIX}`);
     debug(`Downloading ${shaUrl} -> ${shaPath}`);
     let expectedSha;
