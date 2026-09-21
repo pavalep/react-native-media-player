@@ -8,6 +8,21 @@ apply plugin: "org.jetbrains.kotlin.android"
 // Harmless on old arch — the plugin still loads.
 apply plugin: "com.facebook.react"
 
+// SDK versions — prefer the consumer app's rootProject.ext (the normal
+// case when the lib is a subproject of MOBILE_APP_REACT_NATIVE), but fall
+// back to RN 0.86 defaults so the lib compiles standalone (CI gates, smoke
+// tests). Matches MOBILE_APP_REACT_NATIVE/android/build.gradle's
+// `rootProject.ext { ... }` block values.
+ext {
+    def consumerCompileSdk = rootProject.ext.has('compileSdkVersion') ? rootProject.ext.compileSdkVersion : null
+    def consumerNdk         = rootProject.ext.has('ndkVersion')         ? rootProject.ext.ndkVersion         : null
+    compileSdkVersion = consumerCompileSdk ?: 35
+    minSdkVersion     = rootProject.ext.find('minSdkVersion')     ?: 24
+    targetSdkVersion  = rootProject.ext.find('targetSdkVersion')  ?: 35
+    buildToolsVersion = rootProject.ext.find('buildToolsVersion') ?: '35.0.0'
+    ndkVersion        = consumerNdk ?: '27.1.12297006'
+}
+
 /**
  * React Native MediaPlayer — Android library module
  *
