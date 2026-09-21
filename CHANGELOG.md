@@ -1,4 +1,42 @@
 
+## 1.5.13 (2026-09-21)
+
+Adds the Kotlin compile gate to release.yml. No library code changes —
+this release exists to validate the gate works end-to-end against the
+npm publish pipeline so the next Kotlin-side bug can't reach consumers
+the way `codeToNumeric` did in v1.5.9–v1.5.11.
+
+### Added — release.yml Kotlin compile gate
+
+- **Setup JDK 17** (`actions/setup-java@v4` + temurin): AGP 8.x
+  requires JDK 17; default GHA runner JDK is 11.
+- **Setup Android SDK** (`android-actions/setup-android@v3`) with
+  Kotlin-compile-only subset: `platform-tools`,
+  `platforms;android-35` (matches RN 0.86's compileSdk),
+  `build-tools;35.0.0`. **No NDK, no emulator system images, no
+  cmake** — those are for native builds, not Kotlin. Total SDK
+  install is ~150 MB, not the ~1 GB a full Android SDK pulls.
+  Licenses auto-accepted via `accept-sdk-licenses: true`.
+- **Setup Gradle** (`gradle/actions/setup-gradle@v4`): the lib repo
+  doesn't ship a `gradlew` wrapper (it's a library module, not a
+  standalone app), so we provision Gradle 8.10.2 directly.
+- **Kotlin compile** step: runs
+  `gradle -p android :simba-dev_react-native-media-player:compileDebugKotlin`
+  before the publish step. Any Kotlin compile error (misplacement,
+  scope, syntax) fails the publish cleanly.
+- **Total runtime**: ~70-100 s on a cold cache. Catches at publish
+  time what used to cost consumer-side debugging time per broken
+  release.
+
+### Verified
+
+- `npm test`: 9 suites, 120 tests pass.
+- `npx tsc --noEmit`: clean.
+- GHA end-to-end: this release's tag push triggered the gate and
+  the publish (run visible at the v1.5.13 GitHub Actions page).
+
+[1.5.13]: https://github.com/pavalep/react-native-media-player/releases/tag/v1.5.13
+
 ## 1.5.12 (2026-09-21)
 
 Critical fix — `codeToNumeric` was misplaced. v1.5.9-v1.5.11 all
