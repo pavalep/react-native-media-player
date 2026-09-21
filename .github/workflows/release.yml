@@ -247,14 +247,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Tar from android/src/main/ so the archive contains
-          # `jniLibs/<abi>/...` (matching the path the consumer's CMake
-          # and the postinstall script's REQUIRED_ABIS probe expect).
-          tar -czf jniLibs.tar.gz -C android/src/main jniLibs
+          # IMPORTANT: tar with the FULL relative path `android/src/main/jniLibs`
+          # (not `-C android/src/main jniLibs`) so the archive's internal paths
+          # are `android/src/main/jniLibs/<abi>/libmpv.so`. When the postinstall
+          # script on the consumer side runs `tar -xzf jniLibs.tar.gz` from
+          # `node_modules/@simba-dev/react-native-media-player/`, the files land
+          # at `node_modules/.../android/src/main/jniLibs/<abi>/libmpv.so` —
+          # the exact path the consumer's CMakeLists.txt probes for at
+          # configure time (`cpp/../jniLibs/<abi>/libmpv.so`).
+          #
+          # If we'd used `tar -C android/src/main jniLibs` instead, internal
+          # paths would be `jniLibs/<abi>/libmpv.so` and files would extract
+          # to `node_modules/.../jniLibs/<abi>/libmpv.so` — one directory
+          # short of where CMake looks, producing the
+          # "libmpv.so not found at android/src/main/jniLibs/..."
+          # error during the consumer's gradle build.
+          tar -czf jniLibs.tar.gz android/src/main/jniLibs
           SHA=$(sha256sum jniLibs.tar.gz | awk '{print $1}')
           printf '%s  jniLibs.tar.gz\n' "$SHA" > jniLibs.tar.gz.sha256
           echo "jniLibs.tar.gz size: $(stat -c%s jniLibs.tar.gz) bytes"
           echo "jniLibs.tar.gz sha256: ${SHA}"
+          echo "---first 5 internal paths (sanity check)---"
+          tar -tzf jniLibs.tar.gz | head -5
           cat jniLibs.tar.gz.sha256
 
       - name: Upload jniLibs.tar.gz as workflow artifact
