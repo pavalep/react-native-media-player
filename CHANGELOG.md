@@ -1,4 +1,38 @@
 
+## 1.5.12 (2026-09-21)
+
+Critical fix — `codeToNumeric` was misplaced. v1.5.9-v1.5.11 all
+shipped with the helper **inside `internal object JsonUtil`** (the
+file's last top-level construct) instead of inside `MpvBridgeModule`,
+so any consumer that compiled the lib hit
+`Unresolved reference 'codeToNumeric'` at lines 1831 and 1835 of
+`MpvBridgeModule.kt` (where `emitErrorEvent` calls it). The local
+`gradlew :app:installDebug` in the SIMBA consumer surfaced this —
+it never went through the lib's `npm test` because `npm test` only
+runs the JS test suite, not Kotlin compilation.
+
+### Fixed
+
+- `codeToNumeric` moved into `MpvBridgeModule` class (was inside
+  `JsonUtil` due to a `b32f7ae` commit-position mistake — the diff
+  hunk header was `@@ ... internal object JsonUtil {` which placed
+  the new function inside the closing brace of `JsonUtil`).
+- File structure verified: `class MpvBridgeModule` (lines 28-1968)
+  now contains `codeToNumeric` as a private member. `JsonUtil` is
+  a separate top-level object starting at line 1973.
+
+### Lesson
+
+- Lib CI didn't catch this because the only CI gate is `npm test`
+  (JS-only) + `tsc --noEmit`. Kotlin compile happens at consumer
+  build time, after `npm publish`. Recommendation for future lib
+  versions: add a `gradlew :simba-dev_react-native-media-player:compileDebugKotlin`
+  step to release.yml's "Typecheck" phase so a syntax-error or
+  misplaced-token in the Kotlin source fails the publish before it
+  ships to consumers.
+
+[1.5.12]: https://github.com/pavalep/react-native-media-player/releases/tag/v1.5.12
+
 ## 1.5.11 (2026-09-18)
 
 End-to-end validated GitHub Actions auto-publish. The workflow has

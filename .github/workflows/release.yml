@@ -116,6 +116,25 @@ jobs:
       - name: Test
         run: npm test -- --ci
 
+      # Kotlin compile gate. Added after v1.5.9-v1.5.11 shipped with
+      # `codeToNumeric` misplaced inside `JsonUtil` instead of
+      # `MpvBridgeModule` — surfaced only at consumer gradle build
+      # time, never in the lib's own CI (which only ran `npm test`).
+      # This step compiles the lib's Kotlin sources in isolation so a
+      # misplacement like that fails the publish before it ships.
+      # Uses the JDK + Gradle already on the runner; no extra setup.
+      - name: Kotlin compile (lib in isolation)
+        run: |
+          cd android
+          # Compile only this lib module — avoids pulling the consumer
+          # app's build context. Uses the gradle wrapper from the
+          # lib repo (we're already in it via `cd android`).
+          ./gradlew :simba-dev_react-native-media-player:compileDebugKotlin --no-daemon --console=plain 2>&1 | tail -50
+          if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+            echo "::error::Kotlin compilation failed. Lib code may have a misplacement or syntax error. See log above."
+            exit 1
+          fi
+
       - name: Verify package contents (dry-run)
         run: npm pack --dry-run
 
