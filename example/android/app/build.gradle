@@ -1,0 +1,61 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.facebook.react"
+
+/**
+ * Minimal React Native example app — exists only to compile the lib's
+ * Kotlin sources via Gradle. No JS bundle, no resources beyond the
+ * minimum, no consumer-specific config. The lib is auto-linked via
+ * `autolinkLibrariesWithApp()` below.
+ */
+react {
+    autolinkLibrariesWithApp()
+}
+
+def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
+
+android {
+    ndkVersion rootProject.ext.ndkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
+    compileSdk rootProject.ext.compileSdkVersion
+
+    namespace "com.simba.example"
+    defaultConfig {
+        applicationId "com.simba.example"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "0.1.0"
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            // Debug-signed for the example only (we don't ship this).
+            signingConfig signingConfigs.debug
+            minifyEnabled false
+        }
+    }
+}
+
+dependencies {
+    // Workaround: react-native-media-player declares a `debugImplementation`
+    // dep on `com.squareup.leakcanary:leakcanary-android:3.0.0-alpha-8`
+    // (heap-monitor for devs). That version isn't published to Maven
+    // Central / Google Maven / JitPack, so the example's assembleDebug
+    // fails to resolve it. We don't ship heap-monitoring from the example
+    // app, so exclude the dep.
+    configurations.all {
+        exclude group: 'com.squareup.leakcanary', module: 'leakcanary-android'
+    }
+
+    implementation("com.facebook.react:react-android")
+
+    if (hermesEnabled.toBoolean()) {
+        implementation("com.facebook.react:hermes-android")
+    } else {
+        implementation jscFlavor
+    }
+}

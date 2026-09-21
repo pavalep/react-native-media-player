@@ -1,0 +1,17 @@
+pluginManagement { includeBuild("../node_modules/@react-native/gradle-plugin") }
+plugins { id("com.facebook.react.settings") }
+extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
+rootProject.name = 'SimbaMediaPlayerExample'
+
+include ':app'
+includeBuild('../node_modules/@react-native/gradle-plugin')
+
+// Manually include the lib. The example app's `autolinkLibrariesFromCommand()`
+// above would normally add this, but in CI the autolinker can't find the
+// lib's `react-native.config.js` reliably (it walks node_modules looking for
+// known patterns; the lib's `@simba-dev/react-native-media-player` is a
+// scoped package and the discovery sometimes misses). Manual include is
+// the deterministic, debug-friendly path.
+include ':simba-dev_react-native-media-player'
+project(':simba-dev_react-native-media-player').projectDir =
+    new File(rootProject.projectDir, '../node_modules/@simba-dev/react-native-media-player/android')

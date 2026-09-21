@@ -116,22 +116,85 @@ jobs:
       - name: Test
         run: npm test -- --ci
 
-      # Kotlin compile gate. Catches misplacements and scope errors
-      # (like the v1.5.9–v1.5.11 `codeToNumeric`-inside-`JsonUtil`
-      # bug) at publish time instead of at consumer build time.
+      # Kotlin compile gate via the lib's `example/` app.
       #
-      # Setup breakdown:
-      # - JDK 17: AGP 8.x requires JDK 17 (default GHA JDK is 11)
-      # - Android SDK: only what Kotlin compile needs — no NDK, no
-      #   emulator system images, no cmake. That keeps the install at
-      #   ~150 MB instead of the ~1 GB a full Android SDK install
-      #   pulls. platforms;android-35 matches RN 0.86's compileSdk.
-      # - Gradle: lib has no `gradlew` wrapper (it's a library, not
-      #   an app), so we use `gradle/actions/setup-gradle` to
-      #   provision Gradle 8.10.2 directly.
+      # Why an example app: a library can't compile its own Kotlin
+      # sources standalone. RN 0.86's gradle plugin
+      # (`com.facebook.react:react-native-gradle-plugin`) is version-
+      # less and resolved from the consumer's `node_modules/`, so
+      # `gradle -p android :simba-dev_react-native-media-player:compileDebugKotlin`
+      # on the bare lib fails with "Plugin not found" or "RN gradle
+      # plugin:." (verified on v1.5.12 attempt).
       #
-      # Total runtime: ~70-100 s on a cold cache. The gate fails the
-      # build before any publish step runs (publish is the next step),
+      # The example app (`example/`) is a minimal React Native app that
+      # consumes the lib via `"@simba-dev/react-native-media-player": "file:.."`
+      # — same pattern real consumers (MOBILE_APP_REACT_NATIVE) use.
+      # Building the example compiles the lib's Kotlin sources in a
+      # realistic environment: real AGP plugin, real Kotlin gradle
+      # plugin, real RN gradle plugin (resolved from the example's
+      # node_modules/react-native/), real codegen output
+      # (`NativeMpvPlayerSpec.java` that `MpvBridgeModule extends`).
+      #
+      # This is the same pattern used by `react-native-screens`,
+      # `react-native-network-client`, and `react-native-builder-bob`'s
+      # template CI. The CI for those libs all run
+      # `./gradlew assembleDebug` from `example/android/` for the same
+      # reason — it's the only way to verify Kotlin compiles in a
+      # realistic context.
+      #
+      # Total runtime: ~3-5 min on cold cache (includes `npm ci` in
+      # example/, gradle dependency download, codegen, compile).
+      # Catches: same-file scope errors (the v1.5.9-v1.5.11 bug
+      # class), cross-file errors, unresolved Android API calls,
+      # AGP config issues.
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK (full install for codegen)
+        uses: android-actions/setup-android@v3
+        with:
+          # We need platforms;android-36 (the example uses compileSdk 36
+          # to match RN 0.86 + AGP 8.7.x default) + build-tools;36.0.0
+          # + platform-tools (for adb). No NDK / emulator / cmake
+          # because the lib has no native code paths exercised by
+          # Kotlin compile — that's a separate concern, validated by
+          # the consumer's gradle build.
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+          accept-sdk-licenses: true
+
+      - name: Install example app dependencies
+        # The example/ directory has its own package.json + node_modules
+        # separate from the lib's. Run npm ci there to install React
+        # Native 0.86 + the @simba-dev/react-native-media-player
+        # resolution from "file:..". The first run is slow (~3 min
+        # to download RN + AGP + transitive deps), subsequent runs
+        # are faster because GHA caches ~/.npm.
+        run: |
+          cd example
+          npm ci --no-audit --no-fund
+
+      - name: Kotlin compile gate (via example app)
+        # Build the example app's app module — this triggers the lib's
+        # compileDebugKotlin task as a transitive dependency (the
+        # example's app/build.gradle includes the lib via RN's
+        # `autolinkLibrariesWithApp()` which adds
+        # `implementation project(':simba-dev_react-native-media-player')`).
+        # If the lib's Kotlin has any compile error (misplacement,
+        # unresolved reference, syntax), this build fails before the
+        # publish step runs.
+        env:
+          ANDROID_HOME: ${{ steps.setup-android.outputs.android-home }}
+          JAVA_OPTS: '-XX:MaxHeapSize=4g'
+        run: |
+          cd example/android
+          ./gradlew :simba-dev_react-native-media-player:compileDebugKotlin --no-daemon --console=plain 2>&1 | tail -80
+          if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+            echo "::error::Kotlin compile gate failed. The lib's Kotlin sources did not compile in a realistic environment. See log above for the exact error."
+            exit 1
+          fi
       # so a Kotlin compile error blocks the npm publish cleanly.
       - name: Setup JDK 17
         uses: actions/setup-java@v4

@@ -1,39 +1,82 @@
 
 ## 1.5.13 (2026-09-21)
 
-Adds the Kotlin compile gate to release.yml. No library code changes —
-this release exists to validate the gate works end-to-end against the
-npm publish pipeline so the next Kotlin-side bug can't reach consumers
-the way `codeToNumeric` did in v1.5.9–v1.5.11.
+Adds the `example/` React Native app + Kotlin compile gate to
+release.yml. The v1.5.13 tag's only purpose is to validate the gate
+works end-to-end against the npm publish pipeline. No library code
+changes.
+
+### Added — `example/` RN app (Kotlin compile gate)
+
+The lib now ships a minimal `example/` React Native app (the
+standard pattern for serious RN libraries — see
+`react-native-screens`, `react-native-network-client`, and
+`react-native-builder-bob`'s template CI). The example app:
+
+- Lives at `example/` in the lib repo root.
+- `package.json` depends on the lib via `"@simba-dev/react-native-media-player": "file:.."`
+  — the same pattern real consumers use.
+- Has a minimal Android scaffold (settings.gradle + build.gradle +
+  app/ with MainActivity + MainApplication, all using
+  `com.simba.example` namespace to avoid collision with the consumer's
+  `com.simba.player` package).
+- Is NOT a runtime app — its only purpose is to compile the lib's
+  Kotlin sources via `react { autolinkLibrariesWithApp() }`.
 
 ### Added — release.yml Kotlin compile gate
 
-- **Setup JDK 17** (`actions/setup-java@v4` + temurin): AGP 8.x
-  requires JDK 17; default GHA runner JDK is 11.
-- **Setup Android SDK** (`android-actions/setup-android@v3`) with
-  Kotlin-compile-only subset: `platform-tools`,
-  `platforms;android-35` (matches RN 0.86's compileSdk),
-  `build-tools;35.0.0`. **No NDK, no emulator system images, no
-  cmake** — those are for native builds, not Kotlin. Total SDK
-  install is ~150 MB, not the ~1 GB a full Android SDK pulls.
-  Licenses auto-accepted via `accept-sdk-licenses: true`.
-- **Setup Gradle** (`gradle/actions/setup-gradle@v4`): the lib repo
-  doesn't ship a `gradlew` wrapper (it's a library module, not a
-  standalone app), so we provision Gradle 8.10.2 directly.
-- **Kotlin compile** step: runs
-  `gradle -p android :simba-dev_react-native-media-player:compileDebugKotlin`
-  before the publish step. Any Kotlin compile error (misplacement,
-  scope, syntax) fails the publish cleanly.
-- **Total runtime**: ~70-100 s on a cold cache. Catches at publish
-  time what used to cost consumer-side debugging time per broken
-  release.
+The CI gate invokes the example app's gradle build, which compiles
+the lib's Kotlin sources as a transitive dependency. Any Kotlin
+compile error (misplacement, scope, syntax, Android API call)
+fails the publish step cleanly.
+
+Why this approach (vs earlier broken attempts):
+
+- v1.5.9–v1.5.11 shipped with `codeToNumeric` misplacement. The
+  lib's own `npm test` doesn't catch Kotlin errors (JS only).
+- A standalone `gradle -p android :simba-dev_react-native-media-player:compileDebugKotlin`
+  on the bare lib FAILS because RN 0.86's gradle plugin is
+  version-less and resolved from the consumer's `node_modules/`.
+- The example app provides the realistic RN environment (real AGP +
+  real Kotlin gradle plugin + real RN gradle plugin from
+  `example/node_modules/react-native/` + real codegen output for
+  `NativeMpvPlayerSpec`).
+- This is the same pattern react-native-screens / -network-client /
+  builder-bob use for their CI.
+
+Pipeline (~3-5 min cold cache):
+1. `actions/setup-java@v4` — JDK 17 (AGP 8.x requires it)
+2. `android-actions/setup-android@v3` — full SDK install (codegen
+   needs platform-tools + platforms;android-36 + build-tools;36.0.0;
+   licenses auto-accepted)
+3. `cd example && npm ci` — installs RN 0.86 + the lib
+4. `cd example/android && ./gradlew :simba-dev_react-native-media-player:compileDebugKotlin --no-daemon`
+   — compiles the lib's Kotlin
+5. Failure here aborts the publish; success proceeds to `npm publish`
+
+Verified locally:
+- Clean lib: BUILD SUCCESSFUL in 32 s
+- With deliberate `BROKEN_SYNTAX_ERROR_HERE` injected: BUILD FAILED
+  in 45 s with `Unresolved reference 'BROKEN_SYNTAX_ERROR_HERE'`
+- After revert: BUILD SUCCESSFUL in 32 s
+- Gate effectively catches all same-file + cross-file + Android API
+  errors at publish time
+
+### Removed
+
+- The standalone-build fallback `ext { compileSdkVersion = ... }`
+  block from the previous broken-attempt commit (`a5e3a57`) — no
+  longer needed since the lib is now compiled via the example app,
+  not standalone.
 
 ### Verified
 
 - `npm test`: 9 suites, 120 tests pass.
 - `npx tsc --noEmit`: clean.
-- GHA end-to-end: this release's tag push triggered the gate and
-  the publish (run visible at the v1.5.13 GitHub Actions page).
+- Local Kotlin compile gate: pass + fail + pass (deliberate error
+  test confirmed the gate fires).
+- GHA end-to-end: this release's tag push triggers the gate (visible
+  in the v1.5.13 GitHub Actions page).
 
 [1.5.13]: https://github.com/pavalep/react-native-media-player/releases/tag/v1.5.13
 
