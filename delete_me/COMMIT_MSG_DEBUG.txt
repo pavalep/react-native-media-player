@@ -1,0 +1,17 @@
+ci(debug): add NPM_TOKEN presence check before publish step
+
+Diagnostic step that prints:
+- whether the NPM_TOKEN secret is set (exit 1 if empty)
+- token length (npm automation tokens are 36 chars)
+- first 4 + last 4 chars (fingerprint for cross-checking against .npmrc,
+  without exposing the token value itself)
+
+Runs immediately before the "Publish to npm" step so a missing or
+truncated token fails fast with a clear message instead of the opaque
+npm 401 we've been seeing. Length sanity check (36-60) catches
+copy-paste errors like trailing newlines, leading whitespace, or only
+half the token pasted.
+
+This is a temporary debugging step — once the auth issue is resolved,
+remove it. Leave it in for now since it costs <1s and provides
+insurance for the next token rotation.

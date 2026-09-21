@@ -1,0 +1,20 @@
+ci(release): bind release job to production environment
+
+The NPM_TOKEN secret is configured at the production environment
+scope (Settings → Environments → production → Secrets), not the
+repo scope. Without `environment: production` on the job, the
+workflow only sees repo-scoped secrets and the Debug step reports
+NPM_TOKEN as empty even though the secret exists in the UI.
+
+Adding `environment: production` makes the job read environment-
+scoped secrets. The `url:` field on the environment block makes the
+"View deployment" link in the run header point at the npm package
+page.
+
+Updated the Debug step's error message to mention BOTH the repo-
+scope and env-scope URLs, so future token-misconfig debugging is
+faster.
+
+No required-reviewer is configured for the production environment
+(unlike promote.yml), so manual runs don't need approval — anyone with
+workflow_dispatch permission can trigger.

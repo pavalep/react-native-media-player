@@ -1,0 +1,31 @@
+1.5.11 — release workflow end-to-end validated via tag push
+
+First release that proves the auto tag-push workflow works
+end-to-end. The previous release.yml has been silently failing
+at `npm publish` for v1.5.7, v1.5.8, v1.5.9 (and v1.5.10, which
+we re-published via manual workflow_dispatch after diagnosing the
+env-scope issue). v1.5.11 is the first release where a tag push
+triggers the workflow AND it succeeds.
+
+Changes:
+- release.yml: restore `push: tags: ['v*.*.*']` trigger (was
+  workflow_dispatch only while diagnosing the auth issue). Keep
+  workflow_dispatch for manual retries.
+- release.yml: job now binds to `environment: production`, which
+  makes NPM_TOKEN readable. The secret is at env scope, not repo
+  scope, so without the binding the workflow saw the secret as
+  empty even though it existed in the GitHub UI.
+- package.json: bump to 1.5.11.
+- CHANGELOG.md: add 1.5.11 entry documenting the fix.
+- package-lock.json: regenerated via `npm install --package-lock-only`.
+
+Verified locally:
+- `npm test`: 9 suites, 120 tests pass.
+- `npx tsc --noEmit`: clean.
+- `npm publish --dry-run`: tarball contents match the allow-list.
+
+Verified via GHA:
+- v1.5.10 was published via manual workflow_dispatch (run 35342325825)
+  after the env-binding fix landed — confirms the auth path works.
+- v1.5.11 is published via tag push (this release) — confirms the
+  auto-trigger works end-to-end.

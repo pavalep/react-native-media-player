@@ -1,0 +1,50 @@
+ci(release): manual workflow_dispatch only — no more auto tag push
+
+The previous release.yml triggered on `push: tags: ['v*.*.*']`, which
+caused two problems:
+
+1. It raced with local `npm publish` from the dev machine, causing
+   split-brain npm dist-tags in past releases. The user has been
+   publishing locally for v1.5.7, v1.5.8, v1.5.9, and the workflow
+   has been silently failing on tag push for the same releases
+   (visible in the GitHub Actions run history).
+
+2. The tag-pushed run failed at `npm publish` with an opaque 401.
+   Adding a Debug NPM_TOKEN presence step (in the previous commit)
+   surfaced that the secret is empty in the workflow env — even
+   though the secret exists in the GitHub UI with "Last updated: now".
+   The user can verify this themselves by re-triggering.
+
+This commit changes the trigger from auto-tag-push to manual
+`workflow_dispatch` only. The maintainer runs the workflow from the
+GitHub UI with a `version` input (e.g. "1.5.10"), and the workflow:
+
+  1. Resolves + verifies the input matches package.json
+  2. Runs typecheck + lint + test + dry-run pack (unchanged)
+  3. Debug NPM_TOKEN presence (cheap insurance; ~1 s)
+  4. Publishes to npm (idempotent — skips if version exists)
+  5. Creates the git tag if it doesn't exist (so a local-only bump
+     without `git push origin vX.Y.Z` still works)
+  6. Creates the GitHub Release
+
+Other changes:
+- `npm_dist_tag` input added (default `latest`; pass `next` / `beta`
+  for pre-releases). Pre-releases are marked as such on GitHub.
+- Concurrency group changed to `release-manual` (single in-flight).
+- Removed `ref: ${{ github.ref }}` from checkout — no longer needed
+  since workflow_dispatch always runs on main.
+- Removed the old "Verify tag matches package.json version" step that
+  used GITHUB_REF#refs/tags/v prefix-strip (didn't make sense once
+  the trigger isn't a tag push anyway).
+
+End-to-end validation: v1.5.10 was already bumped in package.json +
+CHANGELOG and the v1.5.10 tag is at b15d983. To validate, run the
+workflow from the GitHub UI: Actions → "Release (publish to npm +
+create GitHub Release)" → Run workflow → version: "1.5.10".
+
+Verified locally:
+- YAML parses (GitHub Actions schema)
+- All step references are well-formed
+- `npm publish --tag=latest` is the only publish command (idempotent
+  check via `npm view` before publish)
+- No token values are logged anywhere (only length + head + tail)

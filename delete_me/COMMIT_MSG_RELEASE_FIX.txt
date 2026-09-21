@@ -1,0 +1,38 @@
+fix(ci): consolidate to a single release workflow + verify step design fix
+
+Two changes, both correctness fixes the existing release.yml has been
+missing since v1.5.7.
+
+1. Delete .github/workflows/publish.yml (added in error — it duplicated
+   release.yml's publish half). With two workflows both triggering on
+   tag push and both calling `npm publish`, we'd risk split-brain npm
+   dist-tags on future releases. release.yml is the canonical
+   publish-and-create-release pipeline; publish.yml had no reason to
+   exist alongside it.
+
+2. Patch .github/workflows/release.yml with two surgical fixes:
+   a. Add `ref: ${{ github.ref }}` to the checkout step. Without it,
+      a tag push checks out main instead of the tagged commit. The
+      current "Verify tag matches package.json version" step happens
+      to pass anyway because it reads GITHUB_REF (env var), not files,
+      but any future file-based step would silently read main's
+      package.json (1.5.10 from the v1.5.10 tag-pushed run; would
+      have been 1.5.9 from main otherwise). Defensive.
+   b. Wrap "Verify tag matches package.json version" in
+      `if: startsWith(github.ref, 'refs/tags/')`. The bash derives
+      TAG_VERSION by prefix-stripping `refs/tags/v` from GITHUB_REF,
+      which only works on tag pushes. For workflow_dispatch,
+      GITHUB_REF = refs/heads/main, prefix doesn't match, output is
+      `refs/heads/main`, mismatch with package.json, exit 1 — every
+      workflow_dispatch would fail at this step regardless of
+      correctness. Skip the step on workflow_dispatch since the verify
+      is meaningless there.
+
+Verified on the v1.5.10 tag push that release.yml was failing at the
+auth step (NPM_TOKEN-related, not the verify step). The verify step
+itself passed for the tag-pushed run; only workflow_dispatch trips on
+it. The auth failure is fixed separately by re-pasting NPM_TOKEN.
+
+The package.json + CHANGELOG.md bump to 1.5.10 from the prior commit
+(f492b69) remains — when the tag is re-pushed, release.yml will
+publish 1.5.10 to npm and create the GitHub Release.

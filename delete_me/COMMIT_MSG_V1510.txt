@@ -1,0 +1,22 @@
+1.5.10 — GitHub Actions auto-publish workflow + publish.yml checkout ref fix
+
+End-to-end GHA verification release. No library code changes — bumping
+the version so we can push a v1.5.10 tag and prove the publish.yml
+workflow + NPM_TOKEN secret work against the live npmjs registry.
+
+Adds:
+- .github/workflows/publish.yml — tag-triggered auto-publish pipeline
+  (npm ci → tsc --noEmit → npm publish → 90s propagation verify)
+- CHANGELOG.md — documents the workflow + the manual NPM_TOKEN setup
+  step + the publish.yml checkout ref bug it would have shipped
+
+Fixes:
+- .github/workflows/publish.yml — actions/checkout@v4 now follows the
+  pushed tag (ref: ${{ github.ref }}) instead of defaulting to main.
+  Without this, `npm publish` would have failed the first time we
+  tagged a version ahead of main.
+
+Verified:
+- 9 jest suites / 120 tests pass
+- npx tsc --noEmit clean
+- GHA workflow runs end-to-end against npmjs (this release)

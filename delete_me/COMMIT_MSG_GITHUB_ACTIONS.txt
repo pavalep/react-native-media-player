@@ -1,0 +1,19 @@
+ci(github): add publish.yml workflow for auto-publish on v*.*.* tag
+
+Triggers on tag push (v*.*.*) OR manual workflow_dispatch.
+- Uses `actions/setup-node@v4` + `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}`
+  for npm auth (no .npmrc on disk needed; .npmrc is gitignored locally so
+  GHA can't read it - relies on the repo secret instead).
+- Runs `npm ci` + `npx tsc --noEmit` gate before publish (catches type
+  errors before tag goes out).
+- Has registry-propagation verify (polls dist-tags.latest up to 90s).
+- Concurrency group: `publish-${{ github.ref }}` to dedupe simultaneous
+  tag pushes.
+- Scoped to `github.repository == 'pavalep/react-native-media-player'`
+  so the same file in the consumer repo (if copied later) is a no-op.
+
+User setup required: add `NPM_TOKEN` (the npm automation token from
+`.npmrc`) to GitHub repo Settings -> Secrets and variables -> Actions.
+
+Local `npm publish` still works for ad-hoc releases; the workflow only
+fires on tag push.

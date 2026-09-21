@@ -1,0 +1,56 @@
+1.5.13 — proper Kotlin compile gate via example/ RN app
+
+Adds a real React Native example app to the lib repo + a working
+Kotlin compile gate in release.yml. Replaces the broken standalone
+build approach (commit a5e3a57's buildscript classpath + ext
+fallbacks) that failed because RN 0.86's gradle plugin is version-
+less and only resolves from a consumer's node_modules.
+
+Why an example app:
+- The lib's own `npm test` only runs the JS suite. The Kotlin compile
+  error that shipped in v1.5.9-v1.5.11 (`codeToNumeric` misplaced
+  inside `internal object JsonUtil`) bypassed that gate and only
+  surfaced at consumer gradle build time.
+- Standalone `gradle -p android :simba-dev_react-native-media-player:compileDebugKotlin`
+  on the bare lib fails because RN 0.86's gradle plugin is version-
+  less and resolved from the consumer's `node_modules/`. Multiple
+  attempts (a5e3a57 + 2449ca3 + cc8ba28) confirmed this.
+- The example app provides a realistic RN environment: real AGP
+  plugin, real Kotlin gradle plugin, real RN gradle plugin (resolved
+  from example/node_modules/react-native/), real codegen output
+  for `NativeMpvPlayerSpec` that `MpvBridgeModule extends`.
+- This is the standard pattern in serious RN libraries —
+  react-native-screens, react-native-network-client, and
+  react-native-builder-bob all use it for their CI.
+
+What's in the commit:
+- `example/android/` — minimal RN 0.86 Android scaffold (settings.gradle,
+  build.gradle, app/build.gradle, MainActivity.kt, MainApplication.kt,
+  AndroidManifest.xml, strings.xml, styles.xml, gradle wrapper).
+  Namespace `com.simba.example` to avoid collision with the consumer's
+  `com.simba.player` package.
+- `example/index.js` — stub RN entry point.
+- `example/package-lock.json` — pinned dep tree for reproducible CI
+  builds.
+- `.github/workflows/release.yml` — replaces the broken standalone gate
+  with a working gate that builds the example app's lib module
+  (5 steps: setup JDK 17, setup Android SDK, npm ci in example/,
+  gradle compileDebugKotlin, fail-fast check on PIPESTATUS).
+- `android/build.gradle` — removes the `ext { compileSdkVersion = ... }`
+  fallback block from a5e3a57 (no longer needed since the lib is now
+  built via the example app, not standalone).
+- `CHANGELOG.md` — describes the proper example/-based gate, the
+  v1.5.9-v1.5.11 bug class motivation, and the local verification
+  results.
+
+Verified locally:
+- Clean lib: BUILD SUCCESSFUL in 32 s
+- With deliberate `BROKEN_SYNTAX_ERROR_HERE` injected: BUILD FAILED
+  in 45 s with `Unresolved reference 'BROKEN_SYNTAX_ERROR_HERE'`
+- After revert: BUILD SUCCESSFUL in 32 s
+- Gate effectively catches all Kotlin compile errors at publish time.
+
+GHA end-to-end:
+- This release's tag push will trigger the gate. If pass, npm
+  publishes v1.5.13. If fail, publish is blocked and the run
+  surfaces the exact compile error.

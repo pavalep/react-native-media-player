@@ -1,0 +1,22 @@
+fix(ci): release.yml inputs.version fallback for tag-push trigger
+
+The "Resolve and verify release version" step was hardcoded to read
+`inputs.version`, which is only populated for workflow_dispatch. On
+a tag push, `inputs.version` is empty, the strip leaves it empty,
+and the step exits 1 with "Input version  does not match package.json
+version 1.5.11".
+
+Three-step fix:
+- "Resolve" now falls back to `GITHUB_REF_NAME` (the pushed tag name)
+  when `inputs.version` is empty.
+- "Publish to npm" now defaults `DIST_TAG` to `latest` if the input
+  is empty (was passed as empty string to `npm publish --tag=`).
+- "Create GitHub Release" now treats empty `npm_dist_tag` as `latest`
+  for the `prerelease` flag (was comparing `'' != 'latest'` which is
+  true, marking the release as prerelease).
+
+Verified via the failed v1.5.11 tag push run 35343023288, which
+failed at the Resolve step in 0 seconds with the empty-input error.
+
+Trigger v1.5.11 re-run: delete remote v1.5.10 + v1.5.11 tags,
+re-push v1.5.11 after this commit lands.

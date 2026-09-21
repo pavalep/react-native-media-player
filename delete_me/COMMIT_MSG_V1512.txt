@@ -1,0 +1,43 @@
+1.5.12 — fix codeToNumeric misplacement (was inside JsonUtil, now MpvBridgeModule)
+
+Critical bug fix. v1.5.9-v1.5.11 all shipped with the `codeToNumeric`
+helper positioned INSIDE the `internal object JsonUtil { ... }` block
+instead of inside `MpvBridgeModule`. As a result:
+
+  - `MpvBridgeModule.emitErrorEvent(...)` calls `codeToNumeric(code)`
+    at lines 1831 and 1835
+  - Kotlin compiler reports: Unresolved reference 'codeToNumeric'
+  - Consumer's `gradlew :simba-dev_react-native-media-player:compileDebugKotlin`
+    fails, blocking APK build
+
+Root cause: the `b32f7ae` (T28.03) commit placed the new function
+using `@@ -1961,4 +1970,34 @@ internal object JsonUtil {` as the
+hunk header, which positioned the addition INSIDE the closing
+brace of `JsonUtil`. Indentation looked right (4 spaces) but the
+function was scoped to `JsonUtil`, not `MpvBridgeModule`.
+
+Why CI didn't catch it: the lib's own CI runs only `npm test` (JS
+suite) + `tsc --noEmit`. Kotlin compile happens at consumer gradle
+build time, AFTER `npm publish`. v1.5.9 was published locally and
+shipped to consumers without ever being Kotlin-compiled by the lib
+maintainer.
+
+Fix:
+- Moved `codeToNumeric` (and its KDoc) into `MpvBridgeModule` class,
+  immediately before its closing brace. File structure now:
+    class MpvBridgeModule(...) : ... { ... codeToNumeric(...) {} }    <- end at line 1968
+    internal object JsonUtil { ... }                                   <- starts at line 1973
+
+Improvement (so this doesn't happen again):
+- Added "Kotlin compile (lib in isolation)" step to release.yml that
+  runs `gradlew :simba-dev_react-native-media-player:compileDebugKotlin`
+  before publishing. Catches any future Kotlin syntax/scope error at
+  publish time, not consumer build time.
+
+Verified:
+- File structure: `codeToNumeric` is now inside `MpvBridgeModule`
+  (verified by grep + line-by-line check).
+- `npm test`: 9 suites, 120 tests pass.
+- `npx tsc --noEmit`: clean.
+- Kotlin compile gate added to release.yml (will verify on this tag's
+  auto-publish run).

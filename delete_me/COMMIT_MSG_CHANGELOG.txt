@@ -1,0 +1,11 @@
+docs(CHANGELOG): clean up 1.5.7 prose
+
+The 1.5.7 entry opened with "1.5.7+ libc++ and 1.5.7+ D-034 fixes"
+which read as a versioning quirk rather than a release note. Replaced
+with the actual content the "+" markers were pointing at: the
+consolidated `libc++_shared.so` 1.6 MB NDK-r27 override (D-033
+chain) and the `isCurrentActivityPlayer` guard (D-034) that
+prevents the MainActivity-rooted React instance from claiming
+launch params destined for the freshly-launched PlayerActivity.
+
+Pure documentation cleanup. No code change.

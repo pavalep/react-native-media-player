@@ -1,0 +1,198 @@
+1.5.8 — D-035 #1-#7 + D-036 + D-039 + D-040 + D-042 + D-043
+
+D-035 (1.5.8): PlayerActivity JS wiring — Promise vs sync LaunchParams RedBox + X doesn't dismiss
+
+V13-V22 shipped with a quiet type lie: Kotlin's
+`MpvBridgeModule.getLaunchParams` is a `@ReactMethod` Promise (async),
+but the TS interface in `MpvPlayerModuleBridge` declared it as a
+sync `LaunchParams | null`. The `useLaunchParams` hook trusted the
+type and stored the Promise in `useState`. Two observable symptoms:
+
+  - `if (launchParams != null)` was true (a Promise is truthy), so
+    consumers went down the "we have params" branch. PlayerActivity
+    rendered `<PlayerRoot />`, but with a Promise as the payload.
+  - `bridge.loadFile(launchParams.uri)` got `undefined` and passed
+    it to Kotlin's `@NonNull String path`, which threw
+    `IllegalArgumentException` at the bridge boundary — a RedBox on
+    every tap-to-card.
+
+D-035 is the consolidated fix for that, plus three more D-035
+companion defects that were caught while instrumenting it:
+
+D-035 #1 — `PlayerProvider` mount effect now calls
+`bridge.initPlayer()` once. Kotlin side is idempotent (`if (nativePtr
+!= 0L) return true`). Without this, `commands.play()` and the new
+`bridge.loadFile(uri)` hit `ensurePtr()` and threw
+`IllegalStateException("MpvPlayerModule not initialized. Call
+initPlayer() first.")`.
+
+D-035 #2 — `hydratePlayerState` filters out the mpv JSON `null`
+sentinel (`if (title && title !== 'null') state.title = title;`).
+mpv serializes "no value" as the literal four-character string
+`"null"`, which was rendering as the header title.
+
+D-035 #3 — `PlayerRoot` calls `bridge.loadFile(uri) +
+bridge.seekAbsolute(startPositionMs / 1000) + bridge.play()` on
+mount so the player doesn't just show controls-over-black. Moved
+into a `useEffect` keyed on `<uri>|<startPositionSec>` so it fires
+exactly once per launch payload (not on every PlayerProvider 1Hz
+state poll — without the useEffect, `loadFile` was firing ~9x per
+400ms after every play state change).
+
+D-035 #4 — `DefaultControls` exposes `onClose?: () => void`.
+`<PlayerRoot>` wires it to `bridge.exitPipAndFinish()`. The X
+button now dismisses `PlayerActivity` cleanly and tears down
+`MpvRenderView` (verified live: `surfaceDestroyed → cleaned up →
+PipActionReceiver unregistered → tearing down PlayerActivity`).
+
+D-035 #5 — `<SimbaPlayerRoot>` reads `useLaunchParams()` ONCE at
+the activity boundary and passes the result down to `<PlayerRoot>`
+as an optional `launchParams` prop. PlayerRoot still falls back to
+the hook for direct consumers (legacy V11/V12 mount patterns), so
+the public surface stays unchanged.
+
+D-035 #6 (THE REAL FIX) — `useLaunchParams` wraps
+`bridge.getLaunchParams()` in `Promise.resolve(...).then(setParams)`
+with a cancellation flag, so the resolved `LaunchParams` (not the
+Promise object) ends up in React state. Bridge interfaces updated
+to declare `Promise<LaunchParams | null>` everywhere
+(`MpvPlayerModuleBridge`, `UsePlayerActivityResult.getLaunchParams`,
+`MpvPlayerCommands.getLaunchParams`, NOOP_BRIDGE).
+
+Verified live on emulator-5554 (API 37 x86_64):
+  - Cold start: HomeScreen renders, no PlayerRoot leak (D-034 ✓).
+  - Tap Movies card: PlayerActivity opens, controls visible,
+    `loadFile` fires exactly ONCE with the real archive.org URI,
+    audio starts.
+  - X tap: clean `onDestroy` + cleanup chain returns to Movies.
+  - No RedBox, no NPE.
+
+D-036 (1.5.8): DefaultControls overlay transparency defensive cleanup
+
+`DefaultControls.tsx` previously used
+`backgroundColor: 'rgba(0,0,0,0.001)'` for the fill View (the
+intent: invisible-but-present so `Pressable.onPress` fires for
+"empty area" taps). The hack was present since v1.5.0 era and was
+NOT the cause of the v1.5.7 video regression — but it's still
+confusing code that obscures the intent. Replaced with
+`'transparent'` (the actual goal) and switched the surrounding
+`Animated.View`'s `pointerEvents` to `'box-none'` so taps fall
+through to the outer Pressable while the inner buttons keep their
+own hit-testing. Pure defensive cleanup, no behavioral change.
+
+D-039 (1.5.8): PlayerActivity pushes Intent extras into bridge launchParams
+
+`MpvBridgeModule.lastLaunchParams` (the static holder the JS-side
+`getLaunchParams()` reads) was only populated by
+`MpvBridgeModule.openPlayer(...)` — the Kotlin bridge method
+called from JS. Any launch path that bypassed `openPlayer` (deep
+link, app shortcut, `am start`, ADB-driven testing) left the
+holder null, so JS `useLaunchParams()` returned null and
+`<SimbaPlayerRoot>` fell through to render the regular app
+navigator over PlayerActivity instead of `<PlayerRoot />`.
+
+Added `MpvBridgeModule.setLaunchParamsFromIntent(uri, title,
+type, startPositionMs)` (`@JvmStatic` companion fn that writes
+`lastLaunchParams` when `uri` is non-blank) and call it from
+`PlayerActivity.onCreate` immediately after the `by lazy`
+`launchUri` / `launchTitle` / `launchType` / `launchStartPositionMs`
+read for the existing `PlayerActivity ready (uri='...')` log
+entry. Now any entry path populates the holder and JS sees the
+launch payload uniformly.
+
+Forward-fix pattern: adds the defensive path on the consumer
+boundary instead of rolling back the bridge architecture. No-op
+when `uri.isBlank()` (MainActivity with no player extras won't
+clobber a real launch in flight).
+
+D-040 (1.5.8): PlayerActivity.wireNativePtr retry budget 1.2s → 60s
+
+`PlayerActivity.wireNativePtr` schedules 5×200ms retries (≈1.2s
+total) before giving up, then logs
+`wireNativePtr: giving up after 6 attempts`. The wireNativePtr path
+copies the native `mpv` pointer from the bridge to the
+`MpvRenderView` so `attachSurfaceLocked` can later call
+`MPVLib.setPropertyString("vo", "gpu")` to switch from
+pre-init `vo=null` to actual rendering.
+
+Cold-start PlayerActivity (no MainActivity warming React first —
+direct Intent launch, deep link, app shortcut) takes ~30+ seconds
+before `ReactApplicationContext` is non-null, so the old 1.2s
+budget exhausted before the context was ready, `MpvRenderView.nativePtr`
+stayed at 0, `attachSurfaceLocked` early-returned, and `vo` was
+permanently `null` — no video output even though mpv was
+initialised and the SurfaceView was mounted.
+
+Bumped the budget to 200×300ms (60s total). New failure mode: a
+hung RN init now surfaces as the JS bundle failing to mount
+(symptoms: no SimbaPlayer log entry at all). Verified live:
+D-040 retry #117 succeeded at ~58s into the cold start,
+`wireNativePtr: ptr=140468322753008, calling MpvRenderView.setNativePtr`
+followed by `vo="gpu" -> 1` and `[cplayer] playback restart complete
+@ 0.000000, video=playing`.
+
+D-042 (1.5.8): Phase 8 transparent React UI wiring (rootFrame + ReactRootView)
+
+The lib's docblock on PlayerActivity promises "the React UI
+floats on top with a transparent background (handled separately in
+Phase 8)" — but Phase 8's wiring was never written. AppCompat's
+inherited `Theme.AppCompat.DayNight.NoActionBar` theme installs
+opaque `android:windowBackground` on the activity root frame and
+the ReactRootView, both of which paint BEFORE the JSX tree mounts.
+The MpvRenderView (SurfaceView) sits at index 0 of the root frame,
+so the root frame's opaque background hides it; the ReactRootView
+at index 1 also paints its default opaque background before
+`<PlayerRoot>` mounts.
+
+Added code in `PlayerActivity.onCreate` immediately after
+`super.onCreate` to:
+  - `rootFrame.setBackgroundColor(Color.TRANSPARENT)` on
+    `findViewById(android.R.id.content)`.
+  - Recursively clear the background on any child that's a
+    `ReactRootView` (classic arch) or whose class name contains
+    `ReactSurfaceView` (bridgeless arch).
+
+Window background (`window.setBackgroundDrawable(ColorDrawable(BLACK))`)
+is preserved pre-super as the brief splash before the SurfaceView
+attaches — prevents the white-flash between activity start and
+mpv's first frame.
+
+D-043 (1.5.8): PlayerSurface placeholder backgroundColor 'transparent'
+
+`<PlayerSurface />` is the JS placeholder View that reserves
+layout space for the native SurfaceView that mpv draws into. In
+V11, this placeholder WAS the SurfaceView (same component), so a
+black background made sense (mpv cleared to black before the first
+frame). In V12+, the SurfaceView moved out of the React tree and
+was pinned to `android.R.id.content` at the activity root — so
+the JS placeholder is now a regular `<View>` that draws on TOP
+of the SurfaceView. With the previous default
+`backgroundColor = '#000000'`, every decoded mpv frame was hidden
+by this opaque black View.
+
+Changed the default to `'transparent'` so the native SurfaceView
+underneath shows through. Consumers that want a colored backdrop
+(e.g. branded splash while mpv initializes) can still pass an
+explicit `backgroundColor` prop.
+
+Verified live: with D-035 + D-036 + D-039 + D-040 + D-042 + D-043,
+the Big Buck Bunny test clip renders to the SurfaceView (640x360
+letterboxed inside the 1080x2400 portrait emulator screen).
+D-038 itself is a consumer-side jniLibs override that lives in the
+SIMBA consumer repo's `android/app/src/main/jniLibs/` (the pre-mpv-
+android-2026-08-11 archive + `packagingOptions` excludes that
+force AGP's merge to pick the consumer's nested copies over the
+AAR's flat `lib/<abi>/libmpv.so`). The v1.5.8 lib publishes the
+six wiring/UI fixes; the consumer pulls the lib via npm then
+applies the D-038 jniLibs override in its own repo. See the
+SIMBA consumer's `mpv_binary_overrides.md` (consumer-side doc)
+for the apply procedure.
+
+Verified live on emulator-5554 (API 37 x86_64):
+  - PlayerActivity launches via `am start` with
+    `file:///sdcard/Android/data/com.simba.player/files/test/bbb.mp4`.
+  - mpv log: GLES 3.1 context initialised, `vo=gpu` switched,
+    `Texture for plane 0: 640x360` created, `[cplayer] playback
+    restart complete @ 0.000000, video=playing`.
+  - Screenshot shows the Big Buck Bunny grassy-mound scene
+    pixel-for-pixel at the SurfaceView layer.

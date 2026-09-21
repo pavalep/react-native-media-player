@@ -1,0 +1,15 @@
+fix(ci): publish.yml checkout ref must follow pushed tag
+
+Without `ref: ${{ github.ref }}`, `actions/checkout@v4` checks out the
+default branch on tag push, not the tagged commit. For the lib repo
+this means the next time you tag v1.6.0 on a commit that bumps the
+version, GHA would publish main's package.json (1.5.9) instead of the
+tag's (1.6.0) - and `npm publish` would fail with "cannot publish over
+existing version". With `ref: ${{ github.ref }}`, checkout follows the
+pushed tag and the publish/version/verify are all consistent.
+
+Also dropped the redundant `token: ${{ secrets.GITHUB_TOKEN }}` from
+the with block (the default `${{ github.token }}` is sufficient for a
+public repo) and tightened the misleading setup-node comment (its
+`registry-url` only sets the endpoint, not auth - auth is via
+`NODE_AUTH_TOKEN` env in the Publish step).

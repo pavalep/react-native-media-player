@@ -1,0 +1,24 @@
+1.5.13 — add Kotlin compile gate to release.yml
+
+No library code changes. This release exists to validate the gate
+works end-to-end against the npm publish pipeline.
+
+Gate composition:
+- JDK 17 via actions/setup-java (AGP 8.x requires it; default GHA
+  JDK is 11).
+- Android SDK subset via android-actions/setup-android@v3:
+  platform-tools + platforms;android-35 + build-tools;35.0.0.
+  No NDK, no emulator, no cmake — Kotlin-only subset is ~150 MB
+  vs ~1 GB for full SDK install. Licenses auto-accepted.
+- Gradle 8.10.2 via gradle/actions/setup-gradle (the lib has no
+  gradlew wrapper; it's a library module, not an app).
+- gradle -p android :simba-dev_react-native-media-player:compileDebugKotlin
+  before the publish step. Fails fast on Kotlin compile errors.
+
+Runtime cost: ~70-100 s on a cold cache. Pays for itself the first
+time a Kotlin-side bug is caught at publish time instead of at
+consumer build time (v1.5.9-v1.5.11's codeToNumeric bug cost ~5 min
+of debugging per broken release + a manager-demo blocker).
+
+Verified end-to-end: this release's tag push triggered the gate,
+the gate passed, and npm published 1.5.13.

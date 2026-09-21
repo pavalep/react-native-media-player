@@ -1,0 +1,24 @@
+fix(android): build.gradle adds SDK version fallbacks for standalone builds
+
+The lib's android/build.gradle reads compileSdk / minSdk / targetSdk /
+buildToolsVersion / ndkVersion from `rootProject.ext.*`. When the
+lib is a subproject of MOBILE_APP_REACT_NATIVE, those values come
+from the consumer's settings.gradle. When the lib is compiled
+standalone (e.g. the release.yml Kotlin compile gate that runs
+gradle -p android on the lib repo without a consumer), rootProject.ext
+is empty and the build fails with "Could not set unknown property
+compileSdkVersion" (or similar).
+
+Fix: add an `ext` block at the top of build.gradle that prefers the
+consumer's rootProject.ext values but falls back to RN 0.86 defaults
+(compileSdk 35, minSdk 24, targetSdk 35, buildTools 35.0.0, ndk
+27.1.12297006) when running standalone.
+
+The fallback values match MOBILE_APP_REACT_NATIVE/android/build.gradle
+so consumer-side builds are unaffected (the `has(...)` check returns
+true for the consumer, taking that path; fallback only fires for
+standalone).
+
+Surfaces as v1.5.13's Kotlin compile gate running successfully on
+this commit (vs the prior attempt where it failed because rootProject.ext
+was undefined).
