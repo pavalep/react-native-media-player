@@ -522,8 +522,24 @@ npm start --reset-cache
 ### Player launches but video is black
 
 - **Permissions:** on API 33+ the app must request `POST_NOTIFICATIONS` before showing the media-style notification. Use `MpvPlayerModule.requestNotificationPermission()`.
-- **Codec:** if the device can't decode the format (rare — libmpv handles most), try `hardwareDecoding: 'no'` to force software decoding.
+- **Codec:** if the device can't decode the format (rare - libmpv handles most), try `hardwareDecoding: 'no'` to force software decoding.
 - **HTTPS:** libmpv's curl backend rejects malformed URLs. Ensure your media URLs are valid `https://` (or `content://` for local files).
+
+### App is stuck at a white screen after splash (no JS error, just white)
+
+This is almost always a **`dlopen failed: cannot locate symbol` on the libmpv.so** chain — visible in `adb logcat -d --pid=$(adb shell pidof <your.package>) | grep dlopen` as:
+
+```
+dlopen failed: cannot locate symbol
+  "_ZNSt6__ndk127__from_chars_floating_pointIfE..."
+referenced by ".../libmpv.so"
+```
+
+Cause: the lib's bundled prebuilts (from `mpv-android` releases) are built against **LLVM 17+ libc++** (NDK r28+), which has `__from_chars_floating_point`. If your APK's `lib/<abi>/libc++_shared.so` is missing that symbol, `libsimbaplayer_mpv.so` fails to load, the `MpvBridgeModule` TurboModule never registers, and the app can't render past splash.
+
+Fix: **remove any `excludes += ["lib/*/libc++_shared.so"]` from your `android/app/build.gradle` `packagingOptions { jniLibs { } }` block** if you have one. The lib ships its own LLVM 17+ libc++_shared.so via the postinstall hook (`scripts/download-native.js` downloads the matching `jniLibs.tar.gz` from the GitHub release) and your APK should bundle that copy. Also **delete** any pre-v1.5.14 leftover `app/src/main/jniLibs/<abi>/<abi>/libc++_shared.so` (NDK r27 LLVM 16, missing the symbol) if you kept one around from a prior workaround.
+
+After this, `gradle :app:assembleDebug` will bundle the lib's libc++_shared.so and `libsimbaplayer_mpv.so` will resolve symbols cleanly.
 
 ### PiP doesn't auto-enter on home press
 
