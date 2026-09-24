@@ -335,7 +335,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Download jniLibs artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: jniLibs-${{ github.ref_name }}
           path: ./_artifacts/
