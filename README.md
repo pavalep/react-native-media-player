@@ -637,6 +637,30 @@ Make sure the package is in your `dependencies` (not `devDependencies`) and Metr
 - **PiP custom RemoteActions.** The lock-screen / PiP notification exposes a fixed set of actions (Play / Pause / Skip-Back / Skip-Forward). Custom actions are a W7+ feature.
 - **React Native ≥ 0.76 only.** Bridgeless mode is required (the TurboModule path uses `TurboReactPackage`, which doesn't work on the legacy bridge).
 
+## Sponsor & support
+
+This package is maintained by [Paval E P](https://github.com/pavalep) as part of **Varna Labs** — a sole proprietorship registered under India's Udyam/MSME framework.
+
+If you find this package useful in your own work, consider supporting its continued maintenance:
+
+<a href="https://buymeacoffee.com/pavalep"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" /></a>
+
+Every contribution — large or small — helps me spend more time maintaining, experimenting, and shipping the next set of fixes and features. 🙏
+
+### About the maintainer
+
+> I'm an independent developer building software, experimenting with ideas, and working on projects through **Varna Labs**, my sole proprietorship registered under India's Udyam/MSME framework. 🇮🇳
+>
+> If you like my projects, find something I've built useful, or simply want to support independent development, consider [making a contribution](https://buymeacoffee.com/pavalep). 🙌
+>
+> It doesn't have to be much — every little bit helps me spend more time building, experimenting, maintaining projects, and bringing new ideas to life. ✨
+>
+> 💡 Have a viable project or something interesting you'd like to build together?
+> Feel free to [reach out](https://github.com/pavalep). I'm always happy to discuss potential collaborations and see where a good idea can go. 🤝
+>
+> Your support keeps independent work moving. 🦋
+> Gracias for being here! ❤️
+
 ## Contributing
 
 ### Local development
@@ -697,4 +721,4 @@ Consumers are responsible for ensuring their app's license obligations are met w
 
 ---
 
-**Status:** V12 — latest published version is **1.0.2** on [npmjs](https://www.npmjs.com/package/@simba-dev/react-native-media-player) and [GitHub Releases](https://github.com/pavalep/react-native-media-player/releases). See [CHANGELOG.md](./CHANGELOG.md) for the full per-version notes.
+**Status:** latest published version is **1.5.19** on [npmjs](https://www.npmjs.com/package/@simba-dev/react-native-media-player) and [GitHub Releases](https://github.com/pavalep/react-native-media-player/releases). See [CHANGELOG.md](./CHANGELOG.md) for the full per-version notes.

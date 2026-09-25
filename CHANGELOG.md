@@ -1,4 +1,32 @@
 
+## 1.5.19 (2026-09-25)
+
+Metadata-only release — no library code, no native binaries, no behavior changes. Bumps the publish metadata so the package surfaces a sponsor link in npmjs and GitHub.
+
+### Added — Sponsor / funding surfaces
+
+- **`package.json` → `funding`** — `{ "type": "buymeacoffee", "url": "https://buymeacoffee.com/pavalep" }`. npmjs renders this as a "Sponsor" link on the package page (under the metadata sidebar).
+- **`.github/FUNDING.yml`** — new file. `github: [pavalep]` + `buy_me_a_coffee: pavalep` + `custom: ["https://buymeacoffee.com/pavalep"]`. GitHub renders this as a "Sponsor" button at the top of the repo page.
+- **README → "Sponsor & support" section** — added with the maintainer bio (Varna Labs / Udyam-MSME context, Buy Me a Coffee CTA). Section is positioned between Limitations and Contributing so the table of contents auto-updates.
+
+### Changed — `author` + description cleanup
+
+- **`package.json` → `author`** — was `{ name: "SIMBA Mobile Team (@simba-dev)", url: "https://github.com/pavalep" }`. Now `{ name: "Paval E P", email: "pavalep@varnalabs.dev", url: "https://github.com/pavalep" }`. This is the maintainer's actual name + a permanent email routed through the Varna Labs domain (not a personal Gmail, easier to hand off if Paval is unreachable). The `@simba-dev` npm org stays — only the displayed author name changed.
+- **`package.json` → `description`** — was a single 1.5 KB blob documenting the V16.0.8 patch internals (16 KB page-size alignment, `LOAD segment not aligned`, cascading `Unknown error`, etc.). That level of detail belongs in CHANGELOG (where it already lives, three times over). The npmjs description is now a concise 1-sentence summary that points at CHANGELOG for per-version notes. Description appears in `npm search` results; the prior length made it truncate mid-word.
+
+### Why a metadata-only release deserves its own version
+
+- npmjs reads `funding`, `author`, and `description` from the published tarball, not from the live repo. Without a new publish, the npmjs page would keep showing the old author (SIMBA Mobile Team) and the old (huge) description forever.
+- The change is purely additive (funding URL) or surface-level (author/description) — no source file touched, no ABI bump, no behavior change. Consumers on `^1.5.18` will not auto-upgrade to `^1.5.19` unless they widen their range. `package-lock.json` consumers using exact pinning (`1.5.18`) keep working.
+- Native libs + Kotlin sources are byte-for-byte identical to v1.5.18. The postinstall hook downloads the same `jniLibs` GitHub Release (no new release needed).
+
+### Verified
+
+- `npm test`: 9 suites, 120 tests pass.
+- `npx tsc --noEmit`: clean.
+- `npm pack --dry-run`: shows `funding`, updated `author`, and updated `description` in the manifest.
+- No Kotlin source touched; example app's `compileDebugKotlin` gate from v1.5.13 would pass identically.
+
 ## 1.5.13 (2026-09-21)
 
 Adds the `example/` React Native app + Kotlin compile gate to

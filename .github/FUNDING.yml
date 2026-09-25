@@ -1,0 +1,8 @@
+# GitHub Sponsors + Buy Me a Coffee funding configuration.
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+# for the full schema. GitHub renders this as a "Sponsor" button at the
+# top of the repo page.
+
+github: [pavalep]
+buy_me_a_coffee: pavalep
+custom: ["https://buymeacoffee.com/pavalep"]
