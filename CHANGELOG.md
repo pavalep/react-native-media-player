@@ -1,4 +1,30 @@
 
+## 1.5.20 (2026-09-25)
+
+Polish pass on the v1.5.19 sponsor surfaces — improves the visibility of the funding CTA on the GitHub README without changing library code, native binaries, or behavior.
+
+### Changed — README visibility (best-in-class sponsor presentation)
+
+The v1.5.19 sponsor section was structurally correct but buried. This pass applies three changes used by well-funded OSS repos (vite, astro, excalidraw, fastify, bevy) to make the CTA discoverable on the first scroll:
+
+- **Top-of-README badge row** — added two new shields next to the existing badge line:
+  - `https://img.shields.io/badge/Sponsor-pavalep-ea4aaa?logo=githubsponsors` → links to `https://github.com/sponsors/pavalep`
+  - `https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee` → links to `https://buymeacoffee.com/pavalep`
+  - This is the highest-visibility placement on the README — readers see the CTA before any prose. Matches the Bevy pattern.
+- **TOC entry** — added `12. [Sponsor & support](#sponsor--support)` between Limitations and Contributing. Renumbered License to #14.
+- **Section opener rewritten** — replaced the descriptive "This package is maintained by…" opener with the action-oriented "Free, open source software made possible by …" pattern used by Astro, since that's what actually motivates clicks on the Buy Me a Coffee button. The bio block underneath is unchanged.
+
+### Why this is a separate version (vs appending to 1.5.19)
+
+- npmjs reads the README from the published tarball, not from the live repo. Without a new publish, the npmjs page still shows the v1.5.19 README (no top-of-README sponsor badge, no TOC entry). Funding metadata (the `funding` field, the FUNDING.yml) is unaffected — those were live on v1.5.19.
+- Pure README change — no source, no native binaries. `npm test` and the Kotlin compile gate would pass identically against v1.5.19.
+
+### Verified
+
+- `npm test`: 9 suites, 120 tests pass.
+- `npx tsc --noEmit`: clean.
+- `npm pack --dry-run`: README size grew from 35.7 kB → ~36.1 kB (the new badge URLs add ~400 bytes).
+
 ## 1.5.19 (2026-09-25)
 
 Metadata-only release — no library code, no native binaries, no behavior changes. Bumps the publish metadata so the package surfaces a sponsor link in npmjs and GitHub.

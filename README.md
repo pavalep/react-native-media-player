@@ -10,6 +10,8 @@ React Native video & audio player powered by [libmpv](https://mpv.io/), with fir
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/pavalep/react-native-media-player?color=blue" /></a>
   <a href="https://www.npmjs.com/package/@simba-dev/react-native-media-player"><img alt="npm downloads" src="https://img.shields.io/npm/dm/@simba-dev/react-native-media-player" /></a>
   <a href="https://github.com/pavalep/react-native-media-player/tags"><img alt="GitHub tags" src="https://img.shields.io/github/tag-date/pavalep/react-native-media-player?label=latest%20tag&sort=semver" /></a>
+  <a href="https://github.com/sponsors/pavalep"><img alt="Sponsor" src="https://img.shields.io/badge/Sponsor-pavalep-ea4aaa?logo=githubsponsors&logoColor=white" /></a>
+  <a href="https://buymeacoffee.com/pavalep"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black" /></a>
   <a href="https://github.com/pavalep/react-native-media-player/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/pavalep/react-native-media-player/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white" /></a>
   <a href="https://github.com/pavalep/react-native-media-player/actions/workflows/release.yml"><img alt="Release" src="https://img.shields.io/github/actions/workflow/status/pavalep/react-native-media-player/release.yml?label=Release&logo=githubactions&logoColor=white" /></a>
 </p>
@@ -37,8 +39,9 @@ React Native video & audio player powered by [libmpv](https://mpv.io/), with fir
 9. [API reference](#api-reference)
 10. [Troubleshooting](#troubleshooting)
 11. [Limitations](#limitations)
-12. [Contributing](#contributing)
-13. [License](#license)
+12. [Sponsor & support](#sponsor--support)
+13. [Contributing](#contributing)
+14. [License](#license)
 
 ---
 
@@ -639,9 +642,7 @@ Make sure the package is in your `dependencies` (not `devDependencies`) and Metr
 
 ## Sponsor & support
 
-This package is maintained by [Paval E P](https://github.com/pavalep) as part of **Varna Labs** — a sole proprietorship registered under India's Udyam/MSME framework.
-
-If you find this package useful in your own work, consider supporting its continued maintenance:
+`@simba-dev/react-native-media-player` is free, open source software made possible by [Paval E P](https://github.com/pavalep) and the contributors who help maintain it. If you find it useful in your own work, consider supporting its continued development.
 
 <a href="https://buymeacoffee.com/pavalep"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" /></a>
 
@@ -721,4 +722,4 @@ Consumers are responsible for ensuring their app's license obligations are met w
 
 ---
 
-**Status:** latest published version is **1.5.19** on [npmjs](https://www.npmjs.com/package/@simba-dev/react-native-media-player) and [GitHub Releases](https://github.com/pavalep/react-native-media-player/releases). See [CHANGELOG.md](./CHANGELOG.md) for the full per-version notes.
+**Status:** latest published version is **1.5.20** on [npmjs](https://www.npmjs.com/package/@simba-dev/react-native-media-player) and [GitHub Releases](https://github.com/pavalep/react-native-media-player/releases). See [CHANGELOG.md](./CHANGELOG.md) for the full per-version notes.

@@ -1,6 +1,6 @@
 {
   "name": "@simba-dev/react-native-media-player",
-  "version": "1.5.19",
+  "version": "1.5.20",
   "description": "React Native video & audio player powered by libmpv — Picture-in-Picture, MediaSession, foreground service, and a customizable TypeScript UI. Built for Android. Designed as a drop-in replacement for react-native-video / react-native-track-player / expo-av. See CHANGELOG.md for per-version notes.",
   "main": "src/index.ts",
   "types": "src/index.ts",
