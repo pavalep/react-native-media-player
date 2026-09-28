@@ -137,6 +137,8 @@ describe('usePlayer (no provider)', () => {
     expect(s.currentChapter).toBeNull();
     expect(s.videoParams).toBeNull();
     expect(s.error).toBeNull();
+    // V22.0.0 / 1.6.0 additions
+    expect(s.shuffle).toBe(false);
   });
 
   it('exposes the V12 commands object', async () => {
@@ -189,6 +191,11 @@ describe('usePlayer (no provider)', () => {
     expect(typeof c.unobserveProperty).toBe('function');
     expect(typeof c.grantPersistablePermission).toBe('function');
     expect(typeof c.verifyContentUri).toBe('function');
+    // V22.0.0 / 1.6.0 additions
+    expect(typeof c.getScreenBrightness).toBe('function');
+    expect(typeof c.setAudioFilter).toBe('function');
+    expect(typeof c.setVideoFilter).toBe('function');
+    expect(typeof c.setShuffle).toBe('function');
   });
 
   it('commands.play delegates to the native bridge', async () => {
@@ -269,6 +276,46 @@ describe('usePlayer (no provider)', () => {
       'Song',
       'video',
       0,
+    );
+  });
+
+  // V22.0.0 / 1.6.0 additions — surface-widening for the V19 vertical-swipe
+  // chrome (brightness pill) + mpv filter toggle hooks + readback of
+  // `playlist-shuffle` via the existing `setProperty` plumbing.
+  it('commands.getScreenBrightness delegates to the bridge', async () => {
+    const { result } = await renderHook(() => usePlayer());
+    const brightness = result.current.commands.getScreenBrightness();
+    expect(NativeModules.MpvPlayerModule.getScreenBrightness).toHaveBeenCalledTimes(1);
+    // Mock returns 1.0 (the no-op fallback default).
+    expect(brightness).toBe(1.0);
+  });
+
+  it('commands.setAudioFilter(filter, enabled) forwards both args to the bridge', async () => {
+    const { result } = await renderHook(() => usePlayer());
+    result.current.commands.setAudioFilter('scaletempo2=max-speed=32.0', true);
+    expect(NativeModules.MpvPlayerModule.setAudioFilter).toHaveBeenCalledWith(
+      'scaletempo2=max-speed=32.0',
+      true,
+    );
+  });
+
+  it('commands.setVideoFilter(filter, enabled) forwards both args to the bridge', async () => {
+    const { result } = await renderHook(() => usePlayer());
+    result.current.commands.setVideoFilter('scale=720:trunc(ow/a/2)*2', true);
+    expect(NativeModules.MpvPlayerModule.setVideoFilter).toHaveBeenCalledWith(
+      'scale=720:trunc(ow/a/2)*2',
+      true,
+    );
+  });
+
+  it('commands.setShuffle(enabled) routes through bridge.setProperty("playlist-shuffle", …)', async () => {
+    // `setShuffle` is a thin wrapper over the existing `setProperty`
+    // plumbing — the bridge has no dedicated `setShuffle` method.
+    const { result } = await renderHook(() => usePlayer());
+    result.current.commands.setShuffle(true);
+    expect(NativeModules.MpvPlayerModule.setProperty).toHaveBeenCalledWith(
+      'playlist-shuffle',
+      true,
     );
   });
 
@@ -463,8 +510,9 @@ describe('usePlayerProgress', () => {
 // ── PlayerState default integrity ───────────────────────────────────────────
 
 describe('PlayerState default integrity', () => {
-  it('PlayerState has 20 fields in DEFAULT_STATE', async () => {
+  it('PlayerState has 21 fields in DEFAULT_STATE', async () => {
     // Sanity check: V13 expanded the V12 4-field state to 20 fields.
+    // V22.0.0 / 1.6.0 added `shuffle`, bringing it to 21.
     // If a future refactor accidentally drops a field (e.g. by
     // using `Partial<PlayerState>` somewhere), this catches it.
     const keys = Object.keys(DEFAULT_STATE).sort();
@@ -484,6 +532,7 @@ describe('PlayerState default integrity', () => {
       'playlist',
       'positionMs',
       'seekable',
+      'shuffle',
       'speed',
       'title',
       'tracks',

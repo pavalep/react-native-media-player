@@ -1,4 +1,20 @@
 
+## [1.6.0] - 2026-09-28
+
+### Added
+
+- **Commands**:
+  - `commands.getScreenBrightness()` — readback of `Window.LayoutParams.screenBrightness` for V19 vertical-swipe chrome's indicator pill.
+  - `commands.setAudioFilter(filter, enabled)` — promotes bridge method to public `PlayerCommands`. Backed by `--af-add` / `--af-remove`.
+  - `commands.setVideoFilter(filter, enabled)` — promotes bridge method to public `PlayerCommands`. Backed by `--vf-add` / `--vf-remove`.
+  - `commands.setShuffle(enabled)` — backed by mpv `playlist-shuffle` property.
+- **State**:
+  - `state.shuffle: boolean` — readback of mpv `playlist-shuffle`, surfaced via `onPropertyChanged('playlist-shuffle')` and hydrated from `bridge.getProperty('playlist-shuffle')`.
+
+### Pure additive
+
+No signature changes to existing commands. No breaking changes. Bridge implementations already existed; this release surfaces them on the public interface.
+
 ## 1.5.20 (2026-09-25)
 
 Polish pass on the v1.5.19 sponsor surfaces — improves the visibility of the funding CTA on the GitHub README without changing library code, native binaries, or behavior.

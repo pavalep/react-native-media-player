@@ -88,6 +88,9 @@ export interface PlayerState {
   videoParams: MpvVideoParams | null;
   /** Last error reported by mpv. Cleared on the next `onFileLoaded`. */
   error: { code: number; codeName?: string; recoverable: boolean; message: string } | null;
+
+  /** Whether playlist shuffle is currently enabled. mpv `playlist-shuffle`. */
+  shuffle: boolean;
 }
 
 /**
@@ -270,6 +273,42 @@ export interface PlayerCommands {
   grantPersistablePermission(uri: string): void;
   /** Returns true when the URI is still readable (content:// or file://). */
   verifyContentUri(uri: string): boolean;
+
+  // ── V22.0.0 / 1.6.0 additions ───────────────────────────────────────────
+  /**
+   * Get the current `Window.LayoutParams.screenBrightness` (0..1).
+   * The window may also pass the value through to the Activity-relative
+   * brightness. Returns 1.0 for the no-op fallback bridge.
+   *
+   * Added because the V19 vertical-swipe chrome needs a readback to
+   * render the brightness indicator pill. Previously reachable only via
+   * the `getMpvPlayerModule()` escape hatch.
+   */
+  getScreenBrightness(): number;
+
+  /**
+   * Toggle an mpv audio filter. Backed by `--af-add` / `--af-remove`.
+   * Examples: `setAudioFilter('scaletempo2=max-speed=32.0', true)` enables
+   * skip-silence's `scaletempo2` audio filter. Setting `enabled=false`
+   * removes the named filter.
+   */
+  setAudioFilter(filter: string, enabled: boolean): void;
+
+  /**
+   * Toggle an mpv video filter. Backed by `--vf-add` / `--vf-remove`.
+   * Examples: `setVideoFilter('scale=720:trunc(ow/a/2)*2', true)` caps
+   * output height at 720p via a scale filter. Setting `enabled=false`
+   * removes the named filter.
+   */
+  setVideoFilter(filter: string, enabled: boolean): void;
+
+  /**
+   * Enable or disable playlist shuffle. Backed by `--playlist-shuffle`.
+   * Toggles the same state surfaced in mpv via the boolean
+   * `playlist-shuffle` property. State is mirrored on
+   * `state.shuffle` via the `onPropertyChanged` event channel.
+   */
+  setShuffle(enabled: boolean): void;
 }
 
 /** Combined result from `usePlayer()`. */
@@ -332,6 +371,7 @@ export const DEFAULT_STATE: PlayerState = {
   isMuted: false,
   speed: 1,
   loopMode: 'none',
+  shuffle: false,
   playlist: [],
   currentIndex: -1,
   tracks: [],
@@ -556,6 +596,24 @@ function buildCommands(): PlayerCommands {
       dlog('commands.verifyContentUri(', uri, ')');
       return getMpvPlayerModule().verifyContentUri(uri);
     },
+
+    // V22.0.0 / 1.6.0 additions
+    getScreenBrightness: () => {
+      dlog('commands.getScreenBrightness()');
+      return getMpvPlayerModule().getScreenBrightness();
+    },
+    setAudioFilter: (filter: string, enabled: boolean) => {
+      dlog('commands.setAudioFilter(', filter, ',', enabled, ')');
+      getMpvPlayerModule().setAudioFilter(filter, enabled);
+    },
+    setVideoFilter: (filter: string, enabled: boolean) => {
+      dlog('commands.setVideoFilter(', filter, ',', enabled, ')');
+      getMpvPlayerModule().setVideoFilter(filter, enabled);
+    },
+    setShuffle: (enabled: boolean) => {
+      dlog('commands.setShuffle(', enabled, ')');
+      getMpvPlayerModule().setProperty('playlist-shuffle', enabled);
+    },
   };
 }
 
@@ -684,6 +742,12 @@ export function hydratePlayerState(
   }
   try {
     state.loopMode = bridge.getLoopMode();
+  } catch {
+    // ignore
+  }
+  try {
+    const shuffleStr = bridge.getProperty('playlist-shuffle');
+    state.shuffle = shuffleStr === 'yes' || shuffleStr === 'true';
   } catch {
     // ignore
   }
@@ -932,6 +996,11 @@ export function applyPlayerEvent(
         }
         case 'playlist-playing-pos':
           return { state: { ...state, currentIndex: Number(value) }, progress };
+        case 'playlist-shuffle':
+          return {
+            state: { ...state, shuffle: value === 'yes' || value === true },
+            progress,
+          };
         default:
           return { state, progress };
       }
