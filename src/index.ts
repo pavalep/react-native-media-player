@@ -99,6 +99,11 @@ export {
   type PlayerQueueSelectionStore,
 } from './hooks/useQueueSelection';
 export {useLaunchParams} from './hooks/useLaunchParams';
+// V19 W6.0 — synchronous, idempotent "is this tree hosted by
+// PlayerActivity?" predicate for consumers that render their own
+// chrome over the native video surface. See the hook's docstring for
+// why `useLaunchParams` is the wrong tool for that question.
+export {useIsPlayerActivity} from './hooks/useIsPlayerActivity';
 
 export {
   getMpvPlayerModule,
