@@ -63,6 +63,14 @@ class PlayerActivity : ReactActivity() {
      */
     const val MAIN_COMPONENT_NAME = "SimbaPlayer"
 
+    /**
+     * 1.8.0 — launch-option (initial prop) key that tells the consumer's
+     * root component it is running in the player activity. Set to `true`
+     * here and `false` in the consumer's `MainActivity`; both values are
+     * read on the JS side, per React root.
+     */
+    const val EXTRA_IS_PLAYER_ACTIVITY = "isPlayerActivity"
+
     // ── Intent extras (Phase 3) ─────────────────────────────────────
     // Set by MpvBridgeModule.openPlayer(uri, title, type, startPositionMs)
     // when launching this activity. Phase 4 will read these back and log
@@ -309,8 +317,32 @@ class PlayerActivity : ReactActivity() {
 
   override fun getMainComponentName(): String = MAIN_COMPONENT_NAME
 
+  /**
+   * 1.8.0 — hand this activity's React root a PER-TREE "this is the
+   * player activity" fact, via the launch options (initial props).
+   *
+   * `MpvBridgeModule.currentActivityIsPlayer` is a process-wide
+   * `@Volatile @JvmStatic` flag: while `PlayerActivity` is alive, EVERY
+   * React root in the process reads `true` through
+   * `isCurrentActivityPlayer()`, including the one hosted by the
+   * consumer's `MainActivity`. That is the right answer for
+   * `useLaunchParams()`'s "don't claim the payload outside the player
+   * host" guard, but a consumer gating its OWN chrome on it would
+   * mount that chrome in the background activity too — a full-bleed
+   * overlay riding over every browsing screen.
+   *
+   * Launch options are per-ROOT, so this is the only channel that can
+   * answer "is *this* tree the player tree" honestly. The consumer reads
+   * the prop on its root component (`initialProps.isPlayerActivity`)
+   * and publishes it through a React context. Documented on
+   * `useIsPlayerActivity` in `src/hooks/`.
+   */
   override fun createReactActivityDelegate(): ReactActivityDelegate =
-      DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled)
+      object : DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled) {
+        override fun getLaunchOptions(): Bundle = Bundle().apply {
+          putBoolean(EXTRA_IS_PLAYER_ACTIVITY, true)
+        }
+      }
 
   // ── Lifecycle ─────────────────────────────────────────────────────
 

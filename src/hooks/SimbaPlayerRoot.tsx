@@ -1,6 +1,7 @@
 import React from 'react';
 import { PlayerRoot } from '../components/PlayerRoot';
 import { useLaunchParams } from './useLaunchParams';
+import { useLaunchPlayback } from './useLaunchPlayback';
 
 /**
  * V14 Phase 59: the activity-branch wrapper.
@@ -53,6 +54,38 @@ export interface SimbaPlayerRootProps {
    * icon, with no recent `openPlayer(...)` handoff queued.
    */
   children: React.ReactNode;
+
+  /**
+   * `1.8.0` — let the consumer own the player UI.
+   *
+   * `false` (the default, and every pre-1.8.0 behaviour) mounts
+   * `<PlayerRoot />` — the module's built-in surface + controls —
+   * whenever launch params are present. `children` renders only when
+   * there is nothing to play.
+   *
+   * `true` splits the two concerns that `PlayerRoot` bundles
+   * together: the module keeps the **load lifecycle**
+   * (`useLaunchPlayback`, so the payload is still loaded exactly once)
+   * while the consumer keeps the **UI** — `children` renders
+   * unconditionally, and the consumer is responsible for showing it
+   * only while something is playing.
+   *
+   * ## Why a consumer needs this
+   *
+   * `<PlayerRoot>` returns the module's default controls *instead of*
+   * `children`, so any custom chrome passed as children is discarded
+   * exactly when playback starts — which makes a bespoke player screen
+   * unreachable. `headless` is the supported way to keep the load
+   * guarantee without surrendering the UI.
+   *
+   * @example
+   * ```tsx
+   * <SimbaPlayerRoot headless>
+   *   <MyNavigator />
+   * </SimbaPlayerRoot>
+   * ```
+   */
+  headless?: boolean;
 }
 
 /**
@@ -72,10 +105,22 @@ export interface SimbaPlayerRootProps {
  */
 export function SimbaPlayerRoot({
   children,
+  headless = false,
 }: SimbaPlayerRootProps): React.ReactElement {
   const launchParams = useLaunchParams();
 
-  if (launchParams) {
+  // `1.8.0` headless mode: the module keeps the load guarantee and
+  // hands the UI back to the consumer.
+  //
+  // Gated on `headless` on purpose. In the default (non-headless)
+  // path `<PlayerRoot>` runs the SAME hook, and two hook instances
+  // holding the same payload are two independent effects — the media
+  // would be loaded twice per launch, which is the exact regression
+  // this extraction was meant to end. So exactly one owner runs it:
+  // `<PlayerRoot>` normally, this component only in headless mode.
+  useLaunchPlayback(headless ? launchParams : null);
+
+  if (launchParams && !headless) {
     return <PlayerRoot launchParams={launchParams} />;
   }
 

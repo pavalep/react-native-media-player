@@ -99,6 +99,11 @@ export {
   type PlayerQueueSelectionStore,
 } from './hooks/useQueueSelection';
 export {useLaunchParams} from './hooks/useLaunchParams';
+// 1.8.0 — the load half of `<PlayerRoot>`, exposed so a consumer using
+// `<SimbaPlayerRoot headless>` (which delegates the player UI) can call
+// it directly for a payload the module did not originate. See
+// `useLaunchPlayback`'s docstring for the once-per-payload contract.
+export {useLaunchPlayback} from './hooks/useLaunchPlayback';
 // V19 W6.0 — synchronous, idempotent "is this tree hosted by
 // PlayerActivity?" predicate for consumers that render their own
 // chrome over the native video surface. See the hook's docstring for

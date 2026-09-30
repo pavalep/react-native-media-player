@@ -130,6 +130,14 @@ nativeModulesMock.default.MpvPlayerModule = {
   // Activity launch
   openPlayer: fn(() => Promise.resolve(true)),
   getLaunchParams: fn(() => null),
+  // Added in 1.5.7 (D-034) as a synchronous `@ReactMethod`, but the
+  // mock had never been updated, so `useLaunchParams`'s activity guard
+  // threw on `undefined` and every test silently took the
+  // "pre-1.5.10 legacy fallback" branch — i.e. the guard was never
+  // actually exercised. `false` matches the real Kotlin default
+  // (MainActivity / a non-player host), so tests that want the
+  // player-host branch must opt in explicitly.
+  isCurrentActivityPlayer: fn(() => false),
 
   // Configuration
   setConfig: fn(() => Promise.resolve(0)),
