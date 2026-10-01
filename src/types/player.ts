@@ -397,6 +397,64 @@ export const DEFAULT_PROGRESS: PlayerProgress = {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
+ * Coerce a JS value into the single string form the native bridge accepts.
+ *
+ * ## Why this exists
+ *
+ * `MpvBridgeModule.setProperty(name: String, value: String)` declares both
+ * arguments as Kotlin `String`, and React Native's JS→native argument
+ * marshalling *throws* rather than coercing: passing a number produces
+ *
+ *   `Expected argument 1 of method "setProperty" to be a string,
+ *    but got a number (24.000000)`
+ *
+ * which surfaces as a red-box `Exception in HostFunction` and takes the
+ * whole React tree down — not as a rejected promise or a no-op.
+ *
+ * The public `PlayerCommands.setProperty(name, value: unknown)` signature
+ * (and its `MpvPlayerModuleBridge.setProperty` docstring) already promise
+ * that the value is "stringified before sending", but nothing did the
+ * stringifying. So the type said `unknown` and the runtime demanded
+ * `string`: every numeric caller crashed, including this module's own
+ * `seekToChapter` (`setProperty('chapter', index)`).
+ *
+ * ## Why coercion belongs here
+ *
+ * mpv's property API is textual — `mpv_set_property_string` parses the
+ * value against the property's declared type — so producing the string is
+ * this layer's job, not the caller's. Doing it once, at the single point
+ * where the command crosses into the bridge, means:
+ *
+ *  - no caller has to remember a rule that is invisible in its own code,
+ *  - `chapter=3` and `sub-font-size=24` both mean what they look like,
+ *  - the documented `unknown` signature is finally honest.
+ *
+ * `null`/`undefined` become the empty string, which mpv reads as "reset
+ * to default" for string-valued properties — the closest analogue of the
+ * JS value, and far better than the literal text `"undefined"`.
+ * Objects and arrays are JSON-encoded because mpv has no other textual
+ * form for a structured option (`vf`/`af` parameter lists).
+ */
+export function toMpvPropertyString(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value) ?? '';
+  } catch {
+    // Circular / non-serialisable. mpv has no representation for it, so
+    // send empty rather than crash the caller.
+    return '';
+  }
+}
+
+/**
  * V13 Phase 51: build the full commands object. The bridge is
  * resolved lazily on every invocation, so we can build the
  * commands at module load without forcing a native module to be
@@ -454,7 +512,7 @@ function buildCommands(): PlayerCommands {
       // chapter index. The bridge has `seekChapter(direction)` for
       // next/previous but not direct index access; use the property
       // setter so we get a single round-trip.
-      getMpvPlayerModule().setProperty('chapter', index);
+      getMpvPlayerModule().setProperty('chapter', String(index));
     },
     next: () => {
       dlog('commands.next()');
@@ -576,8 +634,9 @@ function buildCommands(): PlayerCommands {
       return getMpvPlayerModule().getProperty(name);
     },
     setProperty: (name: string, value: unknown) => {
-      dlog('commands.setProperty(', name, ',', value, ')');
-      getMpvPlayerModule().setProperty(name, value);
+      const encoded = toMpvPropertyString(value);
+      dlog('commands.setProperty(', name, ',', encoded, ')');
+      getMpvPlayerModule().setProperty(name, encoded);
     },
     observeProperty: (name: string) => {
       dlog('commands.observeProperty(', name, ')');
@@ -612,7 +671,13 @@ function buildCommands(): PlayerCommands {
     },
     setShuffle: (enabled: boolean) => {
       dlog('commands.setShuffle(', enabled, ')');
-      getMpvPlayerModule().setProperty('playlist-shuffle', enabled);
+      // `playlist-shuffle` is an mpv *integer* option, so the boolean is
+      // encoded as 1/0 rather than as a textual flag — "yes"/"true" is
+      // not a value mpv's int parser accepts for this property.
+      getMpvPlayerModule().setProperty(
+        'playlist-shuffle',
+        enabled ? '1' : '0',
+      );
     },
   };
 }

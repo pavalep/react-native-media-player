@@ -287,8 +287,16 @@ export interface MpvPlayerModuleBridge {
   // ── Properties (generic get/set for any mpv property) ─────────────────
   /** Get the value of an mpv property as a string. */
   getProperty(name: string): string;
-  /** Set the value of an mpv property. Value is stringified before sending. */
-  setProperty(name: string, value: unknown): void;
+  /**
+   * Set the value of an mpv property.
+   *
+   * `value` is a `string` because that is what `MpvBridgeModule.kt`
+   * declares, and React Native's JS→native marshalling throws on a
+   * type mismatch rather than coercing. Callers with richer JS values
+   * should use `commands.setProperty`, whose signature is `unknown` and
+   * which encodes via `toMpvPropertyString` before it gets here.
+   */
+  setProperty(name: string, value: string): void;
   /** Begin observing an mpv property (emits `onPropertyChanged` events). */
   observeProperty(name: string): void;
   /** Stop observing an mpv property. */
@@ -530,7 +538,7 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
     void _name;
     return '';
   },
-  setProperty: (_name: string, _value: unknown) => {
+  setProperty: (_name: string, _value: string) => {
     void _name;
     void _value;
   },

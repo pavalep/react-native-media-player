@@ -23,6 +23,7 @@ import { act, renderHook } from '@testing-library/react-native';
 import {
   usePlayer,
   usePlayerProgress,
+  toMpvPropertyString,
   DEFAULT_PROGRESS,
   DEFAULT_STATE,
   type PlayerState,
@@ -311,11 +312,15 @@ describe('usePlayer (no provider)', () => {
   it('commands.setShuffle(enabled) routes through bridge.setProperty("playlist-shuffle", …)', async () => {
     // `setShuffle` is a thin wrapper over the existing `setProperty`
     // plumbing — the bridge has no dedicated `setShuffle` method.
+    //
+    // The encoded value is '1' rather than `true`: `playlist-shuffle` is
+    // an mpv *integer* option, so a boolean cannot be sent even once
+    // stringified ("true" is not a value mpv's int parser accepts).
     const { result } = await renderHook(() => usePlayer());
     result.current.commands.setShuffle(true);
     expect(NativeModules.MpvPlayerModule.setProperty).toHaveBeenCalledWith(
       'playlist-shuffle',
-      true,
+      '1',
     );
   });
 
@@ -539,5 +544,139 @@ describe('PlayerState default integrity', () => {
       'videoParams',
       'volume',
     ]);
+  });
+});
+
+// ── setProperty value encoding ─────────────────────────────────────────────
+
+/**
+ * `MpvBridgeModule.setProperty(name: String, value: String)` declares both
+ * arguments as Kotlin `String`, and React Native's JS→native marshalling
+ * *throws* on a mismatch instead of coercing:
+ *
+ *   Expected argument 1 of method "setProperty" to be a string,
+ *   but got a number (24.000000)
+ *
+ * which surfaces as a red-box `Exception in HostFunction` and unmounts the
+ * React tree. These tests pin that every value crossing that boundary has
+ * already been encoded to a string by the time it reaches the bridge.
+ */
+describe('toMpvPropertyString', () => {
+  it('passes a string through unchanged', () => {
+    expect(toMpvPropertyString('#FFFFFF00')).toBe('#FFFFFF00');
+  });
+
+  it('encodes an empty string as-is', () => {
+    expect(toMpvPropertyString('')).toBe('');
+  });
+
+  it('encodes integers without a decimal point', () => {
+    // The reported crash value was `24.000000` — a Double reaching a
+    // String parameter. Pin that the encoding drops the fraction.
+    expect(toMpvPropertyString(24)).toBe('24');
+    expect(toMpvPropertyString(0)).toBe('0');
+    expect(toMpvPropertyString(-1)).toBe('-1');
+  });
+
+  it('preserves meaningful decimals', () => {
+    // mpv float options need the fractional part; blind rounding would
+    // silently change the value rather than fix the crash.
+    expect(toMpvPropertyString(1.5)).toBe('1.5');
+    expect(toMpvPropertyString(0.25)).toBe('0.25');
+  });
+
+  it('encodes booleans as mpv textual flags', () => {
+    expect(toMpvPropertyString(true)).toBe('true');
+    expect(toMpvPropertyString(false)).toBe('false');
+  });
+
+  it('maps null and undefined to the empty string, never the word undefined', () => {
+    // `String(undefined)` would send the literal text "undefined" to
+    // mpv, which is worse than useless — it looks like a real value.
+    expect(toMpvPropertyString(null)).toBe('');
+    expect(toMpvPropertyString(undefined)).toBe('');
+  });
+
+  it('JSON-encodes objects and arrays for structured options', () => {
+    // mpv has no other textual form for a `vf`/`af` parameter list.
+    expect(toMpvPropertyString({lavfi: 'scale=640:-1'})).toBe(
+      '{"lavfi":"scale=640:-1"}',
+    );
+    expect(toMpvPropertyString([1, 2, 3])).toBe('[1,2,3]');
+  });
+
+  it('returns the empty string for a circular structure instead of throwing', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(() => toMpvPropertyString(circular)).not.toThrow();
+    expect(toMpvPropertyString(circular)).toBe('');
+  });
+});
+
+describe('commands.setProperty encoding', () => {
+  beforeEach(() => {
+    clearBridgeMocks();
+  });
+
+  it('encodes a numeric value before it reaches the bridge', async () => {
+    // The exact shape that crashed the caption bridge.
+    const { result } = await renderHook(() => usePlayer());
+    result.current.commands.setProperty('sub-font-size', 24);
+    expect(NativeModules.MpvPlayerModule.setProperty).toHaveBeenCalledWith(
+      'sub-font-size',
+      '24',
+    );
+  });
+
+  it('accepts a string value unchanged', async () => {
+    const { result } = await renderHook(() => usePlayer());
+    result.current.commands.setProperty('sub-color', '#FFFFFFF');
+    expect(NativeModules.MpvPlayerModule.setProperty).toHaveBeenCalledWith(
+      'sub-color',
+      '#FFFFFFF',
+    );
+  });
+
+  it('never sends a non-string to the bridge, whatever the caller passes', async () => {
+    const { result } = await renderHook(() => usePlayer());
+    const values: unknown[] = [24, 0, -1, 1.5, true, false, null, undefined, {a: 1}, [1]];
+    for (const value of values) {
+      result.current.commands.setProperty('sub-pos', value);
+    }
+    const calls = (NativeModules.MpvPlayerModule.setProperty as jest.Mock)
+      .mock.calls;
+    expect(calls).toHaveLength(values.length);
+    for (const [, sent] of calls) {
+      expect(typeof sent).toBe('string');
+    }
+  });
+});
+
+describe('commands that route through setProperty', () => {
+  beforeEach(() => {
+    clearBridgeMocks();
+  });
+
+  it('commands.seekToChapter(index) sends the index as a string', async () => {
+    // Regression: this call site passed a raw number and would have
+    // thrown inside HostFunction, red-boxing on every chapter jump.
+    const { result } = await renderHook(() => usePlayer());
+    await result.current.commands.seekToChapter(3);
+    expect(NativeModules.MpvPlayerModule.setProperty).toHaveBeenCalledWith(
+      'chapter',
+      '3',
+    );
+  });
+
+  it('commands.setShuffle(false) sends 0, because playlist-shuffle is an int option', async () => {
+    // The `true` half is pinned in the delegation block above; this
+    // covers the other branch, which previously would have sent the
+    // boolean `false` straight into a Kotlin String parameter.
+    const { result } = await renderHook(() => usePlayer());
+    await result.current.commands.setShuffle(false);
+    expect(NativeModules.MpvPlayerModule.setProperty).toHaveBeenCalledWith(
+      'playlist-shuffle',
+      '0',
+    );
   });
 });

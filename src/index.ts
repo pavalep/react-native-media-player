@@ -51,6 +51,7 @@ export {
 export {
   usePlayer,
   usePlayerProgress,
+  toMpvPropertyString,
   type PlayerCommands,
   type PlayerProgress,
   type PlayerState,

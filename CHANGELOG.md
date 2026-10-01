@@ -1,4 +1,63 @@
 
+## [1.8.2] - 2026-10-01
+
+### Fixed
+
+- **`commands.setProperty` no longer crashes on a non-string value.** `MpvBridgeModule.setProperty(name: String, value: String)` declares both arguments as Kotlin `String`, and React Native's JS→native marshalling *throws* on a type mismatch rather than coercing. Passing a number produced
+
+  ```
+  Exception in HostFunction: Expected argument 1 of method "setProperty"
+  to be a string, but got a number (24.000000)
+  ```
+
+  as a red-box that unmounts the whole React tree — not a rejected promise, and not a no-op. `PlayerCommands.setProperty(name, value: unknown)` and the `MpvPlayerModuleBridge.setProperty` docstring both promised the value was "stringified before sending"; nothing did the stringifying, so the type said `unknown` while the runtime demanded `string`. Any numeric caller crashed, including two inside this package:
+
+  - `commands.seekToChapter(index)` — `setProperty('chapter', index)`
+  - `commands.setShuffle(enabled)` — `setProperty('playlist-shuffle', enabled)`
+
+  Values are now encoded once, at the single point where a command crosses into the bridge, via the new exported `toMpvPropertyString(value)`: numbers and booleans become their mpv textual form, `null`/`undefined` become `''` (mpv's "reset to default", rather than the literal text `"undefined"`), and objects/arrays are JSON-encoded for structured options. `setShuffle` goes further and emits `1`/`0`, because `playlist-shuffle` is an mpv **integer** option and `"true"` is not a value its parser accepts — encoding alone would have traded a crash for a silent no-op.
+
+### Changed
+
+- `MpvPlayerModuleBridge.setProperty(name, value)` is now typed `value: string`, which is what the Kotlin actually declares. The ergonomic `unknown` signature remains on the *command*, where the coercion happens, so callers are unaffected.
+
+### Added
+
+- `toMpvPropertyString(value)` — exported from `src/types/player.ts`, pure and unit-tested, so a consumer encoding an mpv value by hand matches the library's own rules.
+
+### Verified
+
+- `npx tsc --noEmit`: clean.
+- `npm test`: 10 suites, 148 tests pass (14 new, covering the encoder, the command-level encoding, and both regression call sites).
+
+## [1.8.1] - 2026-09-30
+
+### Fixed
+
+- **Per-root player-host launch option.** Shipped with 1.8.0's headless work; recorded separately here because it is independently consumable. `getLaunchParams()` is a one-shot native queue and `isCurrentActivityPlayer()` is a process-global flag, so with two activities mounting two React roots a shared process-wide value cannot describe which root is asking. The per-root `isPlayerActivity` launch option carries the fact through React context instead.
+
+## [1.8.0] - 2026-09-30
+
+### Added
+
+- **`headless` mode on `<SimbaPlayerRoot>`** — splits the two concerns `PlayerRoot` bundled together: the module keeps the **load lifecycle**, the consumer keeps the **UI**. Previously `<SimbaPlayerRoot>` returned `<PlayerRoot />` *instead of* its children whenever launch params were present, so custom chrome was discarded exactly when playback started and the default controls took over the screen.
+- **`useLaunchPlayback(launchParams)`** — the load lifecycle (`loadFile` + `seekAbsolute` + `play`) extracted verbatim from `PlayerRoot`, keyed on `${uri}|${startPositionSec}` so it fires exactly once per payload despite ~1 Hz re-renders. Exported from `src/index.ts`; 11 unit tests. `PlayerRoot` is deduped onto the same hook.
+
+### Fixed
+
+- `useIsPlayerActivity()`'s native dependency `isCurrentActivityPlayer` was never mocked in `jest.setup.ts`, so the activity guard silently took the legacy fallback in every test — the suite was exercising a path the app never takes.
+- Double media load when `useLaunchPlayback` ran in both `SimbaPlayerRoot` and `PlayerRoot` (caught by a test written alongside 1.8.0). Gated with `useLaunchPlayback(headless ? launchParams : null)` so exactly one owner ever runs it.
+
+## [1.7.0] - 2026-09-29
+
+### Added
+
+- **`useIsPlayerActivity()`** (V19 W6.0) — synchronous, idempotent, consumes nothing. Answers "am I the player-surface host?" directly via `bridge.isCurrentActivityPlayer()`, which the native side flips in `PlayerActivity.onCreate` / `onDestroy`.
+
+  `useLaunchParams()` is the wrong tool for that question, for three reasons: it is **one-shot** (the first React consumer drains the queue, so a chrome component asking the question would steal the payload from `<PlayerRoot />`); it is **async**, so a mount gate built on it flashes its own absence for a frame; and it **conflates two questions** — a player activity with an empty queue answers `null` to "are there launch params?" and `true` to "am I the surface host?".
+
+  Deliberately not a `useSyncExternalStore` subscription: each activity mounts its own React tree, so the value is fixed for that tree's lifetime.
+
 ## [1.6.0] - 2026-09-28
 
 ### Added
