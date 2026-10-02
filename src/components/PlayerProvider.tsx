@@ -262,6 +262,30 @@ const POSITION_POLL_INTERVAL_MS = 1000;
  * `demuxer-cache-state` is deliberately observed too: it is the only
  * source for the buffered ranges that the seek bar paints behind the
  * played fill.
+ *
+ * ---------------------------------------------------------------------------
+ * OPEN NATIVE DEFECT (1.8.4) — registration is fixed, delivery is not
+ * ---------------------------------------------------------------------------
+ * This list is necessary but NOT sufficient. Measured on emulator-5554
+ * (API 37) with the 1.8.3 code running and a file actively playing
+ * (`time-pos` advancing, `pause=false`):
+ *
+ *   - `mpv_observe_property(...)` returns `result=0` for all twelve —
+ *     registration genuinely succeeds.
+ *   - `onPlaybackRestart` arrives 7,418 times; `onFileLoaded` arrives.
+ *     So the native event loop IS pumping and IS dispatching to JS.
+ *   - `onSeekable` / `onPositionChanged` / `onDurationChanged` /
+ *     `onCacheState` / `onPlaybackStateChanged` arrive **0 times**.
+ *
+ * `MPV_EVENT_PROPERTY_CHANGE` is therefore never delivered to this
+ * handle even though the property is observed on it. The next release
+ * must fix the native property-event path (observe handle vs. pumped
+ * handle in `android/src/main/cpp/event.cpp` / `property.cpp`).
+ *
+ * Until that lands, the observable symptom is unchanged: the scrub bar
+ * still renders disabled ("Live stream — not seekable") because
+ * `seekable` never leaves `DEFAULT_PROGRESS`. Do not read a green test
+ * suite as evidence this works — the whole suite mocks the emitter.
  */
 const OBSERVED_PROPERTIES: readonly string[] = [
   'time-pos',
