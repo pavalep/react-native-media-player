@@ -173,7 +173,6 @@ describe('usePlayer (no provider)', () => {
     expect(typeof c.playlistRemove).toBe('function');
     expect(typeof c.shuffle).toBe('function');
     expect(typeof c.clear).toBe('function');
-    expect(typeof c.selectTrack).toBe('function');
     expect(typeof c.cycleTrack).toBe('function');
     expect(typeof c.setTrack).toBe('function');
     expect(typeof c.enterPip).toBe('function');

@@ -583,6 +583,49 @@ export function PlayerProvider({
       }
     }
 
+    // ── 2b. Re-read the LEVEL-only progress fields ───────────────────────
+    //
+    // `seekable` is a LEVEL value that mpv delivers only as an EDGE:
+    // MPV_EVENT_PROPERTY_CHANGE is emitted once, at the instant the flag
+    // flips from false to true. Any provider that mounts — or remounts,
+    // e.g. in a second React root — after that flip never observes the
+    // event, so the field stays at DEFAULT_PROGRESS forever and the
+    // consumer's seek bar renders permanently disabled.
+    //
+    // Measured on device (Android 37): `onCacheState` — which changes
+    // continuously — reached JS 827 times, while `onSeekable` arrived
+    // ZERO times across both a cold start and an app restart, because by
+    // then the flag had already settled and mpv will not repeat it.
+    //
+    // So read the level once at mount. The event keeps driving updates
+    // afterwards; this only closes the gap for a provider that starts
+    // mid-session. Without it the only correct usage pattern is
+    // "subscribe strictly before loadFile", which no consumer can be
+    // asked to guarantee across activities.
+    try {
+      const raw = bridge.getProperty('seekable');
+      // The bridge serialises MPV_FORMAT_FLAG to the JSON literals
+      // `true` / `false` (property.cpp, appendNode). Anything else -
+      // "null" for an unavailable property, "" for the NOOP bridge -
+      // is not a value, and must not be coerced to false.
+      if (raw === 'true' || raw === 'false') {
+        const seekable = raw === 'true';
+        if (seekable !== progressRef.current.seekable) {
+          const seeded: PlayerProgress = {
+            ...progressRef.current,
+            seekable,
+          };
+          progressRef.current = seeded;
+          setProgress(seeded);
+        }
+      }
+    } catch (e) {
+      // Best-effort: a bridge without `getProperty` (or no live mpv
+      // instance yet) leaves the field to the event stream.
+      // eslint-disable-next-line no-console
+      console.warn('[simba-player] seekable seed failed:', e);
+    }
+
     // ── 3. 1Hz position/duration poll ───────────────────────────────────
     // Both `getPosition` and `getDuration` are sync React methods
     // on the bridge, so the poll doesn't queue microtasks. We

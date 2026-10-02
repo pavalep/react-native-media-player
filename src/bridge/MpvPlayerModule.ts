@@ -235,8 +235,9 @@ export interface MpvPlayerModuleBridge {
   // ── Tracks ─────────────────────────────────────────────────────────────
   /** Get the mpv track list as a JSON string. */
   getTracks(): string;
-  /** Select the track by ID. */
-  selectTrack(trackId: number): void;
+  // `selectTrack(trackId)` was REMOVED — it carried no track type, and its
+  // native implementation hardcoded mpv's "vid" property, so selecting a
+  // subtitle retargeted the VIDEO track. Use `setTrack(type, trackId)`.
   /** Cycle to the next/previous track of the given type. */
   cycleTrack(type: 'video' | 'audio' | 'sub'): void;
   /** Set the active track for a type (trackId < 0 means "no"). */
@@ -482,9 +483,6 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
 
   // Tracks
   getTracks: () => '[]',
-  selectTrack: (_trackId: number) => {
-    void _trackId;
-  },
   cycleTrack: (_type: 'video' | 'audio' | 'sub') => {
     void _type;
   },

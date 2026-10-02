@@ -1,4 +1,54 @@
 
+## [1.9.0] - 2026-10-02
+
+### Fixed
+
+- **`seekable` is delivered as an EDGE, so a provider that mounted after the flag settled could never learn it - and the seek bar stayed permanently disabled.** This is the second half of the 1.8.4 story, and it is the half that actually reaches a consumer.
+
+  mpv reports a property change only when the value **changes**. `seekable` is a flag that flips from `false` to `true` exactly once, when mpv first knows enough about the stream to permit seeking. After that single event it will not repeat - not on a property poll, not on a re-observe, not on anything.
+
+  So the only way to learn it was to be subscribed at the instant it flipped. `PlayerProvider` registers its twelve properties and subscribes to its events in one mount effect, but a provider that mounts - or remounts, e.g. in a second React root - *after* a session is already running never sees that edge, and `progress.seekable` stays at `DEFAULT_PROGRESS.seekable` (`false`) for the life of the component. A consumer's seek bar then renders disabled, labelled *"Live stream - not seekable"*, on an ordinary seekable file.
+
+  Measured on device (Android 37, one-hour file): `onCacheState` - which changes continuously - reached JS **827 times**, while `onSeekable` reached it **zero times** across both a cold start and an app restart. That ratio is what identified the fault: the subscription path was demonstrably working, so the only remaining explanation was a missed edge rather than a broken bridge.
+
+  `PlayerProvider` now reads the level once at mount via `bridge.getProperty('seekable')`, alongside the existing `hydratePlayerState` reads. The event still drives updates afterwards; this only closes the gap for a provider that starts mid-session.
+
+  Without it the package's only correct usage pattern is "subscribe strictly before `loadFile`", which no consumer can be asked to guarantee across activities and window transitions.
+
+  Two deliberate choices:
+
+  - **Only `"true"` / `"false"` are accepted.** `getProperty` returns `""` from the NOOP bridge and `"null"` when the property is unavailable; neither is a boolean, and mapping either to `false` would be a guess. Anything else is ignored and the field is left alone.
+  - **A throwing `getProperty` is not fatal.** Hydration is best-effort everywhere else in that effect, and the seed must not be the one call that takes the provider down.
+
+  Covered by four regression tests that emit **no** event at all - the provider has to know `seekable` on its own - including one that a mutation (disabling the seed) kills.
+
+### Removed
+
+- **`selectTrack(trackId)` is gone — it could never have worked, and calling it retargeted the video track.** This is a **breaking change** for any consumer that called it.
+
+  mpv has no single "select this track" property. It has three, one per kind of track: `aid` (audio), `vid` (video) and `sid` (subtitle). A track selector therefore cannot exist without knowing *which kind* of track it is selecting — and `selectTrack(trackId)` carried no track type at all:
+
+  ```ts
+  commands.selectTrack(5); // which kind of track is 5? nobody knows
+  ```
+
+  The JNI function behind it made the missing type explicit, because it hardcoded one property:
+
+  ```cpp
+  mpv_set_property(mpv, "vid", MPV_FORMAT_INT64, &trackId);
+  ```
+
+  So `selectTrack(5)` never enabled subtitle track 5. It set the **video** track to id 5. On any file whose subtitle ids overlap the video's, choosing subtitles blanked the picture or swapped the video for the subtitle's own image — a user-visible blocker, not a cosmetic defect.
+
+  The API was **removed outright rather than deprecated**. A wrong-but-present selector looks usable, which is precisely how the next consumer reintroduces the blank-video bug. Use `setTrack(type, trackId)` instead: it maps `video`/`audio`/`sub` to `vid`/`aid`/`sid`, and takes a negative id as "no track".
+
+  ```ts
+  commands.setTrack('sub', 5); // enable subtitle track 5
+  commands.setTrack('sub', -1); // disable subtitles
+  ```
+
+  `setTrack` is unchanged by this release. No consumer in this repo or in the consuming app ever called `selectTrack` — the app had already migrated to `setTrack` — so nothing in the wild needs a shim.
+
 ## [1.8.4] - 2026-10-02
 
 ### Fixed

@@ -813,13 +813,13 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         } catch (_: Exception) { "[]" }
     }
 
-    @ReactMethod
-    @Override
-    override fun selectTrack(trackId: Double) {
-        ensurePtr()
-        MPVLib.nativeSelectTrack(nativePtr, trackId.toInt())
-    }
-
+    /**
+     * `selectTrack(trackId)` was REMOVED. It carried no track type, and its
+     * native implementation hardcoded mpv's "vid" property, so selecting a
+     * subtitle retargeted the VIDEO track. Use `setTrack(type, trackId)`
+     * instead — it maps video/audio/sub to vid/aid/sid and handles disabling
+     * via a negative id.
+     */
     @ReactMethod
     @Override
     override fun setTrack(type: String, trackId: Double) {

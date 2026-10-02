@@ -78,7 +78,9 @@ export interface Spec extends TurboModule {
 
   // ── Tracks ─────────────────────────────────────────────────────────────
   getTracks(): string;
-  selectTrack(trackId: number): void;
+  // `selectTrack(trackId)` was REMOVED — it carried no track type, and its
+  // native implementation hardcoded mpv's "vid" property, so selecting a
+  // subtitle retargeted the VIDEO track. Use `setTrack(type, trackId)`.
   cycleTrack(type: string): void;
   setTrack(type: string, trackId: number): void;
   setTrackVisibility(trackType: string, visible: boolean): void;

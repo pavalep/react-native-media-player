@@ -71,10 +71,6 @@ object MPVLib {
     external fun nativePlaylistShuffle(nativePtr: Long)
     external fun nativePlaylistClear(nativePtr: Long)
 
-    // ── Tracks ─────────────────────────────────────────────────────────────
-
-    external fun nativeSelectTrack(nativePtr: Long, trackId: Int)
-
     // ── Properties ─────────────────────────────────────────────────────────
 
     external fun nativeGetProperty(nativePtr: Long, name: String): String

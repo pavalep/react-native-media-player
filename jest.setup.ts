@@ -77,7 +77,6 @@ nativeModulesMock.default.MpvPlayerModule = {
 
   // Tracks
   getTracks: fn(() => '[]'),
-  selectTrack: fn(() => undefined),
   cycleTrack: fn(() => undefined),
   setTrack: fn(() => undefined),
   setTrackVisibility: fn(() => undefined),

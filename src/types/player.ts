@@ -199,11 +199,17 @@ export interface PlayerCommands {
   clear(): void;
 
   // Tracks
-  /** Select a track by ID. */
-  selectTrack(trackId: number): void;
   /** Cycle to the next/previous track of the given type. */
   cycleTrack(type: 'video' | 'audio' | 'sub'): void;
-  /** Set the active track for a type (trackId < 0 means "no track"). */
+  /**
+   * Set the active track for a type (trackId < 0 means "no track").
+   *
+   * `selectTrack(trackId)` was REMOVED. It carried no track type, and its
+   * native implementation hardcoded mpv's "vid" property, so selecting a
+   * subtitle retargeted the VIDEO track. Use `setTrack(type, trackId)`
+   * instead — it maps video/audio/sub to vid/aid/sid and handles disabling
+   * via a negative id.
+   */
   setTrack(type: 'video' | 'audio' | 'sub', trackId: number): void;
 
   // PiP
@@ -567,10 +573,6 @@ function buildCommands(): PlayerCommands {
       getMpvPlayerModule().playlistClear();
     },
 
-    selectTrack: (trackId: number) => {
-      dlog('commands.selectTrack(', trackId, ')');
-      getMpvPlayerModule().selectTrack(trackId);
-    },
     cycleTrack: (type: 'video' | 'audio' | 'sub') => {
       dlog('commands.cycleTrack(', type, ')');
       getMpvPlayerModule().cycleTrack(type);

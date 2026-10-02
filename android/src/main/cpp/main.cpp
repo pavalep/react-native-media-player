@@ -753,16 +753,10 @@ Java_com_simba_player_mpv_MPVLib_nativePlaylistClear(
     mpv_command(mpv, clearArgs);
 }
 
-// ── Tracks ──────────────────────────────────────────────────────────────────
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_simba_player_mpv_MPVLib_nativeSelectTrack(
-    JNIEnv *env, jclass, jlong nativePtr, jint trackId) {
-    NativeMpvReadLease lease(nativePtr);
-    if (!lease.valid()) return;
-    mpv_handle *mpv = lease.get();
-    mpv_set_property(mpv, "vid", MPV_FORMAT_INT64, &trackId);
-}
+// `nativeSelectTrack()` was REMOVED — it carried no track type, and it
+// hardcoded mpv's "vid" property, so selecting a subtitle track retargeted
+// the VIDEO track. `setTrack(type, trackId)` in MpvBridgeModule.kt routes to
+// vid/aid/sid via `nativeSetPropertyString` instead.
 
 // ── Filters ─────────────────────────────────────────────────────────────────
 

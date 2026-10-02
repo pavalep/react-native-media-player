@@ -379,3 +379,108 @@ describe('mpv property observation', () => {
     await unmount();
   });
 });
+
+// -- `seekable` is edge-only, so mount must read the level -----------------
+
+/**
+ * mpv delivers `seekable` as a LEVEL value but only reports it as an
+ * EDGE: MPV_EVENT_PROPERTY_CHANGE fires once, at the instant the flag
+ * flips. A provider that mounts after that flip never sees the event.
+ *
+ * Measured on device, that meant `progress.seekable` stayed false
+ * forever and every consumer's seek bar rendered permanently disabled
+ * on ordinary seekable files. `onCacheState` — which changes
+ * continuously — arrived 827 times over the same window, which is what
+ * proved the subscription path itself was fine and isolated the fault
+ * to the missed edge.
+ *
+ * These tests pin the compensating level read. They use NO emitted
+ * event at all: the provider must know `seekable` on its own.
+ */
+describe('PlayerProvider seekable seeding', () => {
+  const seekableProp = (
+    NativeModules.MpvPlayerModule as unknown as {
+      getProperty: jest.Mock;
+    }
+  ).getProperty;
+
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <PlayerProvider>{children}</PlayerProvider>
+  );
+
+  beforeEach(() => {
+    clearBridgeMocks();
+    seekableProp.mockReturnValue('');
+  });
+
+  afterEach(() => {
+    seekableProp.mockReturnValue('');
+  });
+
+  it('reads seekable at mount even though no event was ever emitted', async () => {
+    // The regression: the flag is already true in mpv, but the edge was
+    // consumed before this provider existed.
+    seekableProp.mockImplementation((name: string) =>
+      name === 'seekable' ? 'true' : 'null',
+    );
+
+    const { result, unmount } = await renderHook(() => usePlayerProgress(), {
+      wrapper,
+    });
+
+    expect(result.current.seekable).toBe(true);
+    // And it must be read, not inferred.
+    expect(seekableProp).toHaveBeenCalledWith('seekable');
+
+    await unmount();
+  });
+
+  it('leaves seekable false when mpv reports it false', async () => {
+    seekableProp.mockImplementation((name: string) =>
+      name === 'seekable' ? 'false' : 'null',
+    );
+
+    const { result, unmount } = await renderHook(() => usePlayerProgress(), {
+      wrapper,
+    });
+
+    expect(result.current.seekable).toBe(false);
+
+    await unmount();
+  });
+
+  it('does not coerce an unreadable property into a value', async () => {
+    // `getProperty` returns "" on the NOOP bridge and "null" from the
+    // native side for an unavailable property. Neither is a boolean,
+    // and silently mapping them to false would be a guess - the same
+    // class of defect as inventing a title. They must simply be
+    // ignored, leaving DEFAULT_PROGRESS in place.
+    seekableProp.mockReturnValue('null');
+
+    const { result, unmount } = await renderHook(() => usePlayerProgress(), {
+      wrapper,
+    });
+
+    expect(result.current.seekable).toBe(false);
+    expect(result.current.cacheRanges).toEqual([]);
+
+    await unmount();
+  });
+
+  it('survives a bridge whose getProperty throws', async () => {
+    // Hydration is best-effort everywhere else in this effect, so the
+    // seed must not be the one call that takes the provider down.
+    seekableProp.mockImplementation(() => {
+      throw new Error('no mpv instance yet');
+    });
+
+    const { result, unmount } = await renderHook(() => usePlayerProgress(), {
+      wrapper,
+    });
+
+    expect(result.current).toBeDefined();
+    expect(result.current.seekable).toBe(false);
+
+    await unmount();
+  });
+});
