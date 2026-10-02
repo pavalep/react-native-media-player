@@ -214,11 +214,42 @@ static std::string currentMpvPath() {
 void eventLoop() {
     TRACEI("Event loop started");
 
+    // ── Why this drains instead of blocking ────────────────────────────────
+    // mpv's own client.h states the rule this loop has to respect:
+    //
+    //   "Property changes are coalesced: the change events are returned
+    //    only once the event queue becomes empty (e.g. mpv_wait_event()
+    //    would block or return MPV_EVENT_NONE), and then only one event
+    //    per changed property is returned."
+    //
+    // So MPV_EVENT_PROPERTY_CHANGE is not delivered when the property
+    // changes — it is delivered when the queue happens to drain. A loop
+    // that blocks on `mpv_wait_event(-1)` and handles exactly one event
+    // before blocking again can starve every property event for as long
+    // as anything else keeps the queue non-empty. That is precisely the
+    // failure this used to have: MPV_EVENT_PROPERTY_CHANGE events were
+    // never observed on the handle the properties were observed on, so
+    // `onSeekable` / `onPositionChanged` / `onCacheState` never reached
+    // JS and the seek bar stayed permanently disabled.
+    //
+    // The drain below is the documented shape: poll with a zero timeout
+    // first, and only block when mpv reports MPV_EVENT_NONE — the exact
+    // state in which mpv is obliged to release the coalesced property
+    // changes. One queue-drained iteration costs one non-blocking call.
     while (g_running.load()) {
-        mpv_event *event = mpv_wait_event(g_mpv, -1);
+        mpv_event *event = mpv_wait_event(g_mpv, 0);
         if (!event) {
             LOGE("[PlaybackTrace][Native][eventLoop] mpv_wait_event returned null");
             continue;
+        }
+        if (event->event_id == MPV_EVENT_NONE) {
+            // Queue is empty. Block until mpv has something for us; the
+            // wake-up will also flush any coalesced property changes.
+            event = mpv_wait_event(g_mpv, -1);
+            if (!event) {
+                LOGE("[PlaybackTrace][Native][eventLoop] mpv_wait_event returned null");
+                continue;
+            }
         }
         TRACEI("[PlaybackTrace][Native][eventLoop] event_id=%d error=%d", event->event_id, event->error);
 
@@ -326,6 +357,15 @@ void eventLoop() {
                     json = "null";
                 }
                 TRACEI("[PlaybackTrace][Native][property] name=%s format=%d value=%s", prop->name, prop->format, json.c_str());
+                // DEBUG (not TRACEI) on purpose. TRACEI is compiled to a
+                // no-op, which is why a broken property path was
+                // completely invisible in logcat for as long as it
+                // existed. This is the one line that makes
+                // "properties are observed but events never arrive"
+                // distinguishable from "the loop never saw them".
+                __android_log_print(ANDROID_LOG_DEBUG, "MpvProperty",
+                                    "[PlaybackTrace][Native][property] name=%s format=%d value=%s",
+                                    prop->name, prop->format, json.c_str());
                 callJavaPropertyChanged(prop->name, json.c_str());
                 break;
             }

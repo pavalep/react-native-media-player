@@ -1,4 +1,26 @@
 
+## [1.8.4] - 2026-10-02
+
+### Fixed
+
+- **`MPV_EVENT_PROPERTY_CHANGE` never reached JS - the seek bar was permanently disabled.** 1.8.3 made the properties *observed*; this release makes their *events deliverable*.
+
+  `eventLoop()` blocked on `mpv_wait_event(g_mpv, -1)` and handled exactly one event before blocking again. That shape starves property events, because mpv's `client.h` is explicit about their delivery rule:
+
+  > Property changes are coalesced: the change events are returned only once the event queue becomes empty (e.g. `mpv_wait_event()` would block or return `MPV_EVENT_NONE`), and then only one event per changed property is returned.
+
+  So a property change is *not* delivered when the property changes - it is delivered when the queue happens to drain. Any sustained traffic (which this player always has) keeps the queue non-empty, so `MPV_EVENT_PROPERTY_CHANGE` was never returned. The events that do arrive were the ones the queue happened to yield first.
+
+  Measured on device before this change: **zero** property events, while `onPlaybackRestart` alone fired 7,418 times - the starvation, plainly.
+
+  The loop now **drains**: poll with a zero timeout, and block on `-1` only when mpv reports `MPV_EVENT_NONE` - the exact state in which mpv is obliged to release the coalesced changes. This is the documented integration shape, and the switch body is untouched so the diff stays reviewable.
+
+  Measured on device after: all twelve observed properties stream continuously, including `name=seekable value=true`, which is what re-enables the seek bar.
+
+### Added
+
+- A `DEBUG` log (`adb logcat -s MpvProperty`) on every property change. `TRACEI` is `#define TRACEI(...) do { } while (0)`, so the package's entire native trace was compiled to nothing - which is exactly why this class of failure was invisible for so long. This one line is what distinguishes "observed but the events never arrive" from "the loop never saw them".
+
 ## [1.8.3] - 2026-10-02
 
 ### Fixed
