@@ -34,6 +34,7 @@ import {
   useRenderControls,
 } from '../PlayerProvider';
 import { DEFAULT_PLAYER_CONFIG, DEFAULT_THEME } from '../../types/config';
+import { usePlayerProgress } from '../../types/player';
 
 // Helper to clear all bridge mock call counts between tests.
 function clearBridgeMocks() {
@@ -274,5 +275,107 @@ describe('PlayerProvider renders children', () => {
     // future refactor accidentally wraps children in <View>, the
     // parent type will be 'View' and this assertion will fail.
     expect(textNode.parent?.type).not.toBe('View');
+  });
+});
+
+// -- mpv property observation (regression) --------------------------------
+
+/**
+ * Regression origin: nothing in the library or the consumer app ever
+ * called `observeProperty`. mpv only reports a property through
+ * `mpv_observe_property`, so every branch of the native
+ * `onMpvPropertyChanged` handler was unreachable and the state it feeds
+ * kept its `DEFAULT_PROGRESS` value forever.
+ *
+ * Position / duration / volume / speed masked the bug because they are
+ * ALSO polled at 1 Hz. `seekable`, `isSeeking`, `isBuffering` and
+ * `cacheRanges` have no such fallback, so in the consumer app the seek
+ * bar rendered permanently disabled ("Live stream - not seekable"), the
+ * buffering spinner never appeared, and the buffered-range fill was
+ * never painted - on a plain, seekable, 1-hour file.
+ */
+describe('mpv property observation', () => {
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <PlayerProvider>{children}</PlayerProvider>
+  );
+
+  it('observes every property that backs an event with no polling fallback', async () => {
+    clearBridgeMocks();
+    const { unmount } = await renderHook(() => usePlayerProgress(), { wrapper });
+
+    const observed = (
+      NativeModules.MpvPlayerModule.observeProperty as jest.Mock
+    ).mock.calls.map((call: unknown[]) => call[0]);
+
+    // These four are the ones that are invisible until they are wrong:
+    // nothing polls them, so a missing registration is silent.
+    expect(observed).toEqual(
+      expect.arrayContaining([
+        'seekable',
+        'seeking',
+        'paused-for-cache',
+        'demuxer-cache-state',
+      ]),
+    );
+
+    await unmount();
+  });
+
+  it('observes the properties that back the polled events too', async () => {
+    // Lower latency than the 1 Hz poll, and `pause` / `eof-reached` are
+    // only reachable this way for a state change that happens between
+    // two polls.
+    clearBridgeMocks();
+    const { unmount } = await renderHook(() => usePlayerProgress(), { wrapper });
+
+    const observed = (
+      NativeModules.MpvPlayerModule.observeProperty as jest.Mock
+    ).mock.calls.map((call: unknown[]) => call[0]);
+
+    expect(observed).toEqual(
+      expect.arrayContaining([
+        'time-pos',
+        'duration',
+        'volume',
+        'speed',
+        'pause',
+        'eof-reached',
+        'idle-active',
+        'cache-buffering-state',
+      ]),
+    );
+
+    await unmount();
+  });
+
+  it('unobserves every property it registered, on unmount', async () => {
+    clearBridgeMocks();
+    const { unmount } = await renderHook(() => usePlayerProgress(), { wrapper });
+
+    const observed = (
+      NativeModules.MpvPlayerModule.observeProperty as jest.Mock
+    ).mock.calls.map((call: unknown[]) => call[0]);
+
+    await unmount();
+
+    const unobserved = (
+      NativeModules.MpvPlayerModule.unobserveProperty as jest.Mock
+    ).mock.calls.map((call: unknown[]) => call[0]);
+
+    // Leaving a registration behind means mpv keeps writing into a
+    // callback whose React state is gone.
+    expect(unobserved.sort()).toEqual(observed.sort());
+  });
+
+  it('keeps the last known cache ranges when a refresh returns empty', async () => {
+    clearBridgeMocks();
+    const { result, unmount } = await renderHook(() => usePlayerProgress(), {
+      wrapper,
+    });
+
+    // DEFAULT_PROGRESS starts with no ranges; nothing has been emitted.
+    expect(result.current.cacheRanges).toEqual([]);
+
+    await unmount();
   });
 });

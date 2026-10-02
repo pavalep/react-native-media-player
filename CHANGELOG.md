@@ -1,4 +1,34 @@
 
+## [1.8.3] - 2026-10-02
+
+### Fixed
+
+- **The provider now observes the mpv properties its events are derived from.** Nothing in this package — and nothing in the consuming app — ever called `observeProperty`. mpv only reports a property through `mpv_observe_property`, and `MpvBridgeModule` re-applies at `initPlayer` exactly the names JS asked for (`pendingObservedProperties`); it never registers one on its own. Every branch of the native `onMpvPropertyChanged` handler was therefore unreachable dead code, and the state those branches feed kept its `DEFAULT_PROGRESS` value forever.
+
+  Position, duration, volume, speed and play state hid the bug, because the provider also polls those at 1 Hz. Four fields have **no polling fallback** and were simply stuck:
+
+  | property | event | field stuck at |
+  |---|---|---|
+  | `seekable` | `onSeekable` | `seekable: false` |
+  | `seeking` | `onSeeking` | `isSeeking: false` |
+  | `paused-for-cache`, `cache-buffering-state` | `onBuffering` | `isBuffering: false` |
+  | `demuxer-cache-state` | `onCacheState` | `cacheRanges: []` |
+
+  In practice a consumer's seek bar rendered permanently disabled — labelled *"Live stream — not seekable"* on an ordinary, seekable, one-hour file — the buffering spinner never appeared during a stall, and the buffered-range fill behind the scrub thumb was never painted.
+
+  `PlayerProvider` now registers the twelve properties it depends on on mount (after `initPlayer`) and releases them in reverse order on unmount, so mpv is never left writing into a torn-down callback. A failure to register one is logged and skipped rather than aborting the event subscription or the poll.
+
+- **Buffered-range updates are no longer discarded.** The provider's no-op short-circuit compared `prev.cacheRanges.length === next.cacheRanges.length`. mpv grows the cached region by pushing `end` forward while the range count stays constant, so every one of those updates was dropped and the buffered bar froze at its first paint. The comparison now checks the range count plus the first and last bounds — O(1), and it catches the growth case length alone missed.
+
+### Added
+
+- Four regression tests in `src/components/__tests__/PlayerProvider.test.tsx` pinning the observation set and its release on unmount. They fail if the list is emptied — verified by temporarily setting `OBSERVED_PROPERTIES` to `[]` and re-running.
+
+### Verified
+
+- `npx tsc --noEmit`: clean.
+- `npm test`: 10 suites, 152 tests pass (4 new).
+
 ## [1.8.2] - 2026-10-01
 
 ### Fixed

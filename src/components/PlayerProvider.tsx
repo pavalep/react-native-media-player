@@ -220,6 +220,96 @@ const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
 /** How often the provider polls `getPosition` + `getDuration` from the bridge. */
 const POSITION_POLL_INTERVAL_MS = 1000;
 
+/**
+ * mpv properties the provider observes, and the JS event each one backs
+ * in `MpvBridgeModule.onMpvPropertyChanged`.
+ *
+ * WHY THIS LIST HAS TO EXIST
+ * --------------------------
+ * mpv only reports a property through `mpv_observe_property`. That
+ * registration is reachable from JS **only** through
+ * `observeProperty(name)`, and the Kotlin side re-applies exactly the
+ * names JS asked for (`pendingObservedProperties`) at `initPlayer`.
+ * Nothing observes anything on its own.
+ *
+ * So without this list, every branch of the native property handler
+ * below is unreachable dead code, and the state it feeds keeps its
+ * `DEFAULT_PROGRESS` value forever:
+ *
+ *   | property               | event                | field that stays stuck  |
+ *   |------------------------|----------------------|-------------------------|
+ *   | `seekable`             | `onSeekable`         | `seekable` = false      |
+ *   | `seeking`              | `onSeeking`          | `isSeeking` = false     |
+ *   | `paused-for-cache`     | `onBuffering`        | `isBuffering` = false   |
+ *   | `cache-buffering-state`| `onBuffering`        | `isBuffering` = false   |
+ *   | `demuxer-cache-state`  | `onCacheState`       | `cacheRanges` = []      |
+ *   | `time-pos`             | `onPositionChanged`  | (polled as a fallback)  |
+ *   | `duration`             | `onDurationChanged`  | (polled as a fallback)  |
+ *   | `volume`               | `onVolumeChanged`    | (polled as a fallback)  |
+ *   | `speed`                | `onSpeedChanged`     | (polled as a fallback)  |
+ *   | `pause`                | `onPlaybackStateChanged` | (polled as a fallback) |
+ *   | `idle-active` / `eof-reached` | `onPlaybackStateChanged` | (polled as a fallback) |
+ *
+ * The difference between the two groups is the whole point: position,
+ * duration, volume, speed and play state also arrive through the 1 Hz
+ * poll in step 3, so they look fine. `seekable`, `isSeeking`,
+ * `isBuffering` and `cacheRanges` have **no polling fallback**, so with
+ * nothing observing them the scrub bar renders permanently disabled, the
+ * buffering spinner never appears, and the buffered-range fill is never
+ * painted — while every test in this repo still passes, because the
+ * defaults are valid-looking values.
+ *
+ * `demuxer-cache-state` is deliberately observed too: it is the only
+ * source for the buffered ranges that the seek bar paints behind the
+ * played fill.
+ */
+const OBSERVED_PROPERTIES: readonly string[] = [
+  'time-pos',
+  'duration',
+  'volume',
+  'speed',
+  'pause',
+  'idle-active',
+  'eof-reached',
+  'seekable',
+  'seeking',
+  'paused-for-cache',
+  'cache-buffering-state',
+  'demuxer-cache-state',
+];
+
+/**
+ * Compare two `cacheRanges` arrays cheaply but CORRECTLY.
+ *
+ * The provider's no-op short-circuit used to compare
+ * `prev.cacheRanges.length === next.cacheRanges.length`. That is wrong:
+ * mpv grows the cached region by pushing `end` forward while the range
+ * count stays constant, so every one of those updates was discarded and
+ * the buffered bar froze at its first paint.
+ *
+ * Ranges arrive sorted and there are normally one or two of them, so
+ * comparing the count plus the first and last bounds is O(1) and catches
+ * the growth case that length alone misses.
+ */
+function cacheRangesEqual(
+  a: ReadonlyArray<{start: number; end: number}>,
+  b: ReadonlyArray<{start: number; end: number}>,
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  if (a.length === 0) return true;
+  const aFirst = a[0];
+  const aLast = a[a.length - 1];
+  const bFirst = b[0];
+  const bLast = b[b.length - 1];
+  return (
+    aFirst.start === bFirst.start &&
+    aFirst.end === bFirst.end &&
+    aLast.start === bLast.start &&
+    aLast.end === bLast.end
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PlayerProvider
 // ═══════════════════════════════════════════════════════════════════════════
@@ -426,7 +516,7 @@ export function PlayerProvider({
           // ref may have been updated by another event handler in
           // the same batch).
           setProgress((prev) => {
-            // Cheap reference + 7-field equality check.
+            // Cheap reference + field equality check.
             if (
               prev.positionMs === nextProgress.positionMs &&
               prev.durationMs === nextProgress.durationMs &&
@@ -434,7 +524,7 @@ export function PlayerProvider({
               prev.isSeeking === nextProgress.isSeeking &&
               prev.seekable === nextProgress.seekable &&
               prev.cacheFill === nextProgress.cacheFill &&
-              prev.cacheRanges.length === nextProgress.cacheRanges.length
+              cacheRangesEqual(prev.cacheRanges, nextProgress.cacheRanges)
             ) {
               return prev;
             }
@@ -444,6 +534,29 @@ export function PlayerProvider({
         },
       );
       unsubs.push(unsub);
+    }
+
+    // ── 2b. Observe the mpv properties those events are derived from ───
+    // Step 2 subscribes to the JS event names, but mpv only *emits*
+    // them for properties JS registered with `mpv_observe_property`.
+    // Registration must happen after `initPlayer()` (step 0) so the
+    // native handle exists; the Kotlin side also queues any name that
+    // arrives early, so ordering is safe either way.
+    //
+    // A failure here must not abort the subscription above or the poll
+    // below — this list is additive.
+    const observed: string[] = [];
+    for (const property of OBSERVED_PROPERTIES) {
+      try {
+        bridge.observeProperty(property);
+        observed.push(property);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[simba-player] observeProperty('${property}') failed:`,
+          e,
+        );
+      }
     }
 
     // ── 3. 1Hz position/duration poll ───────────────────────────────────
@@ -495,6 +608,16 @@ export function PlayerProvider({
 
     // ── Cleanup ─────────────────────────────────────────────────────────
     return () => {
+      // Release the native property registrations before tearing the
+      // emitter down, so mpv is not left writing into a dead
+      // callback. Reverse order mirrors the registration order.
+      for (let i = observed.length - 1; i >= 0; i -= 1) {
+        try {
+          bridge.unobserveProperty(observed[i]);
+        } catch {
+          // never let a single bad unobserve abort the rest
+        }
+      }
       for (const unsub of unsubs) {
         try {
           unsub();
@@ -524,3 +647,4 @@ export function PlayerProvider({
     </PlayerConfigContext.Provider>
   );
 }
+
