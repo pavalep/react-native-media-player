@@ -300,6 +300,27 @@ const OBSERVED_PROPERTIES: readonly string[] = [
   'paused-for-cache',
   'cache-buffering-state',
   'demuxer-cache-state',
+  // V19 W8.3.1 — `mute` was MISSING from this list, and its absence was
+  // invisible in every test because the whole emitter is mocked.
+  //
+  // `PlayerState.isMuted` is documented and written as
+  // "`onPropertyChanged('mute')` + hydration" (src/types/player.ts:29),
+  // and `applyPlayerEvent` really does handle `case 'mute'`. But mpv
+  // only emits PROPERTY_CHANGE for names passed to
+  // `mpv_observe_property` — and `mute` was not one of them. So
+  // `commands.setMuted(true)` muted the audio while no event ever
+  // reached JS, `state.isMuted` stayed `false`, and a mute button
+  // rendered from that state looked completely inert: the glyph never
+  // changed, the label never changed, and the volume slider kept
+  // showing the real level.
+  //
+  // Measured on device (emulator-5554) with SIMBA W8.3: tapping "Mute"
+  // left the accessible label reading "Mute" and the slider reading
+  // "Volume, 100 percent". The command was correct; the OBSERVATION
+  // was missing. Same class of defect as the `seekable` gap above —
+  // the command surface and the state surface have to be wired
+  // separately, and wiring one does not wire the other.
+  'mute',
 ];
 
 /**
@@ -624,6 +645,33 @@ export function PlayerProvider({
       // instance yet) leaves the field to the event stream.
       // eslint-disable-next-line no-console
       console.warn('[simba-player] seekable seed failed:', e);
+    }
+
+    // ── 2c. Seed the `mute` LEVEL too (same reasoning as `seekable`) ───
+    //
+    // `mute` is edge-triggered for the same reason `seekable` is: mpv
+    // fires PROPERTY_CHANGE when the flag CHANGES, so a provider that
+    // mounts while the player is already muted never learns it from the
+    // stream. `hydratePlayerState` covers a cold start, but not a
+    // provider mounted mid-session in a second React root.
+    //
+    // Reading it here closes that gap, and it is a cheap boolean.
+    try {
+      const raw = bridge.getProperty('mute');
+      if (raw === 'true' || raw === 'false') {
+        const isMuted = raw === 'true';
+        if (isMuted !== stateRef.current.isMuted) {
+          const seeded: PlayerState = {
+            ...stateRef.current,
+            isMuted,
+          };
+          stateRef.current = seeded;
+          setState(seeded);
+        }
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[simba-player] mute seed failed:', e);
     }
 
     // ── 3. 1Hz position/duration poll ───────────────────────────────────

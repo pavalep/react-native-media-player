@@ -34,7 +34,7 @@ import {
   useRenderControls,
 } from '../PlayerProvider';
 import { DEFAULT_PLAYER_CONFIG, DEFAULT_THEME } from '../../types/config';
-import { usePlayerProgress } from '../../types/player';
+import {usePlayer, usePlayerProgress} from '../../types/player';
 
 // Helper to clear all bridge mock call counts between tests.
 function clearBridgeMocks() {
@@ -307,16 +307,77 @@ describe('mpv property observation', () => {
       NativeModules.MpvPlayerModule.observeProperty as jest.Mock
     ).mock.calls.map((call: unknown[]) => call[0]);
 
-    // These four are the ones that are invisible until they are wrong:
+    // These are the ones that are invisible until they are wrong:
     // nothing polls them, so a missing registration is silent.
+    //
+    // `mute` is in this group for a measured reason. `PlayerState
+    // .isMuted` is documented as "`onPropertyChanged('mute')` +
+    // hydration" and `applyPlayerEvent` really does handle
+    // `case 'mute'` — but mpv only emits PROPERTY_CHANGE for names
+    // passed to `mpv_observe_property`, and `mute` was not one of them.
+    // So `commands.setMuted(true)` muted the audio while no event ever
+    // reached JS, `state.isMuted` stayed `false`, and a mute button
+    // rendered from that state looked inert: the glyph never changed
+    // and the label never changed. Found on device (emulator-5554)
+    // with SIMBA W8.3 — tapping "Mute" left the accessible label
+    // reading "Mute".
+    //
+    // Hydration did not save it: `hydratePlayerState` reads
+    // `getMuted()` once, which covers a cold start but not a provider
+    // that mounts mid-session. Hence the separate level seed as well.
     expect(observed).toEqual(
       expect.arrayContaining([
         'seekable',
         'seeking',
         'paused-for-cache',
         'demuxer-cache-state',
+        'mute',
       ]),
     );
+
+    await unmount();
+  });
+
+  it('seeds `mute` as a LEVEL at mount, not only from the event stream', async () => {
+    // SPEC invariant I10: an edge-triggered event is not a level. mpv
+    // fires PROPERTY_CHANGE when `mute` CHANGES, so a provider mounted
+    // while the player is already muted never sees the event — the same
+    // gap that left `seekable` stuck at its default until W7 read it
+    // once at mount.
+    //
+    // The test emits NO event and still expects the correct value, which
+    // is the only shape that proves a SEED exists. A test that emits
+    // the event would pass whether or not the seed is there.
+    clearBridgeMocks();
+    (NativeModules.MpvPlayerModule.getProperty as jest.Mock).mockImplementation(
+      (name: string) => (name === 'mute' ? 'true' : 'null'),
+    );
+
+    const { result, unmount } = await renderHook(() => usePlayer(), {
+      wrapper,
+    });
+
+    expect(result.current.state.isMuted).toBe(true);
+
+    await unmount();
+  });
+
+  it('does not coerce a non-boolean `mute` property to false', async () => {
+    // The bridge serialises MPV_FORMAT_FLAG to the JSON literals
+    // `true` / `false`. Anything else — "null" for an unavailable
+    // property, "" for the NOOP bridge — is not a value, and coercing it
+    // to `false` would silently claim the player is unmuted when it may
+    // not be. This is the same guard the `seekable` seed has.
+    clearBridgeMocks();
+    (NativeModules.MpvPlayerModule.getProperty as jest.Mock).mockImplementation(
+      () => 'null',
+    );
+
+    const { result, unmount } = await renderHook(() => usePlayer(), {
+      wrapper,
+    });
+
+    expect(result.current.state.isMuted).toBe(false);
 
     await unmount();
   });
