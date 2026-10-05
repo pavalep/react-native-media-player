@@ -969,6 +969,38 @@ export function parseMetadata(
  * unchanged. For events that touch both, both are updated. This is
  * the canonical V13 "split-context" pattern.
  */
+/**
+ * Parse an mpv FLAG value into a boolean, or `null` when it is not one.
+ *
+ * mpv serialises `MPV_FORMAT_FLAG` to the JSON literals `true` /
+ * `false`, which reach JS as the STRINGS `"true"` / `"false"`.
+ * `Boolean("false")` is `true`, so any flag read with `Boolean()` is
+ * silently inverted — the `mute` case did exactly that and shipped a
+ * mute control that reported the opposite of reality.
+ *
+ * A real boolean is accepted too, because `getMuted()` on the bridge
+ * returns an actual `boolean` while the event payload is a string, and
+ * the two feed the same field.
+ *
+ * Anything else — `"null"` for an unavailable property, `""` from the
+ * NOOP bridge, `undefined` — is not a value. The caller leaves the
+ * field unchanged rather than coercing it, because guessing here would
+ * report a state the player is not in.
+ */
+function parseMpvFlag(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return null;
+}
+
+/** Apply a `mute` flag event, leaving the field alone if unreadable. */
+function applyMuteFlag(state: PlayerState, value: unknown): PlayerState {
+  const isMuted = parseMpvFlag(value);
+  if (isMuted === null || isMuted === state.isMuted) return state;
+  return { ...state, isMuted };
+}
+
 export function applyPlayerEvent(
   state: PlayerState,
   progress: PlayerProgress,
@@ -1025,7 +1057,22 @@ export function applyPlayerEvent(
         case 'volume':
           return { state: { ...state, volume: Number(value) }, progress };
         case 'mute':
-          return { state: { ...state, isMuted: Boolean(value) }, progress };
+          // A FLAG property arrives as the JSON literal `"true"` /
+          // `"false"` — a STRING, not a boolean. `Boolean("false")` is
+          // `true`, because every non-empty string is truthy, so the
+          // obvious one-liner INVERTED the state: every mute event
+          // reported the opposite of what mpv said.
+          //
+          // Measured on device (emulator-5554, SIMBA W8.3 + lib 1.9.1):
+          // native logged `name=mute value=false` and the bridge
+          // dispatched `value=false`, yet the app's transport rendered
+          // "Unmute" while the player was audible. The mute control read
+          // as permanently inverted.
+          //
+          // Parsed explicitly, and anything unrecognised leaves the
+          // field alone rather than guessing — the same rule the
+          // `seekable` level seed and `hydratePlayerState` follow.
+          return { state: applyMuteFlag(state, value), progress };
         case 'speed':
           return { state: { ...state, speed: Number(value) }, progress };
         case 'loop-file':

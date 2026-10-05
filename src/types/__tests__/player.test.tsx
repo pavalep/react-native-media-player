@@ -431,6 +431,110 @@ describe('usePlayer (inside PlayerProvider)', () => {
     expect(result.current.state.isPlaying).toBe(true);
   });
 
+  // ── The mute flag arrives as a STRING ─────────────────────────────────
+  //
+  // `applyPlayerEvent`'s `mute` case used to be
+  // `isMuted: Boolean(value)`. mpv serialises MPV_FORMAT_FLAG to the
+  // JSON literals `true` / `false`, which reach JS as the STRINGS
+  // `"true"` / `"false"`. Every non-empty string is truthy, so
+  // `Boolean("false") === true` and the state was INVERTED on every
+  // mute event.
+  //
+  // Measured on device (emulator-5554, SIMBA W8.3 + lib 1.9.1): native
+  // logged `name=mute value=false`, the bridge dispatched `value=false`,
+  // and the transport still rendered "Unmute" on an audible player.
+  //
+  // These tests drive the REAL event path through the provider, so they
+  // cover the reducer as well as the wiring.
+
+  it('reads the mute flag string "false" as FALSE, not as truthy', async () => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PlayerProvider>{children}</PlayerProvider>
+    );
+    const { result } = await renderHook(() => usePlayer(), { wrapper });
+
+    const listeners = subs.handlers.get('onPropertyChanged') ?? [];
+    expect(listeners.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      for (const l of listeners) {
+        l({property: 'mute', value: 'false'});
+      }
+    });
+
+    // The default is already false, so this is the state that a
+    // `Boolean()` coercion would have flipped.
+    expect(result.current.state.isMuted).toBe(false);
+  });
+
+  it('reads the mute flag string "true" as TRUE', async () => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PlayerProvider>{children}</PlayerProvider>
+    );
+    const { result } = await renderHook(() => usePlayer(), { wrapper });
+
+    const listeners = subs.handlers.get('onPropertyChanged') ?? [];
+    await act(async () => {
+      for (const l of listeners) {
+        l({property: 'mute', value: 'true'});
+      }
+    });
+
+    expect(result.current.state.isMuted).toBe(true);
+  });
+
+  it('also accepts a real boolean mute flag', async () => {
+    // `getMuted()` on the bridge returns an actual boolean while the
+    // event payload is a string. Both feed the same field, so both must
+    // parse.
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PlayerProvider>{children}</PlayerProvider>
+    );
+    const { result } = await renderHook(() => usePlayer(), { wrapper });
+
+    const listeners = subs.handlers.get('onPropertyChanged') ?? [];
+    await act(async () => {
+      for (const l of listeners) {
+        l({property: 'mute', value: true});
+      }
+    });
+    expect(result.current.state.isMuted).toBe(true);
+
+    await act(async () => {
+      for (const l of listeners) {
+        l({property: 'mute', value: false});
+      }
+    });
+    expect(result.current.state.isMuted).toBe(false);
+  });
+
+  it('leaves the mute state alone for an unreadable flag value', async () => {
+    // `"null"` is what the bridge returns for an unavailable property
+    // and `""` comes from the NOOP bridge. Neither is a boolean, and
+    // coercing them would report a state the player is not in — the
+    // same rule the `seekable` level seed follows.
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PlayerProvider>{children}</PlayerProvider>
+    );
+    const { result } = await renderHook(() => usePlayer(), { wrapper });
+
+    const listeners = subs.handlers.get('onPropertyChanged') ?? [];
+    await act(async () => {
+      for (const l of listeners) {
+        l({property: 'mute', value: 'true'});
+      }
+    });
+    expect(result.current.state.isMuted).toBe(true);
+
+    await act(async () => {
+      for (const l of listeners) {
+        l({property: 'mute', value: 'null'});
+      }
+    });
+    // Still muted — an unreadable value must not silently unmute.
+    expect(result.current.state.isMuted).toBe(true);
+  });
+
   it('updates state when an onError event fires', async () => {
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <PlayerProvider>{children}</PlayerProvider>
