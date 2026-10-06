@@ -783,3 +783,205 @@ describe('commands that route through setProperty', () => {
     );
   });
 });
+
+describe('PlayerState.title comes from mpv media-title (v1.9.3)', () => {
+  // The other half of the fix. Registering `media-title` only matters if
+  // a `media-title` event actually moves `state.title` — and the reason
+  // the header said "Simba Player" is that neither half was in place:
+  // the property was never registered, so the event never arrived.
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <PlayerProvider>{children}</PlayerProvider>
+  );
+
+  let subs: ReturnType<typeof captureSubscribes>;
+  beforeEach(() => {
+    clearBridgeMocks();
+    subs = captureSubscribes();
+  });
+  afterEach(() => {
+    subs.restore();
+  });
+
+  it('starts at the placeholder, so a passing test below is meaningful', async () => {
+    const { result } = await renderHook(() => usePlayer(), { wrapper });
+    expect(result.current.state.title).toBe('Simba Player');
+  });
+
+  it('adopts a media-title property change', async () => {
+    const { result } = await renderHook(() => usePlayer(), { wrapper });
+    const listeners = subs.handlers.get('onPropertyChanged') ?? [];
+    expect(listeners.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      for (const l of listeners) {
+        l({property: 'media-title', value: 'Overrun!'});
+      }
+    });
+
+    expect(result.current.state.title).toBe('Overrun!');
+  });
+
+  it('adopts the title embedded in a metadata property change', async () => {
+    const { result } = await renderHook(() => usePlayer(), { wrapper });
+    const listeners = subs.handlers.get('onPropertyChanged') ?? [];
+
+    // mpv's `metadata` is a NODE LIST, so it arrives as an array of
+    // {key, value} entries — not as a flat object. `parseMetadata`
+    // correctly rejects a flat object with `{}`; the first draft of
+    // this test sent one and failed, which is the test having been
+    // wrong rather than the parser being loose.
+    await act(async () => {
+      for (const l of listeners) {
+        l({
+          property: 'metadata',
+          value: JSON.stringify([
+            {key: 'title', value: 'Overrun!'},
+            {key: 'artist', value: 'Monica Strebel'},
+          ]),
+        });
+      }
+    });
+
+    expect(result.current.state.title).toBe('Overrun!');
+    expect(result.current.state.artist).toBe('Monica Strebel');
+  });
+
+  it('never adopts mpv\'s "null" sentinel as the title', async () => {
+    // mpv serialises a null string as the four-character literal
+    // "null" across the JSON boundary. Assigning it produces a header
+    // reading literally `null` — a regression this codebase has already
+    // been bitten by once (D-035).
+    const { result } = await renderHook(() => usePlayer(), { wrapper });
+    const listeners = subs.handlers.get('onPropertyChanged') ?? [];
+
+    await act(async () => {
+      for (const l of listeners) {
+        l({property: 'media-title', value: 'null'});
+      }
+    });
+
+    expect(result.current.state.title).toBe('Simba Player');
+  });
+
+  it('adopts a real title that arrives after the placeholder was replaced', async () => {
+    // Switching items must not leave the previous item's title behind.
+    const { result } = await renderHook(() => usePlayer(), { wrapper });
+    const listeners = subs.handlers.get('onPropertyChanged') ?? [];
+
+    await act(async () => {
+      for (const l of listeners) {
+        l({property: 'media-title', value: 'First film'});
+      }
+    });
+    await act(async () => {
+      for (const l of listeners) {
+        l({property: 'media-title', value: 'Second film'});
+      }
+    });
+
+    expect(result.current.state.title).toBe('Second film');
+  });
+});
+
+/**
+ * v1.9.3 — the title that was accepted and thrown away.
+ *
+ * `openPlayer({uri, title})` has always accepted a title, and it has
+ * always reached `PlayerActivity`. What never happened was anyone
+ * APPLYING it:
+ *
+ *   - `useLaunchPlayback` destructures only `uri` and `startPositionMs`
+ *     out of the launch params, then calls `loadFile(uri)`;
+ *   - `onFileLoaded`'s handler reads `file?.title` from a native payload
+ *     that contains `requestId` and `resolvedPath` and no `file` key, so
+ *     the branch never fired;
+ *   - `media-title` and `metadata` were absent from OBSERVED_PROPERTIES,
+ *     so mpv's own title could not arrive either.
+ *
+ * The net effect for every consumer was `PlayerState.title` pinned at the
+ * `DEFAULT_STATE` placeholder, and a player header reading "Simba
+ * Player" over whatever film was actually playing.
+ *
+ * The fix applies mpv's own `force-media-title` option BEFORE the load.
+ */
+describe('commands.loadFile applies the launch title (v1.9.3)', () => {
+  beforeEach(() => {
+    clearBridgeMocks();
+  });
+
+  it('writes force-media-title with the supplied title', async () => {
+    const { result } = await renderHook(() => usePlayer());
+    await result.current.commands.loadFile('file:///a.mp4', 'Overrun!');
+    expect(NativeModules.MpvPlayerModule.setProperty).toHaveBeenCalledWith(
+      'force-media-title',
+      'Overrun!',
+    );
+  });
+
+  it('sets the option BEFORE loading, because mpv applies it at load time', async () => {
+    // Order is the contract, not an optimisation. `force-media-title`
+    // is read when the file is loaded, so setting it afterwards would
+    // leave the already-loaded file with mpv's derived title — which
+    // for a signed CDN URL is an opaque token, not a movie name.
+    const { result } = await renderHook(() => usePlayer());
+    await result.current.commands.loadFile('file:///a.mp4', 'Overrun!');
+
+    const order: string[] = [];
+    const setProperty = NativeModules
+      .MpvPlayerModule.setProperty as jest.Mock;
+    const loadFile = NativeModules.MpvPlayerModule.loadFile as jest.Mock;
+    setProperty.mockImplementation(() => {
+      order.push('setProperty');
+    });
+    loadFile.mockImplementation(() => {
+      order.push('loadFile');
+    });
+
+    await result.current.commands.loadFile('file:///b.mp4', 'Second');
+    expect(order).toEqual(['setProperty', 'loadFile']);
+  });
+
+  it('trims the title — a blank or padded value would render as whitespace', async () => {
+    const { result } = await renderHook(() => usePlayer());
+    await result.current.commands.loadFile('file:///a.mp4', '  Overrun!  ');
+    expect(NativeModules.MpvPlayerModule.setProperty).toHaveBeenCalledWith(
+      'force-media-title',
+      'Overrun!',
+    );
+  });
+
+  it('omits the option entirely when no title is supplied', async () => {
+    // No title means "let mpv derive one", which is the pre-1.9.3
+    // behaviour. Writing `force-media-title` with an empty string would
+    // blank the header instead of falling back.
+    const { result } = await renderHook(() => usePlayer());
+    await result.current.commands.loadFile('file:///a.mp4');
+    expect(NativeModules.MpvPlayerModule.setProperty).not.toHaveBeenCalledWith(
+      'force-media-title',
+      expect.anything(),
+    );
+    expect(NativeModules.MpvPlayerModule.loadFile).toHaveBeenCalledWith(
+      'file:///a.mp4',
+    );
+  });
+
+  it('still loads the file when the property write is rejected', async () => {
+    // A rejected `force-media-title` must not cost the user their video.
+    // The video plays; the title falls back to whatever mpv derives.
+    const setProperty = NativeModules.MpvPlayerModule
+      .setProperty as jest.Mock;
+    setProperty.mockImplementationOnce(() => {
+      throw new Error('property rejected');
+    });
+
+    const { result } = await renderHook(() => usePlayer());
+    // `loadFile` is a SYNCHRONOUS command (void), so it throws rather
+    // than rejecting — asserting "does not throw" is the contract.
+    expect(() =>
+      result.current.commands.loadFile('file:///a.mp4', 'Overrun!'),
+    ).not.toThrow();
+    expect(NativeModules.MpvPlayerModule.loadFile).toHaveBeenCalledWith(
+      'file:///a.mp4',
+    );
+  });
+});

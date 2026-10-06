@@ -69,11 +69,34 @@ const SIGNATURE_NORMALIZATIONS = [
     pattern: /        val resolvedTitle = title\?\.takeIf \{ it\.isNotBlank\(\) \} \?: uri/,
     replacement: "        val resolvedTitle = title.takeIf { it.isNotBlank() } ?: uri",
   },
-  // 3. enterPip: drop nullable types + defaults
+  // 3. enterPip — v1.9.3: THE NORMALIZATION IS GONE.
+  //
+  // It used to rewrite
+  //   fun enterPip(chapterTitle: String? = null, progressPct: String? = null)
+  // into
+  //   fun enterPip(chapterTitle: String, progressPct: String)
+  // on the stated grounds that "the spec is non-null, no defaults".
+  //
+  // That was the cause of a hard crash, not a compatibility fix.
+  // TurboModule enforces the KOTLIN arity, and the TypeScript contract
+  // has always declared both params optional, so `enterPip()` from JS
+  // was rejected before it reached the method body:
+  //
+  //   Exception in HostFunction: TurboModule method "enterPip"
+  //   called with 0 arguments (expected argument count: 2)
+  //
+  // The nullability is now KEPT (that is what codegen produces from
+  // `MpvPlayerModule.ts`), which makes both zero-arg and two-arg calls
+  // legal. This rule used to throw if it matched zero times, so it
+  // could not simply be left in place: re-running this script would
+  // have failed the build with a confusing "did not match exactly once"
+  // rather than silently reverting the fix. Kept here as an
+  // assertion instead, so a re-run PROVES the signature is still the
+  // fixed one and fails loudly if someone reintroduces the bug.
   {
-    name: "enterPip-signature",
-    pattern: /    fun enterPip\(chapterTitle: String\? = null, progressPct: String\? = null\) \{/,
-    replacement: "    fun enterPip(chapterTitle: String, progressPct: String) {",
+    name: "enterPip-signature-guard",
+    pattern: /    override fun enterPip\(chapterTitle: String\?, progressPct: String\?\) \{/,
+    replacement: "    override fun enterPip(chapterTitle: String?, progressPct: String?) {",
   },
 ];
 

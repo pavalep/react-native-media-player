@@ -332,6 +332,17 @@ describe('mpv property observation', () => {
         'paused-for-cache',
         'demuxer-cache-state',
         'mute',
+        // v1.9.3 — the title gap. `PlayerState.title` is documented as
+        // coming from mpv `media-title`, and `applyPlayerEvent` handles
+        // both `case 'media-title'` and `case 'metadata'` — but neither
+        // name was ever registered, so no event could ever arrive and
+        // every consumer rendered the DEFAULT_STATE placeholder
+        // "Simba Player" regardless of what was playing.
+        //
+        // Mutation-check: comment either line out and this assertion is
+        // the thing that fails.
+        'media-title',
+        'metadata',
       ]),
     );
 

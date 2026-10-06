@@ -512,15 +512,45 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     @Override
     override fun setOrientation(mode: String) {
-        val activity = getCurrentActivity() ?: return
+        val activity = getCurrentActivity()
+        if (activity == null) {
+            // v1.9.3 — this used to be a bare `?: return`. That is a
+            // silent no-op: the JS side flips its "locked" flag, the
+            // glyph swaps to a padlock, and the video keeps rotating as
+            // if nothing was requested. A control that reports success
+            // while doing nothing is worse than one that errors, so the
+            // refusal is logged at the same level the caller can find.
+            android.util.Log.w(TAG, "setOrientation('$mode') ignored: no current activity")
+            return
+        }
         activity.runOnUiThread {
             val requested = when (mode.lowercase()) {
-                "portrait"  -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
-                "landscape" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+                // v1.9.3 — these were USER_PORTRAIT / USER_LANDSCAPE.
+                //
+                // The `USER_` variants respect the SYSTEM auto-rotate
+                // switch: with auto-rotate off, asking for landscape is
+                // silently ignored by the platform. That is exactly the
+                // reported symptom — tap the lock, the glyph changes,
+                // the video does not move.
+                //
+                // An app asking to PIN the window is making an explicit
+                // user decision about this one activity, so it must win
+                // over a global device preference. The plain constants
+                // are the correct ones for an explicit per-activity
+                // request.
+                "portrait"  -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                "landscape" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                // 'sensor' is the opposite case: it MEANS "follow the
+                // device", so honouring the user's rotation lock is the
+                // point of the mode, and FULL_SENSOR already does that.
                 "sensor"    -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
                 else        -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
             activity.requestedOrientation = requested
+            android.util.Log.d(
+                TAG,
+                "setOrientation('$mode') -> requestedOrientation=$requested (was ${activity.requestedOrientation})",
+            )
         }
     }
 
@@ -1591,15 +1621,33 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     @Override
-    override fun enterPip(chapterTitle: String, progressPct: String) {
+    override fun enterPip(chapterTitle: String?, progressPct: String?) {
         val activity = getCurrentActivity()
         if (activity == null || android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) return
+        // v1.9.3 — SPEC invariant I7 (a TS signature must agree with the
+        // native reality it forwards to).
+        //
+        // These two params were declared `String` (non-null, REQUIRED)
+        // while `MpvPlayerModule.ts` declares them optional. TurboModule
+        // enforces the KOTLIN arity, so the JS call
+        // `enterPip()` with zero arguments was rejected before it ever
+        // reached this body:
+        //
+        //   Exception in HostFunction: TurboModule method "enterPip"
+        //   called with 0 arguments (expected argument count: 2)
+        //
+        // The Kotlin side is now nullable, which is what the TS contract
+        // has always claimed, so both zero-arg and two-arg calls are
+        // legal. The defaults below keep the PiP notification useful
+        // rather than blank.
+        val title = chapterTitle?.takeIf { it.isNotBlank() } ?: "Simba Player"
+        val pct = progressPct?.takeIf { it.isNotBlank() } ?: "0 %"
         try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 val pipParams = com.simba.player.PipManager.buildPipParams(
                     context = activity,
-                    chapterTitle = chapterTitle,
-                    progressPercentage = progressPct,
+                    chapterTitle = title,
+                    progressPercentage = pct,
                 )
                 activity.enterPictureInPictureMode(pipParams)
             } else {

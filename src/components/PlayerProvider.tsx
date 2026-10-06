@@ -300,6 +300,22 @@ const OBSERVED_PROPERTIES: readonly string[] = [
   'paused-for-cache',
   'cache-buffering-state',
   'demuxer-cache-state',
+  // v1.9.3 — `media-title` and `metadata` were MISSING here.
+  //
+  // `PlayerState.title` is documented as coming from mpv `media-title`,
+  // and `applyPlayerEvent` really does handle `case 'media-title'` and
+  // `case 'metadata'` — but mpv only emits MPV_EVENT_PROPERTY_CHANGE for
+  // names that were passed to `mpv_observe_property`, and neither of
+  // these two was. So the handlers existed, the documentation was
+  // specific, and the title never left the native layer: every player
+  // header rendered the `DEFAULT_STATE` placeholder "Simba Player".
+  //
+  // Same defect class as the `mute` gap below and the `seekable` gap
+  // above: a correctly-written handler wired to a property nobody
+  // registered. Invisible to the test suite, which mocks the emitter.
+  // The assertion that catches it is on THIS LIST, not on the handler.
+  'media-title',
+  'metadata',
   // V19 W8.3.1 — `mute` was MISSING from this list, and its absence was
   // invisible in every test because the whole emitter is mocked.
   //

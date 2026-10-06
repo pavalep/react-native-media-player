@@ -185,8 +185,15 @@ export interface PlayerCommands {
   setLoopMode(mode: MpvLoopMode): void;
 
   // File loading
-  /** Load a single media file. */
-  loadFile(uri: string): void;
+  /**
+   * Load a single media file.
+   *
+   * `title` (v1.9.3) is applied as mpv's `force-media-title` BEFORE the
+   * load, so `media-title` — and therefore `PlayerState.title` — carries
+   * the real name of the media rather than a URL fragment. Omit it and
+   * mpv derives its own title as before.
+   */
+  loadFile(uri: string, title?: string): void;
   /** Load a playlist of media files, starting at `startIndex` (default 0). */
   loadPlaylist(uris: string[], startIndex?: number): void;
 
@@ -551,7 +558,39 @@ function buildCommands(): PlayerCommands {
       getMpvPlayerModule().setLoopMode(mode);
     },
 
-    loadFile: (uri: string) => {
+    loadFile: (uri: string, title?: string) => {
+      // v1.9.3 — the launch TITLE is applied here, and this is the fix
+      // for a long-standing defect: `openPlayer({uri, title})` accepted a
+      // title, handed it to `PlayerActivity`, and then NOTHING ever
+      // applied it. `useLaunchPlayback` destructures only `uri` and
+      // `startPositionMs` out of the launch params, `onFileLoaded`'s
+      // handler reads `file?.title` from a native payload that has no
+      // `file` key at all, and `media-title` was missing from
+      // OBSERVED_PROPERTIES — so `PlayerState.title` stayed pinned at the
+      // `DEFAULT_STATE` placeholder and every consumer rendered the
+      // string "Simba Player" no matter what was playing.
+      //
+      // `force-media-title` is mpv's own option for exactly this: it
+      // OVERRIDES the title mpv would otherwise derive from the
+      // container's metadata or the URL's last path segment (which, for
+      // a signed CDN URL, is an opaque token like "abc123?sig=...").
+      //
+      // It has to be set BEFORE the load, so the order below is load
+      // bearing and is not an optimisation: set, then load. Both calls
+      // are plain `@ReactMethod`s, which the bridge dispatches in call
+      // order, so the ordering holds.
+      if (title && title.trim()) {
+        try {
+          getMpvPlayerModule().setProperty('force-media-title', title.trim());
+        } catch (e) {
+          // A rejected property write must not abort the load — the
+          // video is the priority, and mpv will fall back to deriving
+          // its own title. Surfaced loudly in dev because it means the
+          // title will be wrong.
+          // eslint-disable-next-line no-console
+          console.warn('[simba-player] force-media-title rejected:', e);
+        }
+      }
       dlog('commands.loadFile(', uri, ')');
       getMpvPlayerModule().loadFile(uri);
     },
@@ -1052,8 +1091,24 @@ export function applyPlayerEvent(
       const property = String(p.property ?? '');
       const value = p.value;
       switch (property) {
-        case 'media-title':
-          return { state: { ...state, title: String(value ?? '') }, progress };
+        case 'media-title': {
+          // v1.9.3 — this adopted ANY value, including mpv's "no title"
+          // sentinel.
+          //
+          // A null string crosses the JSON boundary as the FOUR-CHARACTER
+          // LITERAL "null", so `String(value ?? '')` produced a player
+          // header reading `null` — the same regression D-035 already
+          // fixed on the `onFileLoaded` path, which filters it there. The
+          // property path never got the same guard, so registering
+          // `media-title` (1.9.3) would have traded one wrong title for
+          // another.
+          //
+          // The rule is the same on both paths: an unrecognised title
+          // leaves the field alone rather than replacing a good one.
+          const title = String(value ?? '');
+          if (!title || title === 'null') break;
+          return { state: { ...state, title }, progress };
+        }
         case 'volume':
           return { state: { ...state, volume: Number(value) }, progress };
         case 'mute':
