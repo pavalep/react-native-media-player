@@ -1,5 +1,9 @@
 import { useEffect } from 'react';
-import { getMpvPlayerModule, type LaunchParams } from '../bridge/MpvPlayerModule';
+import {
+  applyForceMediaTitle,
+  getMpvPlayerModule,
+  type LaunchParams,
+} from '../bridge/MpvPlayerModule';
 
 /**
  * Feed a launch payload to mpv, exactly once per payload.
@@ -44,6 +48,7 @@ export function useLaunchPlayback(
   launchParams: LaunchParams | null | undefined,
 ): void {
   const uri = launchParams?.uri ?? null;
+  const title = launchParams?.title ?? undefined;
   const startPositionSec = launchParams?.startPositionMs
     ? launchParams.startPositionMs / 1000
     : 0;
@@ -55,6 +60,15 @@ export function useLaunchPlayback(
     }
     const bridge = getMpvPlayerModule();
     try {
+      // v1.9.3 — `launchParams.title` was READ BY NOTHING here. The
+      // launch payload has always carried the real title (it comes
+      // straight from the host app's `openPlayer({uri, title})`), and
+      // this hook — the one place that actually loads the file — threw
+      // it away. Combined with `media-title` never being observed, that
+      // is why every player header read "Simba Player".
+      //
+      // Must precede `loadFile`: mpv reads the option at load time.
+      applyForceMediaTitle(bridge, title);
       bridge.loadFile(uri);
       if (startPositionSec > 0) {
         bridge.seekAbsolute(startPositionSec);

@@ -117,6 +117,73 @@ describe('useLaunchPlayback', () => {
     render(<Harness params={undefined} />);
     await waitFor(() => expect(bridge().loadFile).not.toHaveBeenCalled());
   });
+
+  // ── v1.9.3: the title the launch payload always carried ──────────────
+  //
+  // `LaunchParams.title` has always existed and has always come straight
+  // from the host app's `openPlayer({uri, title})`. This hook — the ONE
+  // place that actually loads the file — read `uri` and
+  // `startPositionMs` and discarded it. With `media-title` also unobserved,
+  // `PlayerState.title` stayed at the DEFAULT_STATE placeholder and every
+  // player header rendered the literal string "Simba Player".
+  //
+  // This is the path the app actually takes (`openPlayer` → activity →
+  // launch params → this hook), which is why it is the assertion that
+  // matters, not just the one on `commands.loadFile`.
+
+  it('applies the launch title as mpv force-media-title before loading', async () => {
+    render(<Harness params={{...PARAMS, title: 'Overrun!'}} />);
+    await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
+    expect(bridge().setProperty).toHaveBeenCalledWith(
+      'force-media-title',
+      'Overrun!',
+    );
+  });
+
+  it('sets the title BEFORE the load — mpv reads the option at load time', async () => {
+    const order: string[] = [];
+    bridge().setProperty.mockImplementation(() => {
+      order.push('setProperty');
+    });
+    bridge().loadFile.mockImplementation(() => {
+      order.push('loadFile');
+    });
+
+    render(<Harness params={{...PARAMS, title: 'Overrun!'}} />);
+    await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
+    expect(order).toEqual(['setProperty', 'loadFile']);
+  });
+
+  it('trims the launch title', async () => {
+    render(<Harness params={{...PARAMS, title: '  Overrun!  '}} />);
+    await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
+    expect(bridge().setProperty).toHaveBeenCalledWith(
+      'force-media-title',
+      'Overrun!',
+    );
+  });
+
+  it('omits the option when the title is blank — mpv keeps deriving its own', async () => {
+    // Writing an empty `force-media-title` would BLANK the header, which
+    // is worse than the derived fallback it replaced.
+    render(<Harness params={{...PARAMS, title: '   '}} />);
+    await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
+    expect(bridge().setProperty).not.toHaveBeenCalledWith(
+      'force-media-title',
+      expect.anything(),
+    );
+  });
+
+  it('still loads the file when the title write is rejected', async () => {
+    // A rejected option must never cost the user their video.
+    bridge().setProperty.mockImplementationOnce(() => {
+      throw new Error('property rejected');
+    });
+
+    render(<Harness params={{...PARAMS, title: 'Overrun!'}} />);
+    await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
+    expect(bridge().play).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('SimbaPlayerRoot — headless', () => {

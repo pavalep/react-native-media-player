@@ -753,6 +753,42 @@ export function getMpvPlayerModule(): MpvPlayerModuleBridge {
 }
 
 /**
+ * v1.9.3 — override the media title mpv will report, BEFORE the file is
+ * loaded.
+ *
+ * mpv derives `media-title` from the container's metadata tags, falling
+ * back to the URL's last path segment. Neither is usable for a streaming
+ * catalogue: a signed CDN URL ends in something like
+ * `abc123?sig=…&exp=…`, so an un-overridden player header shows that
+ * token. `force-media-title` is mpv's own option for replacing it.
+ *
+ * Two things are load-bearing here:
+ *
+ * 1. **Ordering.** The option is read at load time, so this must run
+ *    before `loadFile`. Callers that put it after would leave the
+ *    already-loaded file with mpv's derived title.
+ * 2. **Not throwing.** A rejected property write must never abort the
+ *    load — the video matters more than its title, and mpv falls back
+ *    to deriving one. It is warned about instead, because a silent
+ *    failure here is a wrong title that nobody can explain.
+ *
+ * Shared by `commands.loadFile` and `useLaunchPlayback`, which are two
+ * genuinely different entry points (`openPlayer` → activity → launch
+ * params versus a direct programmatic load) and would otherwise each
+ * re-implement the set-then-load ordering.
+ */
+export function applyForceMediaTitle(bridge: MpvPlayerModuleBridge, title?: string): void {
+  const trimmed = title?.trim();
+  if (!trimmed) return;
+  try {
+    bridge.setProperty('force-media-title', trimmed);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[simba-player] force-media-title rejected:', e);
+  }
+}
+
+/**
  * V13 Phase 50c: subscribe to a native event. Returns an
  * unsubscribe function that callers should invoke from
  * `useEffect` cleanup. When the bridge is absent (jest, web

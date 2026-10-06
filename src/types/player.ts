@@ -8,6 +8,7 @@ import {
   MpvVideoParams,
   MpvPlaybackState,
   MpvFileInfo,
+  applyForceMediaTitle,
 } from '../bridge/MpvPlayerModule';
 
 /**
@@ -561,36 +562,16 @@ function buildCommands(): PlayerCommands {
     loadFile: (uri: string, title?: string) => {
       // v1.9.3 — the launch TITLE is applied here, and this is the fix
       // for a long-standing defect: `openPlayer({uri, title})` accepted a
-      // title, handed it to `PlayerActivity`, and then NOTHING ever
-      // applied it. `useLaunchPlayback` destructures only `uri` and
-      // `startPositionMs` out of the launch params, `onFileLoaded`'s
-      // handler reads `file?.title` from a native payload that has no
-      // `file` key at all, and `media-title` was missing from
-      // OBSERVED_PROPERTIES — so `PlayerState.title` stayed pinned at the
-      // `DEFAULT_STATE` placeholder and every consumer rendered the
-      // string "Simba Player" no matter what was playing.
+      // title and handed it to `PlayerActivity`, and then NOTHING ever
+      // applied it. `onFileLoaded`'s handler reads `file?.title` from a
+      // native payload that has no `file` key, and `media-title` was
+      // missing from OBSERVED_PROPERTIES — so `PlayerState.title` stayed
+      // pinned at the `DEFAULT_STATE` placeholder and every consumer
+      // rendered "Simba Player" no matter what was playing.
       //
-      // `force-media-title` is mpv's own option for exactly this: it
-      // OVERRIDES the title mpv would otherwise derive from the
-      // container's metadata or the URL's last path segment (which, for
-      // a signed CDN URL, is an opaque token like "abc123?sig=...").
-      //
-      // It has to be set BEFORE the load, so the order below is load
-      // bearing and is not an optimisation: set, then load. Both calls
-      // are plain `@ReactMethod`s, which the bridge dispatches in call
-      // order, so the ordering holds.
-      if (title && title.trim()) {
-        try {
-          getMpvPlayerModule().setProperty('force-media-title', title.trim());
-        } catch (e) {
-          // A rejected property write must not abort the load — the
-          // video is the priority, and mpv will fall back to deriving
-          // its own title. Surfaced loudly in dev because it means the
-          // title will be wrong.
-          // eslint-disable-next-line no-console
-          console.warn('[simba-player] force-media-title rejected:', e);
-        }
-      }
+      // `force-media-title` is mpv's own option for exactly this. The
+      // set-then-load ordering is the contract — see the helper.
+      applyForceMediaTitle(getMpvPlayerModule(), title);
       dlog('commands.loadFile(', uri, ')');
       getMpvPlayerModule().loadFile(uri);
     },
