@@ -3,6 +3,7 @@
 #include <string>
 #include <cstring>
 #include <cstdio>
+#include <ctime>
 #include <client.h>
 #include <native_state.h>
 
@@ -10,6 +11,34 @@
 #define TRACEI(...) do { } while (0)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+// ── Hot-path logging gate (v1.10.0) ────────────────────────────────────────
+//
+// `MPV_EVENT_PROPERTY_CHANGE` fires for `time-pos` roughly ONCE PER VIDEO
+// FRAME (mpv's own manual documents `time-pos` as the per-frame position
+// property). `MPV_EVENT_LOG_MESSAGE` fires once per mpv/FFmpeg log line,
+// which during network playback is dozens per second.
+//
+// So this loop is the single hottest thread in the app, and writing to
+// logcat from it is not free: `__android_log_print` is a synchronous write
+// into logd's ring buffer, and the string is formatted by snprintf BEFORE
+// any level filtering is considered. Android's own `Log` documentation
+// warns that building the message already costs "at least three
+// allocations"; measured Android studies (FDroid EMSE 2019) report up to
+// ~3x response-time overhead when logging is hot, and droidcon's 2025
+// benchmark shows the cost is paid even when the log is filtered out.
+//
+// A player cannot ship that. `SIMBA_MPV_TRACE` compiles the hot-path logs
+// to nothing; flip it locally when debugging a property/event path.
+// It is OFF by default and is intentionally NOT runtime-configurable:
+// a runtime flag would still evaluate the arguments at every call site.
+#ifdef SIMBA_MPV_TRACE
+#define TRACE_PROPERTY(...) __android_log_print(ANDROID_LOG_DEBUG, "MpvProperty", __VA_ARGS__)
+#define TRACE_MPVLOG(...) __android_log_print(ANDROID_LOG_DEBUG, "mpv", __VA_ARGS__)
+#else
+#define TRACE_PROPERTY(...) do { } while (0)
+#define TRACE_MPVLOG(...) do { } while (0)
+#endif
 
 // ── External globals set by main.cpp ────────────────────────────────────────
 
@@ -19,6 +48,14 @@ extern jclass g_cls_MPVLib;
 extern jmethodID g_mid_onEvent;
 extern jmethodID g_mid_onPropertyChanged;
 extern jmethodID g_mid_onError;
+
+// ── Coalescing state (v1.10.0) ─────────────────────────────────────────────
+//
+// Only touched by the mpv event thread (mpvEventLoop), so plain int64_t is
+// sufficient — no atomics or locks on the hottest path in the app. 0 means
+// "nothing forwarded yet", so the first event of each property always passes.
+static int64_t g_lastPositionForwardUs = 0;
+static int64_t g_lastCacheForwardUs = 0;
 
 // ── Helper: attach current thread to JVM and call static void method ────────
 
@@ -187,6 +224,67 @@ static void callJavaPropertyChanged(const char *name, const char *jsonValue) {
     if (jValue) env->DeleteLocalRef(jValue);
 }
 
+// ── High-frequency property coalescing (v1.10.0) ──────────────────────────
+//
+// `time-pos` is mpv's PER-FRAME position property (mpv manual, "Playback
+// Control": `time-pos` "updates about once per frame"). `demuxer-cache-state`
+// is a NODE map containing `seekable-ranges` (an array of maps) plus
+// `fw-bytes`, `reader-pts`, `raw-input-rate` — a large payload that changes
+// on essentially every cache tick.
+//
+// Forwarding both verbatim costs, per frame: a std::string build, two JNI
+// local refs, a JNI static call, a WritableMap alloc on the Kotlin side, an
+// RN event dispatch, and a React setState that re-renders the entire player
+// chrome. Measured on-device: 1168 `demuxer-cache-state` events inside one
+// short window, dominating every other event combined.
+//
+// Media3's own guidance for the reference Android player is the opposite of
+// this: "the listener interface doesn't include any callbacks to track normal
+// playback progression. To continuously monitor playback progress ... you
+// should query the current position at proper intervals."
+//
+// So: drop frames we are not going to render. Dropping happens here, at the
+// cheapest possible point — BEFORE jsonNode()/jsonQuote() serialization and
+// before the JNI crossing, so a dropped frame costs one strcmp.
+//
+// This is a RATE LIMIT, not a filter: the most recent value always wins and
+// is always delivered, so the UI stays truthful. It is only a trailing-edge
+// rate limit, and it is deliberately NOT applied to properties whose value is
+// itself the signal (pause, eof-reached, seekable, muted, speed, loop-mode,
+// media-title, chapter, track-list): losing one of those is a lost event, not
+// a dropped duplicate frame.
+static const int64_t kPositionCoalesceUs = 250000;   // 250 ms -> 4 Hz
+static const int64_t kCacheCoalesceUs     = 500000;   // 500 ms -> 2 Hz
+
+static int64_t nowMicros() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<int64_t>(ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
+}
+
+// Returns true when the property should be forwarded to the JVM.
+// `nowUs` is passed in rather than sampled per call so a single iteration
+// of the loop shares one clock read.
+static bool shouldForwardProperty(const char *name, int64_t nowUs) {
+    if (!name) return true;
+
+    int64_t *lastUs = nullptr;
+    int64_t windowUs = 0;
+    if (strcmp(name, "time-pos") == 0) {
+        lastUs = &g_lastPositionForwardUs;
+        windowUs = kPositionCoalesceUs;
+    } else if (strcmp(name, "demuxer-cache-state") == 0) {
+        lastUs = &g_lastCacheForwardUs;
+        windowUs = kCacheCoalesceUs;
+    } else {
+        return true;
+    }
+
+    if (*lastUs != 0 && nowUs - *lastUs < windowUs) return false;
+    *lastUs = nowUs;
+    return true;
+}
+
 static void callJavaError(int code, const char *message, const char *requestId, bool recoverable) {
     JNIEnv *env = getEventEnv();
     if (!env || !g_cls_MPVLib || !g_mid_onError) return;
@@ -237,6 +335,9 @@ void eventLoop() {
     // state in which mpv is obliged to release the coalesced property
     // changes. One queue-drained iteration costs one non-blocking call.
     while (g_running.load()) {
+        // Sampled once per iteration (not per property) so a drain batch that
+        // releases several coalesced property changes shares one clock read.
+        const int64_t nowUs = nowMicros();
         mpv_event *event = mpv_wait_event(g_mpv, 0);
         if (!event) {
             LOGE("[PlaybackTrace][Native][eventLoop] mpv_wait_event returned null");
@@ -338,6 +439,14 @@ void eventLoop() {
                     TRACEI("[PlaybackTrace][Native][eventLoop] property=%s format=NONE", prop->name);
                     break;
                 }
+                // Coalesce BEFORE serializing. `demuxer-cache-state` is a
+                // NODE map (seekable-ranges array of maps + fw-bytes +
+                // reader-pts), so skipping it here skips the most expensive
+                // payload in the whole loop rather than just a scalar.
+                if (!shouldForwardProperty(prop->name, nowUs)) {
+                    TRACEI("[PlaybackTrace][Native][property] coalesced name=%s", prop->name);
+                    break;
+                }
                 std::string json;
                 if (prop->format == MPV_FORMAT_NODE && prop->data) {
                     json = jsonNode(static_cast<const mpv_node *>(prop->data));
@@ -357,15 +466,21 @@ void eventLoop() {
                     json = "null";
                 }
                 TRACEI("[PlaybackTrace][Native][property] name=%s format=%d value=%s", prop->name, prop->format, json.c_str());
-                // DEBUG (not TRACEI) on purpose. TRACEI is compiled to a
-                // no-op, which is why a broken property path was
-                // completely invisible in logcat for as long as it
-                // existed. This is the one line that makes
-                // "properties are observed but events never arrive"
+                // This line deliberately existed as a VISIBLE DEBUG log
+                // rather than TRACEI: TRACEI compiles to a no-op, which is
+                // why a broken property path was completely invisible in
+                // logcat for as long as it existed. It is the one line that
+                // makes "properties are observed but events never arrive"
                 // distinguishable from "the loop never saw them".
-                __android_log_print(ANDROID_LOG_DEBUG, "MpvProperty",
-                                    "[PlaybackTrace][Native][property] name=%s format=%d value=%s",
-                                    prop->name, prop->format, json.c_str());
+                //
+                // v1.10.0: it is now behind the SIMBA_MPV_TRACE compile-time
+                // gate instead. Leaving it unconditional cost a synchronous
+                // logd write PER VIDEO FRAME (time-pos) on the hottest
+                // thread in the app, which is a shipping-performance defect,
+                // not a diagnostic. Build with -DSIMBA_MPV_TRACE to restore
+                // exactly this visibility while debugging.
+                TRACE_PROPERTY("[PlaybackTrace][Native][property] name=%s format=%d value=%s",
+                               prop->name, prop->format, json.c_str());
                 callJavaPropertyChanged(prop->name, json.c_str());
                 break;
             }
@@ -373,8 +488,7 @@ void eventLoop() {
             case MPV_EVENT_LOG_MESSAGE: {
                 auto *log = (mpv_event_log_message *)event->data;
                 TRACEI("[PlaybackTrace][Native][mpv-log] prefix=%s level=%s text=%s", log && log->prefix ? log->prefix : "", log && log->level ? log->level : "", log && log->text ? log->text : "");
-                __android_log_print(ANDROID_LOG_DEBUG, "mpv", "[%s] %s: %s",
-                                    log->prefix, log->level, log->text);
+                TRACE_MPVLOG("[%s] %s: %s", log->prefix, log->level, log->text);
                 // Do not promote every `error`-level mpv log to a playback
                 // failure. Decoder warnings such as recoverable mjpeg overread
                 // messages are common during network playback and previously

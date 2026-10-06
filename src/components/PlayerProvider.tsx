@@ -217,9 +217,6 @@ const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
   'onPipClose',
 ];
 
-/** How often the provider polls `getPosition` + `getDuration` from the bridge. */
-const POSITION_POLL_INTERVAL_MS = 1000;
-
 /**
  * mpv properties the provider observes, and the JS event each one backs
  * in `MpvBridgeModule.onMpvPropertyChanged`.
@@ -371,6 +368,48 @@ function cacheRangesEqual(
   );
 }
 
+/**
+ * v1.10.0 — make the provider's existing no-op guard actually WORK.
+ *
+ * `applyPlayerEvent` is written as pure spread-and-return, so it allocates
+ * a NEW `PlayerState` object for every event it handles, even when not a
+ * single field changed. The provider then did:
+ *
+ *     if (nextState !== stateRef.current) { ... setState(nextState) }
+ *
+ * That is a reference comparison against an object the reducer JUST
+ * created, so it was true for every event, always. The guard was dead code.
+ *
+ * Consequence: `setState` fired on every single player event, replacing the
+ * `PlayerStateContext` value and re-rendering every `usePlayer()` consumer —
+ * all 12 chrome components in the app — including on `onPositionChanged`,
+ * which mpv emits once per video frame. `videoReconfig` and the PiP no-ops
+ * the comment above cites were never skipped either.
+ *
+ * WHY A GENERIC SHALLOW COMPARE INSTEAD OF A HAND-WRITTEN FIELD LIST:
+ * a hand-written `a.foo === b.foo && ...` list silently goes stale the
+ * moment a field is added to `PlayerState` — the new field is simply not
+ * compared, the function reports "equal" when it is not, and the guard
+ * starts dropping real updates. That is worse than no guard at all, and it
+ * is invisible in tests. Deriving the key list from the object at runtime
+ * means the contract cannot drift.
+ *
+ * Shallow reference equality is the correct depth here: `applyPlayerEvent`
+ * only ever REPLACES these nested values (`playlist`, `tracks`, `chapters`,
+ * `currentChapter`, `videoParams`), it never mutates one in place, so a
+ * changed reference reliably means changed content.
+ */
+const PLAYER_STATE_SCALAR_KEYS = Object.keys(DEFAULT_STATE) as Array<
+  keyof PlayerState
+>;
+
+function playerStateEqual(a: PlayerState, b: PlayerState): boolean {
+  for (const key of PLAYER_STATE_SCALAR_KEYS) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PlayerProvider
 // ═══════════════════════════════════════════════════════════════════════════
@@ -435,8 +474,14 @@ export interface PlayerProviderProps {
  *    loop / playlist / tracks / chapters / video params.
  *  - **Event subscriptions** (mount): all 22 mpv events are subscribed
  *    via `subscribePlayerEvent` and dispatched to `applyPlayerEvent`.
- *  - **1Hz position/duration poll** (mount): `setInterval` calls the
- *    sync `getPosition` / `getDuration` getters every 1000ms.
+ *  - **Mount-time level seeds** (mount): `seekable` and `mute` are read once
+ *    via the sync `getProperty` getter, because mpv emits those two as
+ *    EDGES and a provider mounted mid-session would otherwise never see them.
+ *
+ * v1.10.0 removed a 1Hz `setPosition`/`getDuration` poll that used to run
+ * alongside the event stream. The event stream is authoritative and
+ * delivers position at 4Hz after native coalescing; the poll was a second
+ * writer to the same fields and blocked the JS thread twice a second.
  *
  * State is held in a `useState` (rendered, for React) + `useRef`
  * (current, for event handlers to read without stale closures) pair.
@@ -487,15 +532,13 @@ export function PlayerProvider({
   // subscriptions.
   const stateRef = useRef<PlayerState>(DEFAULT_STATE);
   const progressRef = useRef<PlayerProgress>(DEFAULT_PROGRESS);
-  // Tracks whether the 1Hz poll should fire. The poll runs in a child
-  // effect that mounts the interval; the unmount cleanup is symmetric.
-  // We mount/unmount ONCE for the provider's lifetime (no deps), so
-  // the poll survives config changes.
 
-  // Initial hydration + event subscriptions + 1Hz poll all live in a
-  // single mount-only effect so they share the same lifecycle. (If we
-  // split them across multiple effects, the ref + state would briefly
+  // Initial hydration + event subscriptions + mount-time level seeds all
+  // live in a single mount-only effect so they share the same lifecycle.
+  // (If we split them across multiple effects, the ref + state would briefly
   // desync during the gap between hydration and subscription mount.)
+  // The 1Hz position poll this effect used to also start was removed in
+  // v1.10.0 — the event stream is authoritative for position and duration.
   useEffect(() => {
     const bridge = getMpvPlayerModule();
 
@@ -565,10 +608,12 @@ export function PlayerProvider({
               event,
               payload,
             );
-          // Skip the setState if the new state is reference-equal
-          // (a true no-op event for this state) — prevents
-          // re-render storms on `videoReconfig` / PiP no-ops.
-          if (nextState !== stateRef.current) {
+          // Skip the setState when no FIELD changed. This must be a field-wise
+          // compare, not a reference compare: `applyPlayerEvent` always
+          // returns a freshly-spread object, so `nextState !== stateRef.current`
+          // was true for literally every event and never skipped anything.
+          // See playerStateEqual() for why the key list is derived, not typed.
+          if (!playerStateEqual(nextState, stateRef.current)) {
             stateRef.current = nextState;
             setState(nextState);
           }
@@ -690,52 +735,32 @@ export function PlayerProvider({
       console.warn('[simba-player] mute seed failed:', e);
     }
 
-    // ── 3. 1Hz position/duration poll ───────────────────────────────────
-    // Both `getPosition` and `getDuration` are sync React methods
-    // on the bridge, so the poll doesn't queue microtasks. We
-    // also pick up the playback state (`getPlaybackState`) here
-    // as a backup for the event stream (e.g. if the consumer is
-    // mounted mid-playback and missed the `onPlaybackStateChanged`
-    // event).
-    const pollId = setInterval(() => {
-      try {
-        const posSec = bridge.getPosition();
-        const durSec = bridge.getDuration();
-        const positionMs = Number.isFinite(posSec)
-          ? Math.round(posSec * 1000)
-          : stateRef.current.positionMs;
-        const durationMs = Number.isFinite(durSec)
-          ? Math.round(durSec * 1000)
-          : stateRef.current.durationMs;
-
-        if (
-          positionMs === stateRef.current.positionMs &&
-          durationMs === stateRef.current.durationMs
-        ) {
-          return; // no movement — skip the setState
-        }
-        const next: PlayerState = {
-          ...stateRef.current,
-          positionMs,
-          durationMs,
-        };
-        stateRef.current = next;
-        setState(next);
-        const nextProgress: PlayerProgress = {
-          ...progressRef.current,
-          positionMs,
-          durationMs,
-        };
-        progressRef.current = nextProgress;
-        setProgress(nextProgress);
-      } catch (e) {
-        // Bridge threw — keep the last known position. (The no-op
-        // bridge returns 0/0, which falls into the "no movement"
-        // early-return above, so it doesn't spam setState.)
-        // eslint-disable-next-line no-console
-        console.warn('[simba-player] position poll failed:', e);
-      }
-    }, POSITION_POLL_INTERVAL_MS);
+    // ── 3. No position poll (v1.10.0) ─────────────────────────────────
+    //
+    // This used to be a 1Hz `setInterval` calling the SYNCHRONOUS
+    // `getPosition()` / `getDuration()` bridge getters. It was removed, not
+    // tuned, for three reasons:
+    //
+    //  a) It was a SECOND source of truth for the same two numbers. mpv's
+    //     `time-pos` and `duration` are already observed (step 2b) and
+    //     arrive as `onPositionChanged` / `onDurationChanged`. Two writers
+    //     to one field means the value on screen is whatever landed last,
+    //     which is how a seek bar ends up jumping backwards.
+    //
+    //  b) Both getters are sync TurboModule methods, so each tick blocked
+    //     the JS thread for the duration of two JNI round-trips. The RN
+    //     guidance for sync methods is to use them only for sub-5ms work
+    //     and never on a recurring timer.
+    //
+    //  c) It bought nothing. The event stream is authoritative and, since
+    //     the native coalescing landed, delivers position at 4Hz — faster
+    //     than the 1Hz it replaced, while doing ~15x less total work than
+    //     the old per-frame path.
+    //
+    // The mount-time LEVEL seeds above (seekable, mute) are deliberately
+    // KEPT: mpv emits those as edges, so an event-only provider mounted
+    // mid-session would never learn them. Position and duration are levels
+    // that change continuously, so the event stream always repopulates them.
 
     // ── Cleanup ─────────────────────────────────────────────────────────
     return () => {
@@ -756,7 +781,7 @@ export function PlayerProvider({
           // never let a single bad unsub abort the rest
         }
       }
-      clearInterval(pollId);
+      // v1.10.0: no interval to clear — the position poll was removed.
       // Best-effort: remove any lingering listeners from the emitter
       // so the next mount of the provider starts clean. (Strict-mode
       // double-invocation can otherwise leave phantom listeners.)

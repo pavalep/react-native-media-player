@@ -35,6 +35,19 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         const val NAME = "MpvPlayerModule"
         private const val TAG = "MpvBridgeModule"
 
+        // v1.10.0 — hot-path property tracing.
+        //
+        // `time-pos` is mpv's per-frame property, so tracing every property
+        // change costs a logd write 30-60x/second on the player event
+        // thread. Off in every build config; flip to `true` locally when
+        // diagnosing a property that is observed but never arrives.
+        //
+        // Deliberately a `const val`, not a system property or env lookup:
+        // a runtime lookup would itself run on the hot path, and
+        // `Log.isLoggable()` is not free either. A constant lets R8 inline
+        // the branch away in release entirely.
+        private const val TRACE_PROPERTY_EVENTS = false
+
         // V22.0.0 / 1.5.10 (D-034): activity-aware launchParams guard.
         //
         // Background: `lastLaunchParams` (declared further down) is the
@@ -277,15 +290,42 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         }
 
         override fun onMpvPropertyChanged(name: String, jsonValue: String) {
-            Log.i(TAG, "[PlaybackTrace][Bridge][listener:property] name=$name value=$jsonValue")
-            try {
-                val payload = Arguments.createMap().apply {
-                    putString("property", name)
-                    putString("value", jsonValue)
+            // v1.10.0: this was an unconditional Log.i carrying the full
+            // JSON payload of EVERY property change. `time-pos` changes once
+            // per video frame, so this fired 30-60x/second on the player's
+            // event thread, each call building the message string
+            // (Kotlin string templates are evaluated before Log.i can decide
+            // to discard them) and performing a synchronous write to logd.
+            // Gate it behind the same debug switch as the JS dlog(); the
+            // property value is still delivered to JS regardless.
+            if (TRACE_PROPERTY_EVENTS) {
+                Log.d(TAG, "[PlaybackTrace][Bridge][listener:property] name=$name value=$jsonValue")
+            }
+            // v1.10.0: dedupe the generic stream. Every property below already
+            // gets a dedicated, typed event (onPositionChanged, onBuffering,
+            // onCacheState, onSeekable, ...), and `onPropertyChanged` was
+            // emitted for all of them too — so `time-pos` crossed the bridge
+            // twice per frame and the JS reducer ran twice. Emitting the
+            // generic event ONLY for properties that have no dedicated event
+            // keeps the JS `onPropertyChanged` contract intact for anything
+            // that reads it while removing the double delivery.
+            val hasDedicatedEvent = when (name) {
+                "time-pos", "duration", "volume", "speed", "pause",
+                "idle-active", "eof-reached", "seekable", "seeking",
+                "cache-buffering-state", "paused-for-cache",
+                "demuxer-cache-state" -> true
+                else -> false
+            }
+            if (!hasDedicatedEvent) {
+                try {
+                    val payload = Arguments.createMap().apply {
+                        putString("property", name)
+                        putString("value", jsonValue)
+                    }
+                    eventEmitter.emit("onPropertyChanged", payload)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Property change emit failed: ${e.message}")
                 }
-                eventEmitter.emit("onPropertyChanged", payload)
-            } catch (e: Exception) {
-                Log.w(TAG, "Property change emit failed: ${e.message}")
             }
             // P33.4: re-emit `cache-buffering-state` updates as `onBuffering`
             // so the JS UI can show a buffering spinner for slow streams
