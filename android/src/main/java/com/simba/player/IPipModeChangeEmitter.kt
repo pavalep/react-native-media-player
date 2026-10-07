@@ -2,16 +2,13 @@ package com.simba.player
 
 /**
  * Module-side contract that lets `PlayerActivity` (in the module)
- emit PiP mode-change events to JS without holding a direct reference
- to `MpvBridgeModule` (which lives in the consumer app's
- `com.simba.player.mpv` package — Gradle forbids the module from
- importing the app).
+ * emit PiP mode-change events to JS without holding a direct reference
+ * to `MpvBridgeModule`.
  *
- * Pattern mirrors [IMpvNativePtrProvider] (Phase 7): the consumer
- * app's bridge module implements this contract; module code looks it up
- * via `reactContext.getNativeModule("MpvPlayerModule") as?
- * IPipModeChangeEmitter` and casts. The cast is safe because we
- * control both sides of the boundary.
+ * The consumer app's bridge module implements this contract; module code
+ * looks it up via `reactContext.getNativeModule("MpvPlayerModule") as?
+ * IPipModeChangeEmitter` and casts. The cast is safe because we control
+ * both sides.
  *
  * Phase 10 deliverable: `PlayerActivity.onPictureInPictureModeChanged`
  * looks up the bridge module and calls [emitPictureInPictureModeChanged]
@@ -19,13 +16,10 @@ package com.simba.player
  * (where `MainActivity.onPictureInPictureModeChanged` called
  * `MpvBridgeModule.onPictureInPictureModeChanged(isInPip)` directly).
  *
- * Why a separate interface (not extend [IMpvNativePtrProvider]):
- * `IMpvNativePtrProvider` is a single-method contract focused on the
- * mpv native handle. PiP mode changes are a distinct capability with
- * its own event payload (`isInPip: Boolean`). Keeping the contracts
- * separate means each is independently mockable in tests and each
- * fails loudly at the cast site if the bridge module ever drops one
- * capability while keeping the other.
+ * Unlike the native-pointer contract this once mirrored, this one
+ * genuinely needs the React context - it exists to deliver an event
+ * *to JS*. That is why it survives V20 Phase A while that one was
+ * deleted and replaced by `PlaybackHost`.
  */
 interface IPipModeChangeEmitter {
     /**

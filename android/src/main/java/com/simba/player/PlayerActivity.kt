@@ -142,13 +142,27 @@ class PlayerActivity : ReactActivity() {
 
   private var mpvRenderView: MpvRenderView? = null
 
-  // ── Native pointer cache (Phase 9) ────────────────────────────────
-  // The libmpv native pointer, captured whenever wireNativePtr
-  // successfully resolves it via the RN bridge. Used by Phase 9's
-  // getVideoAspect() to query `video-params/aspect` for PiP sizing.
-  // Zero means "mpv not yet initialised by JS"; Phase 9 falls back
-  // to the 16:9 default in that case.
-  private var lastNativePtr: Long = 0L
+  // ── Engine handle (V20 Phase A) ─────────────────────────────────────
+  // V20 removed `PlaybackHost.handle()`, the cached copy of the libmpv handle.
+  // The copy could never be invalidated: MpvBridgeModule.destroy() zeroed
+  // only its own field, so after a destroy/re-create the Activity held a
+  // pointer that no longer matched the process global `g_mpv` and every
+  // call below was refused by the native lease guard. The symptom was a
+  // control surface that was present, wired and permanently inert.
+  //
+  // The handle now lives in exactly one place — `PlaybackHost` — and is
+  // read at the point of use via `PlaybackHost.handle()`. This listener
+  // exists only so the render view is wired when mpv becomes available;
+  // it replaces a 300ms × 200-attempt polling loop.
+  private val onEngineAvailable: (Long) -> Unit = engineAvailable@{ ptr ->
+    val view = mpvRenderView ?: return@engineAvailable
+    Log.i(TAG, "engine available ptr=$ptr, calling MpvRenderView.setNativePtr")
+    view.setNativePtr(ptr)
+    // The session's first metadata read happens now that mpv is wired,
+    // so the lock-screen widget shows the file's real tags rather than
+    // just the launch title.
+    setMediaSessionMetadata()
+  }
 
   // ── PiP action receiver (Phase 10) ────────────────────────────────
   // `PipActionReceiver` listens for the 3 PiP overlay intents
@@ -483,31 +497,22 @@ class PlayerActivity : ReactActivity() {
       Log.i(TAG, "MpvRenderView hidden for audio mode (visibility=GONE)")
     }
 
-    // ── Phase 7: Wire the libmpv native pointer into MpvRenderView ────
-    // The mpv handle is owned by `MpvBridgeModule` (in the consumer app's
-    // `com.simba.player.mpv` package). The module can't see that class
-    // directly, so we resolve it through the RN bridge:
-    //   1. Resolve the ReactApplicationContext via the ReactApplication
-    //      interface (works for both bridgeless `reactHost` and legacy
-    //      `reactInstanceManager`).
-    //   2. Look up the bridge module by its registered name
-    //      (`MpvPlayerModule`).
-    //   3. Cast to the module-side `IMpvNativePtrProvider` interface
-    //      (MpvBridgeModule implements it).
-    //   4. Call `fetchNativePtr()` and pass to `mpvRenderView.setNativePtr`.
+    // ── Wire the libmpv handle into MpvRenderView (V20 Phase A) ─────────
+    // V20 replaced a polling loop with a listener.
     //
-    // Defer via `Handler(Looper.getMainLooper()).post { ... }` so the
-    // lookup runs AFTER super.onCreate has installed the React tree,
-    // AFTER the activity is fully resumed (RN may still be initialising
-    // its bridge at this point), and AFTER the SurfaceView's first
-    // surfaceCreated callback has fired (so the view's internal holder
-    // is ready for an attachSurfaceLocked call). 50ms is enough on
-    // every device we have tested (Pixel 4a through S23); if mpv is
-    // still 0 here, a follow-up Handler.postDelayed retries every
-    // 200ms until non-zero (capped at 5 attempts to avoid an infinite
-    // spin if RN never initialises).
-    val h = Handler(Looper.getMainLooper())
-    h.post { wireNativePtr(retryCount = 0) }
+    // Before: the Activity asked the RN bridge for the handle via
+    // `getNativeModule("MpvPlayerModule")`, cast to
+    // `IMpvNativePtrProvider`, and retried every 300ms up to 200 times
+    // (~60s) because a cold React start can take 30+s. That existed to
+    // work around a Gradle module boundary that Phase 6 already removed,
+    // and it cached the result in `PlaybackHost.handle()`, which could never be
+    // invalidated.
+    //
+    // Now: `PlaybackHost` owns the handle and notifies when it appears.
+    // `whenAvailable` invokes the listener immediately if the handle is
+    // already present, so a late-mounting Activity converges with no
+    // polling, no interface cast and no cached copy.
+    PlaybackHost.whenAvailable(onEngineAvailable)
 
     // ── Phase 10: Register PiP action receiver ────────────────────────
     // Listens for the 3 PiP overlay intents and forwards them to JS via
@@ -551,89 +556,10 @@ class PlayerActivity : ReactActivity() {
   }
 
   /**
-   * Phase 7: Resolve the libmpv native pointer from the JS-side
-   * `MpvBridgeModule` via the React Native bridge and hand it to
-   * `MpvRenderView.setNativePtr(...)`. Retries on the main thread if
-   * the pointer is still 0 (mpv not yet initialised by JS).
-   */
-  private fun wireNativePtr(retryCount: Int) {
-    val view = mpvRenderView ?: run {
-      Log.w(TAG, "wireNativePtr: MpvRenderView gone, aborting")
-      return
-    }
-    val reactContext: ReactApplicationContext? = resolveReactApplicationContext()
-    if (reactContext == null) {
-      Log.w(TAG, "wireNativePtr: ReactApplicationContext null (retryCount=$retryCount)")
-      maybeRetry(retryCount)
-      return
-    }
-    val nativeModule: NativeModule? = try {
-      reactContext.getNativeModule("MpvPlayerModule")
-    } catch (e: Exception) {
-      Log.w(TAG, "wireNativePtr: getNativeModule threw ${e.message}", e)
-      null
-    }
-    if (nativeModule !is IMpvNativePtrProvider) {
-      Log.w(
-        TAG,
-        "wireNativePtr: 'MpvPlayerModule' not registered yet or doesn't implement IMpvNativePtrProvider " +
-          "(got ${nativeModule?.javaClass?.simpleName ?: "null"}, retryCount=$retryCount)",
-      )
-      maybeRetry(retryCount)
-      return
-    }
-    val ptr = nativeModule.fetchNativePtr()
-    if (ptr == 0L) {
-      Log.i(TAG, "wireNativePtr: MpvBridgeModule not yet initialised by JS (retryCount=$retryCount)")
-      maybeRetry(retryCount)
-      return
-    }
-    // Phase 9: cache the native pointer so subsequent PiP param
-    // updates can query mpv's `video-params/aspect` without
-    // re-resolving the bridge module.
-    lastNativePtr = ptr
-    Log.i(TAG, "wireNativePtr: ptr=$ptr, calling MpvRenderView.setNativePtr")
-    view.setNativePtr(ptr)
-    // Phase 19.4: refresh the MediaSession metadata now that the
-    // mpv handle is wired up. The first call (in
-    // createMediaSession) was just the launch title; this one
-    // queries mpv's `media-title` / `metadata/by-key/artist` /
-    // `metadata/by-key/album` and updates the lock-screen
-    // widget with the actual file tags. A future phase can
-    // also re-run this from an observer hook (Phase 22
-    // territory) to catch later metadata refreshes.
-    setMediaSessionMetadata()
-  }
-
-  /**
-   * Phase 7 helper: schedule another `wireNativePtr` attempt on the main
-   * thread. D-040: bump the retry budget from 5×200ms (1.2s, the V22
-   * baseline) to 200×300ms (60s) so a cold start of PlayerActivity's
-   * React tree — which can take 30+ seconds before the ReactApplication
-   * Context is ready — still succeeds. Without this, a direct
-   * `am start` / deep link / app-shortcut launch (where MainActivity is
-   * NOT warming React first) leaves MpvRenderView's nativePtr at 0 and
-   * the video stays black even though mpv initialised. After 200
-   * attempts we log + give up — a hung RN init is the only path that
-   * exhausts the budget and that scenario surfaces separately as the
-   * JS bundle failing to mount.
-   */
-  private fun maybeRetry(retryCount: Int) {
-    if (retryCount >= 200) {
-      Log.e(TAG, "wireNativePtr: giving up after ${retryCount + 1} attempts (~60s)")
-      return
-    }
-    Handler(Looper.getMainLooper()).postDelayed(
-      { wireNativePtr(retryCount + 1) },
-      300L,
-    )
-  }
-
-  /**
    * Phase 21 helper: resolve the module-side [IMpvConfigProvider] via
    * the React Native bridge and log the active PlayerConfig keys.
    *
-   * Mirrors the wireNativePtr retry pattern in spirit (resolve
+   * Mirrors the engine-availability pattern in spirit (resolve
    * context → lookup → cast) but runs once — a missed config read
    * is just a missing log line, not a playback failure. The
    * lookup runs synchronously because the Provider push happens
@@ -732,7 +658,7 @@ class PlayerActivity : ReactActivity() {
     val callback = object : android.support.v4.media.session.MediaSessionCompat.Callback() {
       override fun onPlay() {
         Log.i(TAG, "MediaSession.onPlay")
-        val ptr = lastNativePtr
+        val ptr = PlaybackHost.handle()
         if (ptr != 0L) {
           try {
             MPVLib.nativePlay(ptr)
@@ -745,7 +671,7 @@ class PlayerActivity : ReactActivity() {
 
       override fun onPause() {
         Log.i(TAG, "MediaSession.onPause")
-        val ptr = lastNativePtr
+        val ptr = PlaybackHost.handle()
         if (ptr != 0L) {
           try {
             MPVLib.nativePause(ptr)
@@ -763,7 +689,7 @@ class PlayerActivity : ReactActivity() {
         // closePlayer() path is what deactivates + releases
         // the session.
         Log.i(TAG, "MediaSession.onStop")
-        val ptr = lastNativePtr
+        val ptr = PlaybackHost.handle()
         if (ptr != 0L) {
           try {
             MPVLib.nativeStop(ptr)
@@ -776,7 +702,7 @@ class PlayerActivity : ReactActivity() {
 
       override fun onSkipToNext() {
         Log.i(TAG, "MediaSession.onSkipToNext")
-        val ptr = lastNativePtr
+        val ptr = PlaybackHost.handle()
         if (ptr != 0L) {
           try {
             MPVLib.nativePlaylistNext(ptr)
@@ -792,7 +718,7 @@ class PlayerActivity : ReactActivity() {
 
       override fun onSkipToPrevious() {
         Log.i(TAG, "MediaSession.onSkipToPrevious")
-        val ptr = lastNativePtr
+        val ptr = PlaybackHost.handle()
         if (ptr != 0L) {
           try {
             MPVLib.nativePlaylistPrev(ptr)
@@ -810,7 +736,7 @@ class PlayerActivity : ReactActivity() {
         // pick up the new position on its next tick and ship
         // it to MediaPlaybackService.
         Log.i(TAG, "MediaSession.onSeekTo($pos)")
-        val ptr = lastNativePtr
+        val ptr = PlaybackHost.handle()
         if (ptr != 0L && pos >= 0L) {
           try {
             MPVLib.nativeSeek(ptr, pos.toDouble() / 1000.0)
@@ -850,8 +776,8 @@ class PlayerActivity : ReactActivity() {
     // At this point the file hasn't loaded yet so mpv's
     // `media-title` is empty — the fallback chain in
     // setMediaSessionMetadata picks up `launchTitle`. Once
-    // `wireNativePtr` succeeds, [wireNativePtr] re-queries mpv
-    // and refreshes the metadata with the actual tags.
+    // `PlaybackHost` publishes the handle, [onEngineAvailable]
+    // re-queries mpv and refreshes the metadata with the actual tags.
     setMediaSessionMetadata()
     Log.i(TAG, "MediaSession created (active=true, callback set, sessionActivity set)")
   }
@@ -1063,7 +989,7 @@ class PlayerActivity : ReactActivity() {
   }
 
   private fun pauseOnAudioFocusLoss(reason: String) {
-    val ptr = lastNativePtr
+    val ptr = PlaybackHost.handle()
     if (ptr != 0L) {
       try {
         MPVLib.nativePause(ptr)
@@ -1076,7 +1002,7 @@ class PlayerActivity : ReactActivity() {
   }
 
   private fun duckVolume() {
-    val ptr = lastNativePtr
+    val ptr = PlaybackHost.handle()
     if (ptr == 0L) return
     try {
       val currentVolume = MPVLib.nativeGetVolume(ptr).toFloat()
@@ -1092,7 +1018,7 @@ class PlayerActivity : ReactActivity() {
   }
 
   private fun restoreVolume() {
-    val ptr = lastNativePtr
+    val ptr = PlaybackHost.handle()
     if (ptr == 0L || preDuckVolume < 0f) return
     try {
       MPVLib.nativeSetVolume(ptr, preDuckVolume.toDouble())
@@ -1109,7 +1035,7 @@ class PlayerActivity : ReactActivity() {
   // notification in sync via the existing updateMediaSessionState
   // helper).
   private fun pauseOnHeadsetDisconnect() {
-    val ptr = lastNativePtr
+    val ptr = PlaybackHost.handle()
     if (ptr != 0L) {
       try {
         MPVLib.nativePause(ptr)
@@ -1325,7 +1251,7 @@ class PlayerActivity : ReactActivity() {
     // React Native module registry and cast to the module-side
     // `IPipModeChangeEmitter` contract.
     //
-    // Resolution mirrors wireNativePtr (Phase 7): resolve
+    // Resolution follows the same resolve-then-lookup shape: resolve
     // ReactApplicationContext via (application as? ReactApplication)
     // ?.reactHost.currentReactContext, then getNativeModule("MpvPlayerModule")
     // cast to IPipModeChangeEmitter. The lookup runs on the main
@@ -1340,11 +1266,11 @@ class PlayerActivity : ReactActivity() {
     // surface from mpv, but it doesn't re-attach when a new surface
     // arrives. We trigger a re-attach here so the player resumes
     // rendering immediately after PiP exit.
-    if (!isInPictureInPictureMode && lastNativePtr != 0L) {
+    if (!isInPictureInPictureMode && PlaybackHost.handle() != 0L) {
       mpvRenderView?.let { view ->
         Log.i(TAG, "onPictureInPictureModeChanged (exit): re-attaching surface to mpv")
         try {
-          view.setNativePtr(lastNativePtr)
+          view.setNativePtr(PlaybackHost.handle())
         } catch (e: Exception) {
           Log.w(TAG, "onPictureInPictureModeChanged: setNativePtr threw ${e.message}", e)
         }
@@ -1359,7 +1285,7 @@ class PlayerActivity : ReactActivity() {
   /**
    * Phase 10 helper: resolve [IPipModeChangeEmitter] via the React
    * Native bridge and emit the PiP mode-change event. Mirrors the
-   * wireNativePtr retry pattern in spirit (resolve context →
+   * engine-availability pattern in spirit (resolve context →
    * lookup → cast) but only runs once per PiP transition — there's no
    * retry because a missed event is a single-frame UI glitch, not a
    * playback failure.
@@ -1468,7 +1394,7 @@ class PlayerActivity : ReactActivity() {
     // Phase 38: abandon audio focus on pause so other apps can resume
     // audio. We re-request on the next onResume.
     abandonAudioFocus()
-    if (!pipEntryInFlight && lastNativePtr != 0L) {
+    if (!pipEntryInFlight && PlaybackHost.handle() != 0L) {
       // Quick path: the defer flag isn't set, so we know
       // immediately this is a real pause (user pressed back,
       // locked the screen, opened another activity). Run the
@@ -1480,8 +1406,9 @@ class PlayerActivity : ReactActivity() {
         )
       } else {
         try {
-          MPVLib.nativePause(lastNativePtr)
-          Log.i(TAG, "onPause: paused mpv synchronously (lastNativePtr=$lastNativePtr)")
+          val ptr = PlaybackHost.handle()
+          MPVLib.nativePause(ptr)
+          Log.i(TAG, "onPause: paused mpv synchronously (ptr=$ptr)")
         } catch (e: Exception) {
           Log.w(TAG, "onPause: nativePause threw ${e.message}", e)
         }
@@ -1508,7 +1435,7 @@ class PlayerActivity : ReactActivity() {
         }
         if (activity.isInPictureInPictureMode) {
           Log.i(TAG, "onPause (deferred 200ms): entered PiP, mpv continues playing")
-        } else if (activity.lastNativePtr != 0L) {
+        } else if (PlaybackHost.handle() != 0L) {
           if (activity.shouldKeepPlayingInBackground()) {
             Log.i(
               TAG,
@@ -1516,7 +1443,7 @@ class PlayerActivity : ReactActivity() {
             )
           } else {
             try {
-              MPVLib.nativePause(activity.lastNativePtr)
+              MPVLib.nativePause(PlaybackHost.handle())
               Log.i(TAG, "onPause (deferred 200ms): NOT in PiP, paused mpv")
             } catch (e: Exception) {
               Log.w(TAG, "onPause (deferred): nativePause threw ${e.message}", e)
@@ -1639,11 +1566,11 @@ class PlayerActivity : ReactActivity() {
   // `video-params/aspect` property. Falls back to 16:9 (the most
   // common modern aspect) when mpv hasn't loaded any video yet.
   private fun getVideoAspect(): Float {
-    if (lastNativePtr == 0L) {
+    if (PlaybackHost.handle() == 0L) {
       return 16f / 9f
     }
     return try {
-      val raw = MPVLib.nativeGetProperty(lastNativePtr, "video-params/aspect")
+      val raw = MPVLib.nativeGetProperty(PlaybackHost.handle(), "video-params/aspect")
       val parsed = raw.trim().toFloatOrNull()
       if (parsed != null && parsed.isFinite() && parsed > 0f) {
         parsed.coerceIn(0.42f, 2.38f)
@@ -1666,9 +1593,9 @@ class PlayerActivity : ReactActivity() {
   // pattern [getVideoAspect] uses for the video-params/aspect
   // property.
   private fun getPlaybackPositionMs(): Long {
-    if (lastNativePtr == 0L) return 0L
+    if (PlaybackHost.handle() == 0L) return 0L
     return try {
-      val raw = MPVLib.nativeGetProperty(lastNativePtr, "time-pos")
+      val raw = MPVLib.nativeGetProperty(PlaybackHost.handle(), "time-pos")
       val parsed = raw.trim().toDoubleOrNull()
       if (parsed != null && parsed.isFinite() && parsed >= 0.0) {
         (parsed * 1000.0).toLong()
@@ -1684,9 +1611,9 @@ class PlayerActivity : ReactActivity() {
   // property. Returns ms, or 0L when not yet known (mpv sets
   // `duration` once the file is parsed).
   private fun getPlaybackDurationMs(): Long {
-    if (lastNativePtr == 0L) return 0L
+    if (PlaybackHost.handle() == 0L) return 0L
     return try {
-      val raw = MPVLib.nativeGetProperty(lastNativePtr, "duration")
+      val raw = MPVLib.nativeGetProperty(PlaybackHost.handle(), "duration")
       val parsed = raw.trim().toDoubleOrNull()
       if (parsed != null && parsed.isFinite() && parsed > 0.0) {
         (parsed * 1000.0).toLong()
@@ -1708,27 +1635,27 @@ class PlayerActivity : ReactActivity() {
   // for the first artist in the tag list, which on multi-artist
   // files can be a featured artist rather than the main one).
   private fun getMediaTitle(): String {
-    if (lastNativePtr == 0L) return ""
+    if (PlaybackHost.handle() == 0L) return ""
     return try {
-      MPVLib.nativeGetProperty(lastNativePtr, "media-title").trim()
+      MPVLib.nativeGetProperty(PlaybackHost.handle(), "media-title").trim()
     } catch (_: Exception) {
       ""
     }
   }
 
   private fun getMediaArtist(): String {
-    if (lastNativePtr == 0L) return ""
+    if (PlaybackHost.handle() == 0L) return ""
     return try {
-      MPVLib.nativeGetProperty(lastNativePtr, "metadata/by-key/artist").trim()
+      MPVLib.nativeGetProperty(PlaybackHost.handle(), "metadata/by-key/artist").trim()
     } catch (_: Exception) {
       ""
     }
   }
 
   private fun getMediaAlbum(): String {
-    if (lastNativePtr == 0L) return ""
+    if (PlaybackHost.handle() == 0L) return ""
     return try {
-      MPVLib.nativeGetProperty(lastNativePtr, "metadata/by-key/album").trim()
+      MPVLib.nativeGetProperty(PlaybackHost.handle(), "metadata/by-key/album").trim()
     } catch (_: Exception) {
       ""
     }
@@ -1737,7 +1664,7 @@ class PlayerActivity : ReactActivity() {
   // Phase 19.2 + 19.4: build a MediaMetadataCompat from the
   // current values and set it on the MediaSession. Called from
   // createMediaSession (initial set with launch title) and from
-  // the post-wireNativePtr refresh (so the metadata reflects the
+  // the post-availability refresh (so the metadata reflects the
   // actual mpv tags once the file is loaded).
   //
   // Title fallback chain: mpv `media-title` → launch title →
@@ -1793,6 +1720,11 @@ class PlayerActivity : ReactActivity() {
   }
 
   override fun onDestroy() {
+    // V20 Phase A: stop listening for engine availability FIRST. The
+    // listener closes over `this`, so leaving it registered would keep
+    // this destroyed Activity reachable from a process-scoped object and
+    // re-run `setMediaSessionMetadata()` against a dead view hierarchy.
+    PlaybackHost.cancelWhenAvailable(onEngineAvailable)
     // Step 6.6.1: cleanup the SurfaceView (detach Surface from mpv
     // and zero the native pointer so any late native callback becomes
     // a no-op).

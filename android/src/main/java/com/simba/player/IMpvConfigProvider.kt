@@ -6,8 +6,7 @@ package com.simba.player
  * JS) without crossing the Gradle module boundary into the consumer
  * app's bridge code.
  *
- * Pattern mirrors [IMpvNativePtrProvider] (Phase 7) and
- * [IPipModeChangeEmitter] (Phase 10): the consumer app's
+ * Pattern mirrors [IPipModeChangeEmitter] (Phase 10): the consumer app's
  * `MpvBridgeModule` implements this contract; module code looks it up
  * via `reactContext.getNativeModule("MpvPlayerModule") as?
  * IMpvConfigProvider` and casts. The cast is safe because we control
@@ -19,10 +18,11 @@ package com.simba.player
  * Future phases (22-25) extend the lookup to read theme + pip + audio
  * settings and apply them.
  *
- * Why a separate interface (not extend [IMpvNativePtrProvider]):
- * each capability is independently mockable in tests and each fails
- * loudly at the cast site if the bridge module ever drops one while
- * keeping the other.
+ * Why this survives V20 Phase A while its sibling did not: this contract
+ * carries data pushed *by React*, so it genuinely needs the React
+ * context to reach. The native-pointer contract it used to mirror did
+ * not — it carried a process-global, so V20 replaced it with
+ * `PlaybackHost`, and it was deleted rather than left as fiction.
  */
 interface IMpvConfigProvider {
     /**

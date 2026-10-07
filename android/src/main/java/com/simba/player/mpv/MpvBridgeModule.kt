@@ -19,8 +19,8 @@ import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.fbreact.specs.NativeMpvPlayerSpec
 import com.simba.player.IMpvConfigProvider
-import com.simba.player.IMpvNativePtrProvider
 import com.simba.player.IPipModeChangeEmitter
+import com.simba.player.PlaybackHost
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -34,7 +34,6 @@ import org.json.JSONObject
 class MpvBridgeModule(reactContext: ReactApplicationContext) :
     NativeMpvPlayerSpec(reactContext),
     IMpvConfigProvider,
-    IMpvNativePtrProvider,
     IPipModeChangeEmitter {
 
     companion object {
@@ -286,8 +285,24 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
 
     // ── State ──────────────────────────────────────────────────────────────
 
-    /** Native mpv_handle* stored as Long (0 = uninitialized). */
-    private var nativePtr: Long = 0
+    /**
+     * V20 Phase A: the libmpv handle, *delegated* to [PlaybackHost].
+     *
+     * This is deliberately a property, not a field. It holds no state of
+     * its own — [PlaybackHost] is the single owner, because the handle is
+     * a process-global in C++ (`g_mpv`) and a React Native TurboModule
+     * dies with its React context, which would leave the handle owned by
+     * something that is not alive when playback still needs it.
+     *
+     * Keeping the name means the ~30 existing read sites are unchanged;
+     * what changed is that a read can no longer return a stale copy,
+     * because there is no longer a copy to be stale.
+     */
+    private var nativePtr: Long
+        get() = PlaybackHost.handle()
+        set(value) {
+            if (value == 0L) PlaybackHost.clearHandle() else PlaybackHost.publishHandle(value)
+        }
 
     /** Event emitter for JS-side event listeners. */
     private val eventEmitter: DeviceEventManagerModule.RCTDeviceEventEmitter by lazy {
@@ -2221,21 +2236,23 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     // ── Native Pointer (for MpvRenderView) ─────────────────────────────────
 
     /**
-     * Phase 7: module-side accessor (Long) used by `PlayerActivity` (which
-     * lives in the `@simba/react-native-media-player` module and therefore
-     * cannot reference `MpvBridgeModule` directly) to obtain the active
-     * libmpv handle without crossing the Gradle module boundary.
+     * The JS-facing pointer accessor.
      *
-     * The JS-facing @ReactMethod below stays as-is to keep the public
-     * TurboModule API stable. The two methods share the same private
-     * `nativePtr` field, so they can never disagree.
+     * V20 Phase A removed its `IMpvNativePtrProvider` sibling. That
+     * interface existed so `PlayerActivity` could fetch the handle across
+     * a Gradle module boundary — a boundary Phase 6 had already removed
+     * (see `MPVLib`'s own header). `PlayerActivity` now reads
+     * `PlaybackHost` directly and registers with `whenAvailable`, so the
+     * interface had no remaining consumer and was deleted rather than
+     * left in place as fiction.
+     *
+     * This method stays because it is part of the published TurboModule
+     * spec and removing it would be a breaking change for consumers.
      */
-    override fun fetchNativePtr(): Long = nativePtr
-
     @ReactMethod(isBlockingSynchronousMethod = true)
     @Override
     override fun getNativePtr(): Double {
-        return nativePtr.toDouble()
+        return PlaybackHost.handle().toDouble()
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────
