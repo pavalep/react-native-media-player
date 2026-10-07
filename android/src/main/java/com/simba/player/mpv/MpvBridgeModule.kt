@@ -891,10 +891,16 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         try {
             applyFrameDataSource(retriever, uri)
 
-            // A still frame needs a video track. `hasVideoTrack` throws
-            // on several devices for an unsupported container, which the
-            // catch below turns into the `null` answer.
-            if (!retriever.hasVideoTrack()) {
+            // A still frame needs a video track. This checks
+            // `METADATA_KEY_HAS_VIDEO` ("yes"/"no"), NOT
+            // `retriever.hasVideoTrack()` — that method does not exist on
+            // MediaMetadataRetriever and the Kotlin compile gate (via the
+            // example app) is what catches it. Audio-only and unsupported
+            // containers answer "no" or throw; both land on the `null`
+            // answer via the return below or the catch.
+            val hasVideo =
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO)
+            if (hasVideo != null && hasVideo != "yes") {
                 Log.w(TAG, "[PlaybackTrace][Bridge][captureFrame] no video track in $uri, no frame")
                 return null
             }
@@ -952,14 +958,31 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     /**
      * Point [retriever] at the right data source for [uri].
      *
-     * The overload matters: `setDataSource(String)` treats its argument as
-     * a raw filesystem path, so handing it a `file://` URL fails on some
-     * releases, while the (context, Uri, headers) overload is the one that
-     * understands `content://` and can issue range requests for `http(s)`.
+     * Which overload is correct depends on the scheme, and picking the
+     * wrong one fails at runtime rather than at compile time:
+     *
+     *  - `content://` needs `(Context, Uri)`, which resolves through the
+     *    ContentResolver. Nothing else can open it.
+     *  - `http(s)://` needs the plain `String` overload — THAT is the
+     *    one that issues byte-range requests, which is what makes
+     *    extracting a frame from a remote file feasible at all. The
+     *    `(Context, Uri)` overload would route a network URL through the
+     *    ContentResolver and fail.
+     *
+     * There is deliberately no `(Context, Uri, Map<String, String>)` call.
+     * That overload's only purpose is to carry HTTP headers, and this
+     * caller has none to send; adding it meant a bare `emptyMap()` whose
+     * type argument could not be inferred, which made overload resolution
+     * fall through to `setDataSource(FileDescriptor, long, long)` and
+     * report three type mismatches about arguments that were never wrong.
      */
     private fun applyFrameDataSource(retriever: MediaMetadataRetriever, uri: String) {
+        if (uri.startsWith("content://")) {
+            retriever.setDataSource(reactApplicationContext, android.net.Uri.parse(uri))
+            return
+        }
         if (uri.startsWith("http://") || uri.startsWith("https://")) {
-            retriever.setDataSource(reactApplicationContext, android.net.Uri.parse(uri), emptyMap())
+            retriever.setDataSource(uri)
             return
         }
         val path = if (uri.startsWith("file://")) android.net.Uri.parse(uri).path ?: uri else uri
