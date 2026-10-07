@@ -72,6 +72,12 @@ nativeModulesMock.default.MpvPlayerModule = {
   getFileInfo: fn(() => '{}'),
   getVideoParams: fn(() => '{}'),
   captureThumbnail: fn(() => ''),
+  // v1.10.0 — off-player frame extraction. `null` is the real
+  // method's "no frame available" answer (live stream, unreachable
+  // URL, position past the end), so the mock resolves `null` rather
+  // than throwing: tests exercise the null contract by default and
+  // override with `mockResolvedValue` to assert the path branch.
+  captureFrame: fn(() => Promise.resolve(null)),
   grantPersistablePermission: fn(() => undefined),
   verifyContentUri: fn(() => true),
 

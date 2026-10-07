@@ -100,6 +100,18 @@ export {
   type PlayerQueueSelectionStore,
 } from './hooks/useQueueSelection';
 export {useLaunchParams} from './hooks/useLaunchParams';
+// v1.10.0 — the "frame at the position you left off" thumbnail. The
+// first genuinely PUBLIC frame API: `screenshot` / `captureThumbnail`
+// live in the bridge but were never exported here, so a consumer had
+// no supported way to reach them. `captureFrame` needs no player
+// instance — see the wrapper's docblock for the `null` contract.
+export {
+  captureFrame,
+  DEFAULT_FRAME_WIDTH,
+  DEFAULT_FRAME_HEIGHT,
+  DEFAULT_FRAME_QUALITY,
+  type CaptureFrameOptions,
+} from './hooks/useResumeThumbnail';
 // 1.8.0 — the load half of `<PlayerRoot>`, exposed so a consumer using
 // `<SimbaPlayerRoot headless>` (which delegates the player UI) can call
 // it directly for a payload the module did not originate. See

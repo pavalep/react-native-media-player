@@ -72,7 +72,37 @@ export interface Spec extends TurboModule {
   loadPlaylist(paths: ReadonlyArray<string>, startIndex: number): void;
   getFileInfo(): string;
   getVideoParams(): string;
+  /**
+   * LIVE-FRAME capture. `uri` is used ONLY to derive the output
+   * filename (`thumb_${hash}.png`) — the pixels come from whatever
+   * mpv is playing right now, so this requires an initialised
+   * player AND a running/paused playback session. Do NOT use it
+   * for a "thumbnail at position X"; see `captureFrame` below.
+   */
   captureThumbnail(uri: string): string;
+  /**
+   * Extract a single frame at `positionMs` from `uri` WITHOUT a
+   * player instance, via `MediaMetadataRetriever
+   * .getScaledFrameAtTime()`. Works on a local path, `file://`, or
+   * an `http(s)` URL (range requests) — no mpv handle, no
+   * playback, no surface.
+   *
+   * Rejects ONLY for programmer error (blank `uri`, non-finite or
+   * negative `positionMs`). Every "cannot get a frame" outcome —
+   * live stream, unsupported container, unreachable URL, position
+   * past the end of the file — resolves `null`, which is the
+   * documented "no thumbnail, fall back to poster art" signal and
+   * NOT an error.
+   *
+   * Options are all optional; the Kotlin side substitutes a
+   * poster-sized default. `width: 0` means "do not constrain width"
+   * (the platform then preserves the source aspect ratio).
+   */
+  captureFrame(
+    uri: string,
+    positionMs: number,
+    options?: {width: number; height: number; quality: number},
+  ): Promise<string | null>;
   grantPersistablePermission(uri: string): void;
   verifyContentUri(uri: string): boolean;
 

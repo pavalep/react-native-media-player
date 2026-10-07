@@ -1,8 +1,14 @@
 package com.simba.player.mpv
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.util.Log
 import java.io.File
+import java.io.FileOutputStream
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReadableArray
@@ -34,6 +40,35 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     companion object {
         const val NAME = "MpvPlayerModule"
         private const val TAG = "MpvBridgeModule"
+
+        // ── captureFrame: resume-rail thumbnails ──────────────────────────
+        // `MediaMetadataRetriever` needs a real filesystem path for its
+        // output. `filesDir` (NOT cacheDir) is deliberate: the platform
+        // is free to evict cacheDir at any moment, and a thumbnail that
+        // disappears silently blanks a Continue-Watching cell on the
+        // next cold start with no error anywhere.
+        private const val RESUME_THUMB_DIR = "simba-resume-thumbs"
+
+        // Poster-sized defaults, mirrored in TS as
+        // `DEFAULT_FRAME_WIDTH` / `DEFAULT_FRAME_HEIGHT` /
+        // `DEFAULT_FRAME_QUALITY` (src/hooks/useResumeThumbnail.ts).
+        //
+        // 640x360 is exactly 16:9, so the dominant case (film / TV /
+        // YouTube landscape video) scales without distortion, and
+        // ~230 kpx lands around 25-40 kB per JPEG at quality 80.
+        // Portrait sources should pass `width = 0`, which the platform
+        // reads as "leave the width unconstrained" so the source
+        // aspect ratio survives.
+        private const val DEFAULT_FRAME_WIDTH = 640
+        private const val DEFAULT_FRAME_HEIGHT = 360
+        private const val DEFAULT_FRAME_QUALITY = 80
+
+        // Position granularity for the output filename. A resume
+        // position drifts by seconds between renders (and the user may
+        // stop anywhere), so bucketing to 30s means repeated calls for
+        // "roughly where they left off" overwrite ONE file instead of
+        // re-encoding a near-duplicate JPEG on every scroll/re-render.
+        private const val FRAME_POSITION_BUCKET_MS = 30_000L
 
         // v1.10.0 — hot-path property tracing.
         //
@@ -265,6 +300,31 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * Keep them until the handle exists instead of silently dropping them.
      */
     private val pendingObservedProperties = linkedSetOf<String>()
+
+    /**
+     * Serial executor for [captureFrame].
+     *
+     * Two things force it to exist at all:
+     *  1. `MediaMetadataRetriever.getScaledFrameAtTime()` does real
+     *     I/O — opening a (possibly remote, range-requested) source,
+     *     seeking a decoder, and JPEG-encoding the result. On a cold
+     *     Continue-Watching rail that is tens of ms PER ITEM, which on
+     *     the JS or UI thread is a dropped-frame stall (and on the UI
+     *     thread, an ANR if the source is remote). The existing
+     *     `screenshot()` is a blocking-sync `@ReactMethod` and must NOT
+     *     be used as a template for this.
+     *  2. `MediaMetadataRetriever` holds native codec handles. Two
+     *     concurrent retrievers on the same source multiply peak
+     *     memory, so requests are queued on ONE thread and the
+     *     in-flight count stays at exactly 1.
+     *
+     * Shut down in `onCatalystInstanceDestroy` so a dev reload does
+     * not leave an idle thread behind per module instance.
+     */
+    private val frameExecutor: ExecutorService =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "simba-frame-extractor")
+        }
 
     // ── MPVLib Listener → JS Event Bridge ──────────────────────────────────
 
@@ -694,6 +754,22 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      *
      * The thumbnail persists in cache and is used by the recent-files list to
      * show a preview of where the user left off.
+     *
+     * ## NAME WARNING — this is the LIVE-frame capture
+     *
+     * `captureThumbnail` reads as "thumbnail for this uri", but the `uri`
+     * is used for NOTHING except hashing the output filename. The pixels
+     * come from `MPVLib.nativeScreenshot(nativePtr, ...)`, i.e. whatever
+     * the one initialised mpv handle is showing right now. So it:
+     *  - requires `initPlayer()` to have run (`ensurePtr()`),
+     *  - requires that something is actually loaded (pause counts, an
+     *    empty player yields mpv's "no video" error string),
+     *  - CANNOT target a position — there is no time argument.
+     *
+     * It is kept exactly as-is for backwards compatibility. Callers that
+     * want "the frame at position X" — resume rails, scrub previews,
+     * bookmark art — must use [captureFrame], which takes a timestamp
+     * and needs no player instance at all.
      */
     @ReactMethod(isBlockingSynchronousMethod = true)
     @Override
@@ -703,6 +779,254 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         val hash = uri.hashCode().toLong() and 0x7FFFFFFF
         val thumbFile = File(cacheDir, "thumb_${hash}.png")
         return MPVLib.nativeScreenshot(nativePtr, thumbFile.absolutePath)
+    }
+
+    /**
+     * Extract ONE frame at [positionMs] from [uri] and write it as a JPEG.
+     * Resolves the absolute file path, or `null` when no frame exists.
+     *
+     * ## Why a separate method (not `captureThumbnail`)
+     *
+     * The "frame where the user left off" thumbnail cannot come from mpv:
+     * `captureThumbnail` has no time argument, needs a live player, and
+     * grabs the current surface (see its NAME WARNING above). Android's
+     * standard API for "make a thumbnail from a data source" is
+     * [MediaMetadataRetriever.getScaledFrameAtTime] — AOSP documents it as
+     * "useful for generating a thumbnail for an input data source", it
+     * accepts a local path or an http(s) URL (via range requests), and it
+     * needs no decoder instance, no playback, and no surface. That is
+     * exactly the Continue-Watching rail's requirement: many sources, no
+     * player, one image each.
+     *
+     * ## Contract
+     *
+     *  - Resolves `null` — NEVER rejects — for every "no frame here" case:
+     *    live/non-seekable stream, unsupported container, unreachable URL,
+     *    position past the end of the media, no video track. `null` is the
+     *    documented "no thumbnail, fall back to poster art" signal, so a
+     *    consumer can render a placeholder with no `try`/`catch` and no
+     *    blank `<Image>`.
+     *  - Rejects ONLY on programmer error: `E_INVALID_URI` (blank uri) and
+     *    `E_INVALID_POSITION` (NaN / Infinity / negative positionMs).
+     *
+     * ## Threading
+     *
+     * Validates synchronously (cheap, so the error reaches JS with the
+     * same stack the caller wrote), then hands the real work to
+     * [frameExecutor] — a single background thread. Opening a remote
+     * source, seeking and JPEG-encoding is tens of ms; doing it inline
+     * would stall the JS thread per rail item and risk an ANR when the
+     * source is on the network.
+     *
+     * ## Output
+     *
+     * `filesDir/simba-resume-thumbs/frame_<hash>_<bucketMs>.jpg`. The
+     * filename never contains the raw URI (a signed URL's `?`, `/` and `%`
+     * would break the path), and the position is bucketed to 30s so a
+     * drifting resume position overwrites one file instead of
+     * accumulating near-duplicates.
+     */
+    @ReactMethod
+    @Override
+    override fun captureFrame(
+        uri: String,
+        positionMs: Double,
+        options: ReadableMap?,
+        promise: Promise,
+    ) {
+        if (uri.isBlank()) {
+            Log.w(TAG, "[PlaybackTrace][Bridge][captureFrame] blank uri, rejecting with E_INVALID_URI")
+            promise.reject("E_INVALID_URI", "captureFrame requires a non-empty uri")
+            return
+        }
+        if (positionMs.isNaN() || positionMs.isInfinite() || positionMs < 0) {
+            Log.w(
+                TAG,
+                "[PlaybackTrace][Bridge][captureFrame] invalid positionMs=$positionMs, rejecting with E_INVALID_POSITION",
+            )
+            promise.reject(
+                "E_INVALID_POSITION",
+                "captureFrame requires a finite, non-negative positionMs (got $positionMs)",
+            )
+            return
+        }
+
+        val width = readFrameOption(options, "width", DEFAULT_FRAME_WIDTH)
+        val height = readFrameOption(options, "height", DEFAULT_FRAME_HEIGHT)
+        val quality = readFrameOption(options, "quality", DEFAULT_FRAME_QUALITY).coerceIn(0, 100)
+        val timeUs = (positionMs * 1000.0).toLong()
+
+        try {
+            frameExecutor.execute {
+                promise.resolve(extractFrameToFile(uri, timeUs, width, height, quality))
+            }
+        } catch (e: RejectedExecutionException) {
+            // The module was torn down between the JS call and this
+            // dispatch. That is a lifecycle event, not a media error, so
+            // it answers with the same "no thumbnail" result every
+            // unavailable-frame case produces.
+            Log.w(TAG, "[PlaybackTrace][Bridge][captureFrame] executor rejected: ${e.message}")
+            promise.resolve(null)
+        }
+    }
+
+    /**
+     * The actual frame extraction, always on [frameExecutor]'s thread.
+     * Returns the written JPEG's absolute path, or `null`.
+     *
+     * `release()` is in the `finally` and is NOT optional: an
+     * unreleased `MediaMetadataRetriever` pins native codec/OMX handles
+     * for the lifetime of the process, and a rail that extracts a frame
+     * per item would leak one per item until the app died.
+     */
+    private fun extractFrameToFile(
+        uri: String,
+        timeUs: Long,
+        width: Int,
+        height: Int,
+        quality: Int,
+    ): String? {
+        val retriever = MediaMetadataRetriever()
+        var bitmap: Bitmap? = null
+        try {
+            applyFrameDataSource(retriever, uri)
+
+            // A still frame needs a video track. `hasVideoTrack` throws
+            // on several devices for an unsupported container, which the
+            // catch below turns into the `null` answer.
+            if (!retriever.hasVideoTrack()) {
+                Log.w(TAG, "[PlaybackTrace][Bridge][captureFrame] no video track in $uri, no frame")
+                return null
+            }
+
+            // Duration guard. A live stream reports no duration, in which
+            // case we let the frame call below decide (it fails, and we
+            // return null) rather than guessing.
+            val durationMs =
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            if (durationMs > 0 && timeUs > durationMs * 1000) {
+                Log.w(
+                    TAG,
+                    "[PlaybackTrace][Bridge][captureFrame] position ${timeUs / 1000}ms is past " +
+                        "duration ${durationMs}ms, no frame",
+                )
+                return null
+            }
+
+            val frame = scaledFrameAt(retriever, timeUs, width, height)
+                ?: run {
+                    Log.w(TAG, "[PlaybackTrace][Bridge][captureFrame] no frame at ${timeUs / 1000}ms in $uri")
+                    return null
+                }
+            bitmap = frame
+
+            val dir = File(reactApplicationContext.filesDir, RESUME_THUMB_DIR)
+            if (!dir.exists() && !dir.mkdirs()) {
+                Log.w(TAG, "[PlaybackTrace][Bridge][captureFrame] could not create $dir")
+                return null
+            }
+            val outFile = File(dir, frameFileName(uri, timeUs / 1000))
+            FileOutputStream(outFile).use { stream ->
+                if (!frame.compress(Bitmap.CompressFormat.JPEG, quality, stream)) {
+                    Log.w(TAG, "[PlaybackTrace][Bridge][captureFrame] JPEG encode failed for $outFile")
+                    return null
+                }
+            }
+            Log.i(
+                TAG,
+                "[PlaybackTrace][Bridge][captureFrame] wrote $outFile (${width}x$height q=$quality)",
+            )
+            return outFile.absolutePath
+        } catch (e: Exception) {
+            // Every media failure lands here: unreachable URL, malformed
+            // container, decoder refusal on a non-seekable stream. All of
+            // them are "no thumbnail", not an error the caller should see.
+            Log.w(TAG, "[PlaybackTrace][Bridge][captureFrame] extraction failed for $uri: ${e.message}", e)
+            return null
+        } finally {
+            bitmap?.recycle()
+            retriever.release()
+        }
+    }
+
+    /**
+     * Point [retriever] at the right data source for [uri].
+     *
+     * The overload matters: `setDataSource(String)` treats its argument as
+     * a raw filesystem path, so handing it a `file://` URL fails on some
+     * releases, while the (context, Uri, headers) overload is the one that
+     * understands `content://` and can issue range requests for `http(s)`.
+     */
+    private fun applyFrameDataSource(retriever: MediaMetadataRetriever, uri: String) {
+        if (uri.startsWith("http://") || uri.startsWith("https://")) {
+            retriever.setDataSource(reactApplicationContext, android.net.Uri.parse(uri), emptyMap())
+            return
+        }
+        val path = if (uri.startsWith("file://")) android.net.Uri.parse(uri).path ?: uri else uri
+        retriever.setDataSource(path)
+    }
+
+    /**
+     * Frame grab with the platform's scaling API on API 27+, and an
+     * explicit decode-then-scale below it (minSdk here is 24).
+     *
+     * `width`/`height` of 0 mean "unconstrained" — the platform then
+     * keeps the source aspect ratio instead of forcing the frame into
+     * the requested box, which is what a portrait source in a 16:9
+     * default box needs.
+     */
+    private fun scaledFrameAt(
+        retriever: MediaMetadataRetriever,
+        timeUs: Long,
+        width: Int,
+        height: Int,
+    ): Bitmap? {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+            return retriever.getScaledFrameAtTime(
+                timeUs,
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                width,
+                height,
+            )
+        }
+        val full = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            ?: return null
+        if (width <= 0 && height <= 0) return full
+        val targetH = if (height > 0) height else full.height
+        val targetW = if (width > 0) {
+            width
+        } else {
+            (full.width.toDouble() * targetH / full.height).toInt().coerceAtLeast(1)
+        }
+        if (targetW == full.width && targetH == full.height) return full
+        return Bitmap.createScaledBitmap(full, targetW, targetH, true)
+    }
+
+    /**
+     * `frame_<hash>_<bucketMs>.jpg` — same `hashCode() and 0x7FFFFFFF`
+     * idiom [captureThumbnail] uses, so the two stay visually
+     * consistent, plus the coarse position bucket.
+     */
+    private fun frameFileName(uri: String, positionMs: Long): String {
+        val hash = uri.hashCode().toLong() and 0x7FFFFFFF
+        val bucket = (positionMs / FRAME_POSITION_BUCKET_MS) * FRAME_POSITION_BUCKET_MS
+        return "frame_${hash}_${bucket}.jpg"
+    }
+
+    /**
+     * Read one integer-ish option out of the JS options map, falling back
+     * to the default when the key is absent, null, not a number, or
+     * negative. Never throws — a malformed option is a missing option.
+     */
+    private fun readFrameOption(options: ReadableMap?, key: String, fallback: Int): Int {
+        if (options == null || !options.hasKey(key) || options.isNull(key)) return fallback
+        return try {
+            val value = options.getDouble(key)
+            if (value.isNaN() || value.isInfinite() || value < 0) fallback else value.toInt()
+        } catch (e: Exception) {
+            Log.w(TAG, "[PlaybackTrace][Bridge][captureFrame] option '$key' is not a number: ${e.message}")
+            fallback
+        }
     }
 
     // ── File Loading ───────────────────────────────────────────────────────
@@ -1445,6 +1769,13 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         // apart during dev reload, or never on release builds).
         instance = null
         pendingObservedProperties.clear()
+        // `frameExecutor` (captureFrame) is per-instance, so without this
+        // a debug reload leaves an idle "simba-frame-extractor" thread
+        // behind for every module instance the app has ever built.
+        // Queued-but-unstarted tasks are dropped; an in-flight
+        // extraction finishes and its (now-unused) retriever releases
+        // itself in its own `finally`.
+        frameExecutor.shutdown()
         super.onCatalystInstanceDestroy()
     }
 

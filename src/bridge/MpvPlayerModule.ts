@@ -154,6 +154,27 @@ export interface PlayerEventPayloads {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
+ * Output geometry + JPEG quality for `captureFrame`.
+ *
+ * Every field is optional; an omitted field falls back to the
+ * poster-sized default the native side applies (mirrored in TS as
+ * `DEFAULT_FRAME_WIDTH` / `DEFAULT_FRAME_HEIGHT` /
+ * `DEFAULT_FRAME_QUALITY`, exported from `hooks/useResumeThumbnail`).
+ */
+export interface CaptureFrameOptions {
+  /**
+   * Target width in pixels. `0` means "do not constrain width" —
+   * the platform then keeps the source aspect ratio instead of
+   * squashing the frame into the requested box.
+   */
+  readonly width?: number;
+  /** Target height in pixels. `0` means "leave the frame unscaled". */
+  readonly height?: number;
+  /** JPEG quality, 0–100. Out-of-range values are clamped natively. */
+  readonly quality?: number;
+}
+
+/**
  * Typed shape of the `MpvPlayerModule` native bridge as exposed by
  * `MpvBridgeModule.kt`. V13 Phase 50 expands the Phase 24 entry point
  * (9 methods) to the full 78-method surface so consumers never need to
@@ -225,8 +246,39 @@ export interface MpvPlayerModuleBridge {
   getFileInfo(): string;
   /** Get the currently-loaded video params as a JSON string. */
   getVideoParams(): string;
-  /** Capture a thumbnail screenshot for the given URI; returns the file path. */
+  /**
+   * LIVE-FRAME capture — the name is misleading, read this first.
+   *
+   * The `uri` argument is used ONLY to derive the output filename
+   * (`thumb_${hash}.png`); the pixels come from the currently
+   * initialised mpv handle. It therefore needs a live player AND a
+   * loaded file, and it cannot target a position.
+   *
+   * For a "thumbnail at position X" (resume rails, scrub previews,
+   * bookmark art) use `captureFrame` instead — that one takes a
+   * timestamp and needs no player at all.
+   */
   captureThumbnail(uri: string): string;
+  /**
+   * Extract one frame at `positionMs` from `uri` — WITHOUT a player
+   * instance, without playback, and without the mpv surface.
+   *
+   * The native implementation is
+   * `MediaMetadataRetriever.getScaledFrameAtTime()`, so it accepts a
+   * local path, `file://`, or an `http(s)` URL (fetched with range
+   * requests).
+   *
+   * **Resolves `null` — never rejects — when no frame exists:**
+   * live stream, unsupported container, unreachable URL, position
+   * past the end. `null` is the "no thumbnail, show poster art"
+   * signal, not a failure. Rejection is reserved for programmer
+   * error (blank `uri`, non-finite or negative `positionMs`).
+   */
+  captureFrame(
+    uri: string,
+    positionMs: number,
+    options?: CaptureFrameOptions,
+  ): Promise<string | null>;
   /** Take a persistable read URI permission for a content:// URI. */
   grantPersistablePermission(uri: string): void;
   /** Returns true when the URI is still readable (content:// or file://). */
@@ -472,6 +524,21 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
   captureThumbnail: (_uri: string) => {
     void _uri;
     return '';
+  },
+  // No-op fallback resolves `null` — the same "no frame available,
+  // use poster art" answer the real native path returns for a live
+  // stream or an unreachable URL. It must NOT reject, or every
+  // jest/Storybook/web host would see a red screen where a consumer
+  // sees a placeholder image.
+  captureFrame: (
+    _uri: string,
+    _positionMs: number,
+    _options?: CaptureFrameOptions,
+  ) => {
+    void _uri;
+    void _positionMs;
+    void _options;
+    return Promise.resolve(null);
   },
   grantPersistablePermission: (_uri: string) => {
     void _uri;
