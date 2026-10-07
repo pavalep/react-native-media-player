@@ -1,0 +1,73 @@
+V20 Phase A: one owner for the libmpv handle
+
+The handle had two owners, and the second one could never be told.
+
+`MpvBridgeModule` creates it (`initPlayer` -> `MPVLib.nativeCreate`)
+and destroys it (`destroy()` -> `nativeDestroy()`, zeroing only its own
+field). `PlayerActivity` held a *copy* in `lastNativePtr`, obtained by
+asking the bridge over the React Native module registry and then cached
+permanently.
+
+After an engine destroy/re-create, the copy no longer matched the
+process global `g_mpv`, so the C++ lease guard refused every call the
+Activity made. Not a crash — the native layer is correctly defended — but
+a control surface that was present, wired and permanently inert:
+media-session play/pause/stop/next/prev/seek, audio-focus loss, ducking,
+headset disconnect, PiP exit re-attach, the onPause pause decision,
+position/duration polling, and title/artist/album metadata. All of it
+quietly stopped, on device only, where nothing in the 198-test JS suite
+could see it.
+
+This is the same defect class as the store-with-no-writer bugs: a value
+with two owners, where the second owner holds a copy that can drift.
+
+PlaybackHost
+------------
+New. A process-scoped `object` that owns the handle and publishes it to
+anything that needs it. It is deliberately not an Activity field (an
+Activity dies with its own lifecycle) and not a TurboModule field (a
+TurboModule dies with its React context) — neither outlives playback.
+
+It is process-scoped because the thing it owns is process-scoped: `g_mpv`
+is a C++ global (`native_state.h:13`) and `nativeCreate` returns the
+existing instance when one is present (`main.cpp:182-185`). `MPVLib` is a
+Kotlin `object` that maps `simbaplayer_mpv` into the process address
+space, so TurboModule, Activity and Service already reached the same
+instance. Nothing needed relocating — only Kotlin's copy needed deleting.
+Zero changes to `cpp/`, no `.so` rebuild.
+
+`MpvBridgeModule.nativePtr` is now a property delegating to
+`PlaybackHost` rather than a field. The ~30 read sites are unchanged;
+what changed is that a read can no longer return a stale value, because
+there is no longer a value to be stale.
+
+Polling deleted, not tuned
+--------------------------
+`wireNativePtr` resolved the bridge module, cast it to
+`IMpvNativePtrProvider`, and retried every 300ms up to 200 times (~60s)
+because a cold React start can take 30+s. That machinery existed to cross
+a Gradle module boundary which Phase 6 had already removed (`MPVLib`'s own
+header says so). It is replaced by `PlaybackHost.whenAvailable`, which
+invokes the listener immediately when the handle is already present — so
+a late-mounting Activity converges with no polling at all. The listener
+is cancelled in `onDestroy`, because it closes over the Activity.
+
+Net -87 lines.
+
+IMpvNativePtrProvider deleted
+----------------------------
+With the polling gone it had no remaining consumer, so it is deleted
+rather than left in place as fiction. `getNativePtr()` stays — it is in
+the published TurboModule spec and removing it would break consumers —
+and now reads `PlaybackHost` directly.
+
+`IMpvConfigProvider` and `IPipModeChangeEmitter` stay: they carry data
+pushed by React, so they genuinely need the React context to reach. Only
+the native-pointer contract did not.
+
+Gates: tsc 0 · jest 12 suites / 198 tests · compileDebugKotlin BUILD
+SUCCESSFUL.
+
+Not in this commit: session and foreground-service ownership still belong
+to PlayerActivity.onCreate/onDestroy. That is Phase B, and it is the
+blocker for the mini player.

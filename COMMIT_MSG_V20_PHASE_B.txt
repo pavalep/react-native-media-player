@@ -1,0 +1,80 @@
+V20 Phase B: the service owns the session, and the buttons work
+
+The session and the foreground-service lifetime belonged to
+PlayerActivity's onCreate/onDestroy. The class docblock said so
+explicitly — "the service does NOT own the MediaSessionCompat ...
+This keeps the source of truth for playback state in the activity" —
+and that arrangement is the one Media3's guidance puts the other way
+round:
+
+  "To enable background playback, you should contain the Player and
+  MediaSession inside a separate Service."
+  "onCreate() ... It's the best place to build Player and MediaSession.
+  onDestroy() ... All resources including player and session need to be
+  released."
+  -- developer.android.com/media/media3/session/background-playback
+
+What it cost in practice: the notification, the lock-screen widget and
+the Bluetooth/Auto controls all died the moment the player window
+closed. "Hide the player" and "shut the player down" were the same verb,
+so a mini player could not exist — there was nothing left to minimize
+*to*.
+
+MediaPlaybackService now creates the session in its own onCreate and
+releases it in its own onDestroy. PlayerActivity no longer holds a
+MediaSessionCompat at all; it publishes state and metadata to the
+service when its own lifecycle decisions change them (focus loss, PiP
+transition, resume), and the service's callback issues the transport
+commands.
+
+No IPC, and that is deliberate rather than a shortcut. Media3 separates
+session server from UI with MediaController because they may be in
+different processes. Here they are always in one process and the engine
+is a C++ global reached through the MPVLib singleton, so the service
+calls the engine directly and same-process callers reach it via an
+instance handle - the same pattern as the library's existing
+currentActivityIsPlayer. Media3's own session demo has this exact shape:
+MainActivity + PlayerActivity + PlaybackService.
+
+The buttons that did nothing
+----------------------------
+The notification's Next and Prev were:
+
+  ACTION_SKIP_NEXT -> Log.d(TAG, "... (MediaSession is the source of truth)")
+  ACTION_SKIP_PREV -> Log.d(TAG, "... (MediaSession is the source of truth)")
+
+and play/pause flipped a cached boolean and rebuilt the notification
+without touching the engine. Two visible buttons and one visible
+transport control that did nothing, with no ordering in which they were
+correct - whether MediaStyle routed the tap to the session instead was
+exactly the ambiguity that makes a control untrustworthy.
+
+Every one now maps to a real command, and ACTION_SEEK_TO is advertised in
+the playback state so the notification's progress bar is genuinely
+seekable rather than decorative. Play/pause publishes state *after* the
+command succeeds, so the glyph reflects what the engine was told to do
+rather than what we hoped.
+
+Every handler refuses loudly when there is no engine handle. "No engine"
+is a logged warning, never a silent no-op - a control that cannot act
+must not look like it acted.
+
+Deleted rather than left behind
+-------------------------------
+- PlayerActivity.createMediaSession / releaseMediaSession / the session
+  and callback fields / the session-token hand-off in the start intent
+- PlayerActivity.stopMediaPlaybackService: the Activity no longer stops
+  the service when it dies. The paths that genuinely mean "stop playing"
+  are the notification's Stop and cancel buttons and the session's own
+  stop callback, all handled by the service.
+
+What is still stopped on Activity teardown is everything scoped to the
+window - broadcast receiver, audio focus, render view - which is correct
+by design.
+
+Not in this commit: the session outliving the window is what makes a mini
+player possible, but the mini player itself, the in-app audio player, and
+the PlayerActivity becoming video-only are Phases C-F.
+
+Gates: compileDebugKotlin BUILD SUCCESSFUL. tsc/jest unchanged by this
+commit (Kotlin-only) and were green on 0ac4770.
