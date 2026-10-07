@@ -296,19 +296,20 @@ class PlayerActivity : ReactActivity() {
       return prefs.getBoolean(KEY_AUDIO_BG_PLAYBACK, true)
     }
 
-  // ── MediaSession (Phase 15) ─────────────────────────────────────────
-  // Basic MediaSession so the audio PiP gets system media controls
-  // (lock-screen widget, Bluetooth pause/play, Android Auto, etc.).
-  // The session is created in onCreate and released in onDestroy;
-  // the callback translates play/pause into MPVLib calls.
+  // ── MediaSession (V20 Phase B) ───────────────────────────────────────
+  // This Activity no longer holds a MediaSessionCompat.
   //
-  // This is intentionally minimal — no notification, no metadata
-  // (the title is set on the PiP params in buildCurrentPipParams).
-  // A future phase can layer in the full MediaStyle notification
-  // + MediaMetadata (artwork, duration, position) on top of this
-  // same session.
-  private var mediaSession: android.support.v4.media.session.MediaSessionCompat? = null
-  private var mediaSessionCallback: android.support.v4.media.session.MediaSessionCompat.Callback? = null
+  // It used to: the session was created in onCreate and released in
+  // onDestroy, which meant the lock-screen widget, the notification and
+  // the Bluetooth/Auto transport controls all died the moment this window
+  // closed — "hide the player" and "shut the player down" were the same
+  // verb, and a mini player could not exist.
+  //
+  // The session now belongs to `MediaPlaybackService`, per Media3's
+  // guidance to contain Player and MediaSession inside a separate
+  // Service. This Activity pushes state and metadata to it through
+  // `MediaPlaybackService.publishState` / `publishMetadata`, and the
+  // service's own callback issues the transport commands.
 
   // ── Progress update timer (Phase 17) ─────────────────────────────────
   // 1Hz periodic runnable that queries mpv's `time-pos` property
@@ -530,13 +531,10 @@ class PlayerActivity : ReactActivity() {
       registerReceiver(receiver, PipManager.intentFilter())
     }
     Log.i(TAG, "onCreate: PipActionReceiver registered")
-    // Phase 15.3: create the basic MediaSession. The session is
-    // active for the lifetime of the activity and is released in
-    // onDestroy. We create it last (after the receiver is
-    // registered) so the system has both the broadcast channel
-    // and the media-button channel available for the same
-    // launch.
-    createMediaSession()
+    // V20 Phase B: the MediaSession is no longer created here.
+    // Starting the service is what brings the session up — the service
+    // creates it in its own onCreate and releases it in its own
+    // onDestroy, so it outlives this window.
     // Phase 16.6: start the MediaPlaybackService as a foreground
     // service so the persistent media-style notification appears
     // in the system shade. Android 8+ requires
@@ -632,169 +630,16 @@ class PlayerActivity : ReactActivity() {
     // `module.getCurrentConfig()` directly each time.
   }
 
-  // ── MediaSession (Phase 15.3 + Phase 18) ──────────────────────────────
-  // Creates the MediaSessionCompat that translates ALL system
-  // transport requests (lock-screen widget, Bluetooth, Android
-  // Auto, headset button, MediaPlaybackService's notification
-  // actions) into MPVLib calls. The session is released in
-  // onDestroy via [releaseMediaSession].
+  // ── MediaSession (V20 Phase B) ──────────────────────────────────────
+  // The session itself belongs to MediaPlaybackService now — see that
+  // class header for why. What remains here is the Activity's side of
+  // the conversation: this Activity knows when playback state changed
+  // because of *its own* lifecycle decisions (an audio-focus loss, a PiP
+  // transition, a resume) and publishes them.
   //
-  // Phase 15.3 created a "basic" session with onPlay / onPause
-  // only. Phase 18 expands the callback to cover the full
-  // transport set: play, pause, stop, skip-to-next, skip-to-prev,
-  // seek-to, play-from-media-id, play-from-search. The
-  // session's `PlaybackStateCompat` advertises the matching
-  // ACTION_* flags so the system UI renders the right buttons
-  // and seek bar.
-  //
-  // The session activity (PendingIntent) is set so the system
-  // can bring PlayerActivity to the foreground when the user
-  // taps the lock-screen widget. Without a session activity,
-  // the system has no way to know which activity owns the
-  // session and would default to launching the app's main
-  // launcher intent (which could be wrong if the user launched
-  // PlayerActivity from a deep link).
-  private fun createMediaSession() {
-    val callback = object : android.support.v4.media.session.MediaSessionCompat.Callback() {
-      override fun onPlay() {
-        Log.i(TAG, "MediaSession.onPlay")
-        val ptr = PlaybackHost.handle()
-        if (ptr != 0L) {
-          try {
-            MPVLib.nativePlay(ptr)
-            updateMediaSessionState(playing = true)
-          } catch (e: Exception) {
-            Log.w(TAG, "MediaSession.onPlay: nativePlay threw ${e.message}", e)
-          }
-        }
-      }
-
-      override fun onPause() {
-        Log.i(TAG, "MediaSession.onPause")
-        val ptr = PlaybackHost.handle()
-        if (ptr != 0L) {
-          try {
-            MPVLib.nativePause(ptr)
-            updateMediaSessionState(playing = false)
-          } catch (e: Exception) {
-            Log.w(TAG, "MediaSession.onPause: nativePause threw ${e.message}", e)
-          }
-        }
-      }
-
-      override fun onStop() {
-        // Phase 18.3.3: stop mpv (clears the file + resets the
-        // engine state). The session stays active so a
-        // subsequent onPlay can re-load — the activity's
-        // closePlayer() path is what deactivates + releases
-        // the session.
-        Log.i(TAG, "MediaSession.onStop")
-        val ptr = PlaybackHost.handle()
-        if (ptr != 0L) {
-          try {
-            MPVLib.nativeStop(ptr)
-            updateMediaSessionState(playing = false, state = android.support.v4.media.session.PlaybackStateCompat.STATE_STOPPED)
-          } catch (e: Exception) {
-            Log.w(TAG, "MediaSession.onStop: nativeStop threw ${e.message}", e)
-          }
-        }
-      }
-
-      override fun onSkipToNext() {
-        Log.i(TAG, "MediaSession.onSkipToNext")
-        val ptr = PlaybackHost.handle()
-        if (ptr != 0L) {
-          try {
-            MPVLib.nativePlaylistNext(ptr)
-            // The playlist will fire a new file-load; we don't
-            // know the new position yet, so just refresh the
-            // state with the new playing flag.
-            updateMediaSessionState(playing = true)
-          } catch (e: Exception) {
-            Log.w(TAG, "MediaSession.onSkipToNext: nativePlaylistNext threw ${e.message}", e)
-          }
-        }
-      }
-
-      override fun onSkipToPrevious() {
-        Log.i(TAG, "MediaSession.onSkipToPrevious")
-        val ptr = PlaybackHost.handle()
-        if (ptr != 0L) {
-          try {
-            MPVLib.nativePlaylistPrev(ptr)
-            updateMediaSessionState(playing = true)
-          } catch (e: Exception) {
-            Log.w(TAG, "MediaSession.onSkipToPrevious: nativePlaylistPrev threw ${e.message}", e)
-          }
-        }
-      }
-
-      override fun onSeekTo(pos: Long) {
-        // Phase 18.3.6: seek to absolute position (ms). mpv's
-        // `nativeSeek` takes seconds (Double), so divide by
-        // 1000. The progress update timer (Phase 17) will
-        // pick up the new position on its next tick and ship
-        // it to MediaPlaybackService.
-        Log.i(TAG, "MediaSession.onSeekTo($pos)")
-        val ptr = PlaybackHost.handle()
-        if (ptr != 0L && pos >= 0L) {
-          try {
-            MPVLib.nativeSeek(ptr, pos.toDouble() / 1000.0)
-          } catch (e: Exception) {
-            Log.w(TAG, "MediaSession.onSeekTo: nativeSeek threw ${e.message}", e)
-          }
-        }
-      }
-    }
-    mediaSessionCallback = callback
-    val session = android.support.v4.media.session.MediaSessionCompat(this, TAG)
-    session.setFlags(
-      android.support.v4.media.session.MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
-        android.support.v4.media.session.MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS,
-    )
-    session.setCallback(callback)
-    // Phase 18.4: set the session activity — a PendingIntent
-    // that the system can fire to bring PlayerActivity back to
-    // the foreground on lock-screen interactions. Without
-    // this, the system defaults to the app's launcher
-    // intent, which might be wrong (e.g. user launched the
-    // player from a deep link to a different activity).
-    val sessionActivityIntent = android.content.Intent(this, PlayerActivity::class.java).apply {
-      flags = android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
-        android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
-    }
-    val sessionActivityPendingIntent = android.app.PendingIntent.getActivity(
-      this,
-      0,
-      sessionActivityIntent,
-      android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
-    )
-    session.setSessionActivity(sessionActivityPendingIntent)
-    session.isActive = true
-    mediaSession = session
-    // Phase 19.4: initial metadata set with the launch title.
-    // At this point the file hasn't loaded yet so mpv's
-    // `media-title` is empty — the fallback chain in
-    // setMediaSessionMetadata picks up `launchTitle`. Once
-    // `PlaybackHost` publishes the handle, [onEngineAvailable]
-    // re-queries mpv and refreshes the metadata with the actual tags.
-    setMediaSessionMetadata()
-    Log.i(TAG, "MediaSession created (active=true, callback set, sessionActivity set)")
-  }
-
-  // Update PlaybackState with the current playing flag + state +
-  // position. Called from the session callback (after the
-  // MPVLib call) and from onResume so the lock-screen reflects
-  // the current state when the activity comes back to the
-  // foreground.
-  //
-  // Phase 18.6: the action set is now the full transport set
-  // (PLAY, PAUSE, STOP, SKIP_NEXT, SKIP_PREV, SEEK_TO,
-  // PLAY_PAUSE) so the system UI can render every control the
-  // spec calls for. The state defaults to STATE_PLAYING /
-  // STATE_PAUSED based on the `playing` flag; callers can
-  // override with `state = STATE_STOPPED` etc. for finer
-  // transitions.
+  // The transport commands themselves arrive through the service's
+  // callback, which reads the engine via PlaybackHost at the moment of
+  // use — so a command can no longer be issued against a stale handle.
   private fun updateMediaSessionState(
     playing: Boolean,
     state: Int = if (playing) {
@@ -803,41 +648,7 @@ class PlayerActivity : ReactActivity() {
       android.support.v4.media.session.PlaybackStateCompat.STATE_PAUSED
     },
   ) {
-    val session = mediaSession ?: return
-    val stateBuilder = android.support.v4.media.session.PlaybackStateCompat.Builder()
-    // Full transport set — the system UI can render any of
-    // these controls based on what it decides to show
-    // (lock-screen widget shows 5, Bluetooth shows 2-3, etc.).
-    stateBuilder.setActions(
-      android.support.v4.media.session.PlaybackStateCompat.ACTION_PLAY or
-        android.support.v4.media.session.PlaybackStateCompat.ACTION_PAUSE or
-        android.support.v4.media.session.PlaybackStateCompat.ACTION_PLAY_PAUSE or
-        android.support.v4.media.session.PlaybackStateCompat.ACTION_STOP or
-        android.support.v4.media.session.PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
-        android.support.v4.media.session.PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
-        android.support.v4.media.session.PlaybackStateCompat.ACTION_SEEK_TO,
-    )
-    // Phase 18.6.2: include the current position so the
-    // system UI can show the seek-bar at the right place
-    // even before the first progress update tick lands.
-    val positionMs = getPlaybackPositionMs()
-    stateBuilder.setState(state, positionMs, 1.0f)
-    session.setPlaybackState(stateBuilder.build())
-  }
-
-  // Release the session and null the field so a re-create picks up
-  // a fresh instance. Called from onDestroy.
-  private fun releaseMediaSession() {
-    val session = mediaSession ?: return
-    try {
-      session.isActive = false
-      session.release()
-      Log.i(TAG, "MediaSession released")
-    } catch (e: Exception) {
-      Log.w(TAG, "releaseMediaSession: session.release threw ${e.message}", e)
-    }
-    mediaSession = null
-    mediaSessionCallback = null
+    MediaPlaybackService.publishState(playing, state)
   }
 
   // ── Headset / Bluetooth disconnect (Phase 20) ───────────────────────
@@ -1067,14 +878,9 @@ class PlayerActivity : ReactActivity() {
     intent.putExtra(MediaPlaybackService.EXTRA_POSITION_MS, launchStartPositionMs)
     intent.putExtra(MediaPlaybackService.EXTRA_DURATION_MS, 0L)
     intent.putExtra(MediaPlaybackService.EXTRA_IS_PLAYING, true)
-    // Phase 16.3: pass the session token so the service's
-    // MediaStyle notification can wire to the activity's
-    // MediaSessionCompat (Phase 15). The token is a
-    // Parcelable so it survives the Intent extra marshalling.
-    val session = mediaSession
-    if (session != null) {
-      intent.putExtra(MediaPlaybackService.EXTRA_SESSION_TOKEN, session.sessionToken)
-    }
+    // V20 Phase B: no session token is passed any more. The service owns
+    // the session and publishes its own token to the MediaStyle
+    // notification, so there is nothing for this Activity to hand over.
     return intent
   }
 
@@ -1091,20 +897,15 @@ class PlayerActivity : ReactActivity() {
     }
   }
 
-  // Phase 16.7: stop the service. We send a graceful ACTION_STOP
-  // intent so the service can run its own stopForeground +
-  // stopSelf sequence (the MediaStyle notification cleans up
-  // cleanly that way; calling stopService from outside can
-  // leave a stale foreground notification on some OEM skins).
-  private fun stopMediaPlaybackService() {
-    try {
-      val intent = buildMediaPlaybackServiceIntent(MediaPlaybackService.ACTION_STOP)
-      startService(intent)
-      Log.i(TAG, "MediaPlaybackService stop requested")
-    } catch (e: Exception) {
-      Log.w(TAG, "stopMediaPlaybackService: ${e.message}", e)
-    }
-  }
+  // V20 Phase B deleted `stopMediaPlaybackService` here.
+  //
+  // It existed so this Activity could wind the service down in
+  // `onDestroy`. Now it doesn't: the service owns its own lifetime, and
+  // the paths that genuinely mean "stop playing" — the notification's
+  // Stop and cancel buttons, and the session's own stop callback — are
+  // handled by the service itself. An Activity tearing itself down is
+  // no longer a statement about whether playback should continue, which
+  // is the whole point of the change.
 
   // Phase 17.2 / 17.4: ship the current position + duration to
   // MediaPlaybackService so its notification's progress bar stays
@@ -1194,15 +995,16 @@ class PlayerActivity : ReactActivity() {
         Log.w(TAG, "onResume: setPictureInPictureParams threw ${e.message}", e)
       }
     }
-    // Phase 15.3: refresh the MediaSession state on resume. The
-    // session is created once in onCreate, but the playback state
-    // (playing / paused) can change while the activity is
-    // backgrounded (e.g. the user hit the PiP play/pause button).
-    // We don't have a direct read of mpv's playing flag without
-    // an observer hook, so we conservatively default to
-    // `playing = true` on resume — the next MPVLib event from JS
-    // (or the next session callback) will correct it.
-    if (mediaSession != null) {
+    // Refresh the session state on resume. Playback state can change
+    // while this window is in the background (the user may have used the
+    // notification, the lock-screen widget or a Bluetooth control), and
+    // the service cannot see *this* Activity resume, so we re-publish.
+    //
+    // `playing = true` is a deliberate default, not a reading: mpv's
+    // pause flag is not observable from here without an observer hook,
+    // and the next session callback or MPVLib event corrects it. What
+    // matters is that the session is not left advertising a stale state.
+    if (MediaPlaybackService.isRunning()) {
       updateMediaSessionState(playing = true)
     }
     // Phase 17.4: start the 1Hz progress update runnable. This
@@ -1661,50 +1463,31 @@ class PlayerActivity : ReactActivity() {
     }
   }
 
-  // Phase 19.2 + 19.4: build a MediaMetadataCompat from the
-  // current values and set it on the MediaSession. Called from
-  // createMediaSession (initial set with launch title) and from
-  // the post-availability refresh (so the metadata reflects the
-  // actual mpv tags once the file is loaded).
+  // V20 Phase B: the session lives on the service, so this publishes
+  // to it rather than writing a session directly.
   //
-  // Title fallback chain: mpv `media-title` → launch title →
-  // "Simba Player" (last resort so the lock-screen widget never
-  // shows blank). Artist / album stay empty when not tagged —
-  // the lock-screen widget collapses to title-only in that case
-  // (matches how Spotify / YouTube Music render un-tagged files).
+  // Called once from `PlaybackHost.whenAvailable` (mpv exists by then, so
+  // the real tags are readable) and once more whenever the engine reports
+  // a new file.
   //
-  // The metadata is set on the session (not the notification
-  // directly) so the system media controls (lock-screen widget,
-  // Android Auto, Bluetooth) all pick up the same values. The
-  // notification's own title/subtitle are still set in
-  // MediaPlaybackService.buildNotification (Phase 16), so the
-  // notification UI also reflects the metadata — the values
-  // just arrive through two paths.
+  // Title fallback chain: mpv `media-title` → launch title → "Simba
+  // Player", so the lock-screen widget never shows blank. Artist and
+  // album stay empty when the file is untagged, and the system collapses
+  // the widget to title-only — which is how Spotify and YouTube Music
+  // render untagged files.
   private fun setMediaSessionMetadata() {
-    val session = mediaSession ?: return
     val title = getMediaTitle().ifBlank { launchTitle.ifBlank { "Simba Player" } }
     val artist = getMediaArtist()
     val album = getMediaAlbum()
-    val duration = getPlaybackDurationMs()
-    val builder = android.support.v4.media.MediaMetadataCompat.Builder()
-      .putString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_TITLE, title)
-      .putString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, title)
-      .putString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
-      .putString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_ALBUM, album)
-      .putString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, buildDisplaySubtitle(artist, album))
-      .putString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_MEDIA_URI, launchUri)
-    if (duration > 0L) {
-      builder.putLong(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_DURATION, duration)
-    }
-    try {
-      session.setMetadata(builder.build())
-      Log.i(
-        TAG,
-        "MediaSession metadata set: title='$title' artist='$artist' album='$album' duration=$duration",
-      )
-    } catch (e: Exception) {
-      Log.w(TAG, "setMediaSessionMetadata: session.setMetadata threw ${e.message}", e)
-    }
+    Log.i(TAG, "MediaSession metadata: title='$title' artist='$artist' album='$album'")
+    MediaPlaybackService.publishMetadata(
+      title = title,
+      artist = artist,
+      album = album,
+      artworkPath = "",
+      mediaUri = launchUri,
+      displaySubtitle = buildDisplaySubtitle(artist, album),
+    )
   }
 
   // Phase 19.2 helper: build the `"Artist • Album"` display
@@ -1759,22 +1542,18 @@ class PlayerActivity : ReactActivity() {
     // Phase 38: abandon audio focus as part of the teardown sequence
     // (matches onPause; idempotent if already abandoned).
     abandonAudioFocus()
-    // Phase 16.7: stop the MediaPlaybackService. We send a
-    // ACTION_STOP intent so the service runs its own teardown
-    // (removes the foreground state, then calls stopSelf) instead
-    // of relying on stopService to yank it. The teardown order
-    // matters: we stop the service BEFORE releasing the
-    // MediaSession because the service holds a token reference;
-    // if the token becomes invalid before the service drops it,
-    // the notification's MediaStyle.setMediaSession(token) call
-    // in the next build will log a warning.
-    stopMediaPlaybackService()
-    // Phase 15.3: release the MediaSession before the activity is
-    // torn down. Order doesn't matter much for MediaSession
-    // (release is idempotent), but we do it before the receiver
-    // unregister so the lock-screen widget disappears as part of
-    // the same shutdown.
-    releaseMediaSession()
+    // V20 Phase B: this Activity no longer stops the service or
+    // releases the session on its way out.
+    //
+    // It used to. That is precisely why the notification and the
+    // lock-screen widget vanished the moment the player window closed,
+    // and why "hide the player" and "shut the player down" were the same
+    // verb. Both now belong to the service's own lifecycle: the service
+    // stops itself, and releases its session in its own `onDestroy`.
+    //
+    // What *is* still correct to stop here is everything scoped to this
+    // window — the broadcast receiver, the audio focus request, the
+    // render view — because those die with the window by design.
     // Phase 10: unregister the PiP action broadcast receiver. Must
     // happen BEFORE the super call so the receiver is gone before
     // the activity is fully torn down (otherwise Android logs a

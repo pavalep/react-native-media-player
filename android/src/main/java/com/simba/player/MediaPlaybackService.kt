@@ -11,46 +11,74 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
+import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.simba.player.mpv.MPVLib
 import java.io.File
 import java.net.URL
 
 /**
- * V12 Wave 4 Phase 16: foreground service that hosts the persistent
- * media-style notification for `PlayerActivity`.
+ * V20 Phase B: the foreground service that owns playback.
  *
- * Why a service?
- *  - Android can kill backgrounded activities, but a foreground service
- *    has UI-importance guarantees that keep the audio/video process
- *    alive while playback is in progress.
- *  - The media-style notification is the user-facing surface for
- *    playback controls (play/pause, next, prev) outside the
- *    PiP / lock-screen / Bluetooth paths.
+ * ## What changed, and why
  *
- * Why module-local?
- *  - The V11 `MediaNotificationService` lives in the consumer app for
- *    the inline-mount path. V12's dedicated `PlayerActivity` needs its
- *    own notification host, and the module is the right home for it
- *    (so any consumer app that installs `@simba/react-native-media-player`
- *    gets the notification wiring for free).
+ * Before V20 this service was a notification *host*: `PlayerActivity`
+ * created the [MediaSessionCompat], and the Activity passed its token in
+ * the start intent so the notification's `MediaStyle` could point at it.
+ * The class docblock stated the design intent explicitly — *"the service
+ * does NOT own the `MediaSessionCompat` … This keeps the source of truth
+ * for playback state in the activity"*.
  *
- * Session token: the service does NOT own the `MediaSessionCompat` —
- * `PlayerActivity` does (Phase 15). The activity passes the session
- * token in the start intent's `EXTRA_SESSION_TOKEN` extra so the
- * `MediaStyle` notification can wire its controls to the same
- * `MediaSessionCompat.Callback` the activity registered. This keeps
- * the source of truth for playback state in the activity (where the
- * mpv pointer lives) and lets the service focus on the notification.
+ * That is the arrangement Media3's guidance puts the other way round:
  *
- * Permissions: the consumer app must declare
- *   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
- *   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
- * in its own manifest (the V11 app already declares the first; the
- * second is API 34+). The library manifest declares the service
- * component itself.
+ * > "To enable background playback, you should contain the Player and
+ * > MediaSession inside a separate Service."
+ * > "onCreate() … It's the best place to build Player and MediaSession.
+ * > onDestroy() … All resources including player and session need to be
+ * > released."
+ * > — https://developer.android.com/media/media3/session/background-playback
+ *
+ * The practical cost of getting it backwards was that the session died
+ * with the Activity, so "hide the player" and "shut the player down"
+ * were the same verb, and a mini player could not exist. The session now
+ * lives here, is released here, and outlives any UI.
+ *
+ * (The docblock's other claim — that the mpv pointer lives "in the
+ * activity" — was wrong even before V20. It lives in C++, process-global
+ * as `g_mpv`, and is mirrored by [PlaybackHost].)
+ *
+ * ## The engine is process-global, so no IPC is needed
+ *
+ * Media3 separates the session server from its UI with `MediaController`
+ * because they may be in different processes. Here they are always in
+ * one process, and the engine is a C++ global
+ * (`native_state.h:13`) reached through the [MPVLib] singleton. So this
+ * service issues transport commands directly via [PlaybackHost.handle()]
+ * rather than going through a controller indirection, and same-process
+ * callers reach it through [instance]. Media3's own session demo has the
+ * same shape: `MainActivity` + `PlayerActivity` + `PlaybackService`, with
+ * the service owning the player and session.
+ *
+ * ## Why the notification buttons now work
+ *
+ * The previous handlers were:
+ *
+ * ```
+ * ACTION_SKIP_NEXT -> Log.d(TAG, "… (MediaSession is the source of truth)")
+ * ACTION_SKIP_PREV -> Log.d(TAG, "… (MediaSession is the source of truth)")
+ * ```
+ *
+ * and a play/pause handler that flipped a cached boolean and rebuilt the
+ * notification without touching the engine. Two visible buttons and one
+ * visible transport control that did nothing. There was no ordering in
+ * which those were correct — the MediaStyle may or may not have routed
+ * the tap to the session instead, which is exactly the ambiguity that
+ * makes a control untrustworthy. Now every button maps to a real
+ * command, and [PlaybackStateCompat.ACTION_SEEK_TO] is advertised so the
+ * notification's progress bar is actually seekable.
  */
 class MediaPlaybackService : Service() {
 
@@ -66,9 +94,10 @@ class MediaPlaybackService : Service() {
         const val ACTION_PLAY_PAUSE = "com.simba.player.MEDIA_PLAYBACK_PLAY_PAUSE"
         const val ACTION_SKIP_NEXT = "com.simba.player.MEDIA_PLAYBACK_SKIP_NEXT"
         const val ACTION_SKIP_PREV = "com.simba.player.MEDIA_PLAYBACK_SKIP_PREV"
+        const val ACTION_SEEK_TO = "com.simba.player.MEDIA_PLAYBACK_SEEK_TO"
 
         // Intent extras (kept in sync with PlayerActivity's
-        // [buildStartIntent] helper).
+        // [buildMediaPlaybackServiceIntent] helper).
         const val EXTRA_TITLE = "title"
         const val EXTRA_ARTIST = "artist"
         const val EXTRA_ALBUM = "album"
@@ -76,6 +105,12 @@ class MediaPlaybackService : Service() {
         const val EXTRA_POSITION_MS = "positionMs"
         const val EXTRA_DURATION_MS = "durationMs"
         const val EXTRA_IS_PLAYING = "isPlaying"
+        /**
+         * Retained for wire compatibility with an already-installed
+         * 1.x consumer that still puts a token in the start intent. The
+         * service ignores it — it owns the session now and publishes its
+         * own token to the notification.
+         */
         const val EXTRA_SESSION_TOKEN = "sessionToken"
 
         // Notification action indices (compact view ordering)
@@ -86,7 +121,43 @@ class MediaPlaybackService : Service() {
         @Volatile
         private var isRunning = false
 
+        /**
+         * The running instance, for same-process callers.
+         *
+         * This is a convenience handle, not an ownership mechanism: the
+         * session and the notification are created and released by the
+         * Service's own lifecycle regardless of who holds a reference.
+         * It mirrors the existing `currentActivityIsPlayer` pattern used
+         * elsewhere in this library.
+         */
+        @Volatile
+        private var instance: MediaPlaybackService? = null
+
         fun isRunning(): Boolean = isRunning
+
+        /**
+         * Publish a playback state to the session, if the service is up.
+         *
+         * Callers are UI. If the service is not running there is no
+         * session to publish to and no playback to describe, so this is a
+         * deliberate no-op rather than a queued write — a UI must never
+         * be the thing that resurrects a torn-down session.
+         */
+        fun publishState(playing: Boolean, state: Int = PlaybackStateCompat.STATE_PLAYING) {
+            instance?.publishPlaybackState(playing, state)
+        }
+
+        /** Publish metadata to the session and refresh the notification. */
+        fun publishMetadata(
+            title: String,
+            artist: String,
+            album: String,
+            artworkPath: String,
+            mediaUri: String,
+            displaySubtitle: String,
+        ) {
+            instance?.applyMetadata(title, artist, album, artworkPath, mediaUri, displaySubtitle)
+        }
 
         /**
          * Build a [PendingIntent] for a notification action targeting
@@ -106,9 +177,9 @@ class MediaPlaybackService : Service() {
         }
 
         /**
-         * Build a PendingIntent that opens `PlayerActivity`. Used
+         * Build a [PendingIntent] that opens `PlayerActivity`. Used
          * when the user taps the notification body — returns them
-         * to the player if it's still alive, or launches a fresh
+         * to the player if its task is still alive, or launches a fresh
          * instance otherwise.
          */
         private fun buildContentIntent(context: Context): PendingIntent {
@@ -129,6 +200,12 @@ class MediaPlaybackService : Service() {
 
     private lateinit var notificationManager: NotificationManager
 
+    /**
+     * V20 Phase B: the session is created here and released in this
+     * service's `onDestroy`, not in an Activity's.
+     */
+    private var mediaSession: MediaSessionCompat? = null
+
     // Cached metadata for the latest notification rebuild.
     private var currentTitle: String = "Simba Player"
     private var currentArtist: String = ""
@@ -137,57 +214,230 @@ class MediaPlaybackService : Service() {
     private var currentPosition: Long = 0L
     private var currentDuration: Long = 0L
     private var isCurrentlyPlaying: Boolean = true
-    private var sessionToken: MediaSessionCompat.Token? = null
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
-        Log.i(TAG, "MediaPlaybackService created")
+        createMediaSession()
+        Log.i(TAG, "MediaPlaybackService created (session owned by service)")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_UPDATE -> handleUpdate(intent)
-            ACTION_STOP -> {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
-            // Phase 16: notification action handlers. The actual
-            // play/pause / skip / stop calls go through the
-            // MediaSessionCompat (Phase 15) — PlayerActivity's
-            // callback translates them into MPVLib calls. These
-            // handlers just optimistically update the cached state
-            // so the notification UI feels responsive even before
-            // MPVLib confirms.
+            ACTION_STOP -> handleStop()
+            // Every one of these now issues a real engine command. They
+            // were previously a boolean flip and two log statements.
             ACTION_PLAY_PAUSE -> handlePlayPause()
-            ACTION_SKIP_NEXT -> Log.d(TAG, "ACTION_SKIP_NEXT (MediaSession is the source of truth)")
-            ACTION_SKIP_PREV -> Log.d(TAG, "ACTION_SKIP_PREV (MediaSession is the source of truth)")
+            ACTION_SKIP_NEXT -> handleSkipNext()
+            ACTION_SKIP_PREV -> handleSkipPrevious()
+            ACTION_SEEK_TO -> handleSeekTo(intent)
             else -> handleStart(intent)
         }
         return START_REDELIVER_INTENT
     }
 
-    private fun handlePlayPause() {
-        // Toggle local state for instant UI feedback; the
-        // MediaSessionCompat callback in PlayerActivity (Phase 15)
-        // will issue the actual MPVLib play/pause and call
-        // updateMediaSessionState, which feeds back into a
-        // ACTION_UPDATE intent and syncs us up.
-        isCurrentlyPlaying = !isCurrentlyPlaying
-        notificationManager.notify(NOTIFICATION_ID, buildNotification())
-        Log.d(TAG, "ACTION_PLAY_PAUSE: optimistically toggled to playing=$isCurrentlyPlaying")
-    }
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        // Media3 puts player + session release in the *service's*
+        // onDestroy. Doing it in an Activity's is what tied the session's
+        // lifetime to a window.
+        releaseMediaSession()
         isRunning = false
+        instance = null
         notificationManager.cancel(NOTIFICATION_ID)
         Log.i(TAG, "MediaPlaybackService destroyed")
         super.onDestroy()
+    }
+
+    // ── Session ownership ──────────────────────────────────────────────────
+
+    /**
+     * The full transport set, issued against the process-global engine.
+     *
+     * Every handler reads the handle at the moment of use via
+     * [PlaybackHost] rather than caching it — a cached copy is what let
+     * an Activity's controls go silently dead after a destroy/re-create.
+     */
+    private fun createMediaSession() {
+        val callback = object : MediaSessionCompat.Callback() {
+            override fun onPlay() = command("onPlay") {
+                MPVLib.nativePlay(ptr())
+                publishPlaybackState(playing = true)
+            }
+
+            override fun onPause() = command("onPause") {
+                MPVLib.nativePause(ptr())
+                publishPlaybackState(playing = false)
+            }
+
+            override fun onStop() = command("onStop") {
+                MPVLib.nativeStop(ptr())
+                publishPlaybackState(playing = false, state = PlaybackStateCompat.STATE_STOPPED)
+            }
+
+            override fun onSkipToNext() = command("onSkipToNext") {
+                MPVLib.nativePlaylistNext(ptr())
+                publishPlaybackState(playing = true)
+            }
+
+            override fun onSkipToPrevious() = command("onSkipToPrevious") {
+                MPVLib.nativePlaylistPrev(ptr())
+                publishPlaybackState(playing = true)
+            }
+
+            override fun onSeekTo(pos: Long) = command("onSeekTo($pos)") {
+                if (pos >= 0L) MPVLib.nativeSeek(ptr(), pos.toDouble() / 1000.0)
+            }
+        }
+
+        val session = MediaSessionCompat(this, TAG).apply {
+            setFlags(
+                MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
+                    MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS,
+            )
+            setCallback(callback)
+            // Tapping the lock-screen widget should surface the player.
+            val activityIntent = Intent().apply {
+                setClassName(this@MediaPlaybackService, "com.simba.player.PlayerActivity")
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            setSessionActivity(
+                PendingIntent.getActivity(
+                    this@MediaPlaybackService,
+                    0,
+                    activityIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+            isActive = true
+        }
+        mediaSession = session
+        publishPlaybackState(playing = true)
+        Log.i(TAG, "MediaSession created and owned by the service")
+    }
+
+    private fun releaseMediaSession() {
+        val session = mediaSession ?: return
+        try {
+            session.isActive = false
+            session.release()
+            Log.i(TAG, "MediaSession released")
+        } catch (e: Exception) {
+            Log.w(TAG, "releaseMediaSession: ${e.message}", e)
+        } finally {
+            mediaSession = null
+        }
+    }
+
+    /**
+     * Run [block] against the engine, or explain why it could not run.
+     *
+     * A transport command that silently does nothing is the exact defect
+     * this class used to contain, so "no engine" is logged rather than
+     * swallowed.
+     */
+    private inline fun command(label: String, block: () -> Unit) {
+        if (ptr() == 0L) {
+            Log.w(TAG, "MediaSession.$label ignored: no engine handle")
+            return
+        }
+        try {
+            block()
+        } catch (e: Exception) {
+            Log.w(TAG, "MediaSession.$label threw ${e.message}", e)
+        }
+    }
+
+    private fun ptr(): Long = PlaybackHost.handle()
+
+    private fun enginePropertyMs(name: String): Long {
+        val handle = ptr()
+        if (handle == 0L) return 0L
+        return try {
+            MPVLib.nativeGetProperty(handle, name).trim().toDoubleOrNull()?.times(1000.0)?.toLong() ?: 0L
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    private fun engineProperty(name: String): String {
+        val handle = ptr()
+        if (handle == 0L) return ""
+        return try {
+            MPVLib.nativeGetProperty(handle, name).trim()
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /** Push the current transport state into the session. */
+    private fun publishPlaybackState(
+        playing: Boolean,
+        state: Int = if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
+    ) {
+        val session = mediaSession ?: return
+        val positionMs = enginePropertyMs("time-pos")
+        val builder = PlaybackStateCompat.Builder()
+            .setActions(
+                PlaybackStateCompat.ACTION_PLAY or
+                    PlaybackStateCompat.ACTION_PAUSE or
+                    PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                    PlaybackStateCompat.ACTION_STOP or
+                    PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+                    // Advertised, so the notification's progress bar is
+                    // genuinely seekable rather than a decoration.
+                    PlaybackStateCompat.ACTION_SEEK_TO,
+            )
+            .setState(state, positionMs, 1.0f)
+        session.setPlaybackState(builder.build())
+
+        // Keep the notification's own cache in step so its progress bar
+        // and play/pause glyph reflect reality rather than optimism.
+        currentPosition = positionMs
+        currentDuration = enginePropertyMs("duration")
+        isCurrentlyPlaying = playing
+    }
+
+    private fun applyMetadata(
+        title: String,
+        artist: String,
+        album: String,
+        artworkPath: String,
+        mediaUri: String,
+        displaySubtitle: String,
+    ) {
+        if (title.isNotBlank()) currentTitle = title
+        currentArtist = artist
+        currentAlbum = album
+        currentArtworkPath = artworkPath
+
+        val session = mediaSession ?: return
+        val durationMs = enginePropertyMs("duration")
+        val builder = MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentTitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, currentTitle)
+        if (currentArtist.isNotBlank()) {
+            builder.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, currentArtist)
+        }
+        if (currentAlbum.isNotBlank()) {
+            builder.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, currentAlbum)
+        }
+        if (displaySubtitle.isNotBlank()) {
+            builder.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, displaySubtitle)
+        }
+        if (mediaUri.isNotBlank()) {
+            builder.putString(MediaMetadataCompat.METADATA_KEY_MEDIA_URI, mediaUri)
+        }
+        if (durationMs > 0L) builder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
+        session.setMetadata(builder.build())
+        notificationManager.notify(NOTIFICATION_ID, buildNotification())
     }
 
     // ── Action Handlers ────────────────────────────────────────────────────
@@ -201,14 +451,9 @@ class MediaPlaybackService : Service() {
         currentPosition = extras?.getLong(EXTRA_POSITION_MS, 0L) ?: 0L
         currentDuration = extras?.getLong(EXTRA_DURATION_MS, 0L) ?: 0L
         isCurrentlyPlaying = extras?.getBoolean(EXTRA_IS_PLAYING, true) ?: true
-        sessionToken = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            extras?.getParcelable(EXTRA_SESSION_TOKEN) as? MediaSessionCompat.Token
-        } else {
-            null
-        }
         isRunning = true
-        val notification = buildNotification()
-        startForeground(NOTIFICATION_ID, notification)
+        applyMetadata(currentTitle, currentArtist, currentAlbum, currentArtworkPath, "", "")
+        startForeground(NOTIFICATION_ID, buildNotification())
         Log.i(
             TAG,
             "Media playback started: title='$currentTitle' artist='$currentArtist' playing=$isCurrentlyPlaying",
@@ -226,6 +471,81 @@ class MediaPlaybackService : Service() {
         extras.getBoolean(EXTRA_IS_PLAYING, isCurrentlyPlaying)?.also { isCurrentlyPlaying = it }
         notificationManager.notify(NOTIFICATION_ID, buildNotification())
         Log.d(TAG, "Media playback updated: position=$currentPosition playing=$isCurrentlyPlaying")
+    }
+
+    private fun handleStop() {
+        command("notification-stop") {
+            if (ptr() != 0L) MPVLib.nativeStop(ptr())
+        }
+        publishPlaybackState(playing = false, state = PlaybackStateCompat.STATE_STOPPED)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun handlePlayPause() {
+        val handle = ptr()
+        if (handle == 0L) {
+            Log.w(TAG, "ACTION_PLAY_PAUSE ignored: no engine handle")
+            return
+        }
+        val playing = !isCurrentlyPlaying
+        try {
+            if (playing) MPVLib.nativePlay(handle) else MPVLib.nativePause(handle)
+        } catch (e: Exception) {
+            Log.w(TAG, "ACTION_PLAY_PAUSE: command threw ${e.message}", e)
+            return
+        }
+        // State is published *after* the command, so the glyph reflects
+        // what the engine was actually told to do — not what we hoped.
+        publishPlaybackState(playing)
+        notificationManager.notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun handleSkipNext() {
+        if (ptr() == 0L) {
+            Log.w(TAG, "ACTION_SKIP_NEXT ignored: no engine handle")
+            return
+        }
+        try {
+            MPVLib.nativePlaylistNext(ptr())
+        } catch (e: Exception) {
+            Log.w(TAG, "ACTION_SKIP_NEXT: ${e.message}", e)
+            return
+        }
+        publishPlaybackState(playing = true)
+        notificationManager.notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun handleSkipPrevious() {
+        if (ptr() == 0L) {
+            Log.w(TAG, "ACTION_SKIP_PREV ignored: no engine handle")
+            return
+        }
+        try {
+            MPVLib.nativePlaylistPrev(ptr())
+        } catch (e: Exception) {
+            Log.w(TAG, "ACTION_SKIP_PREV: ${e.message}", e)
+            return
+        }
+        publishPlaybackState(playing = true)
+        notificationManager.notify(NOTIFICATION_ID, buildNotification())
+    }
+
+    private fun handleSeekTo(intent: Intent) {
+        val positionMs = intent.getLongExtra(EXTRA_POSITION_MS, -1L)
+        val handle = ptr()
+        if (handle == 0L || positionMs < 0L) {
+            Log.w(TAG, "ACTION_SEEK_TO ignored (handle=$handle, pos=$positionMs)")
+            return
+        }
+        try {
+            MPVLib.nativeSeek(handle, positionMs.toDouble() / 1000.0)
+        } catch (e: Exception) {
+            Log.w(TAG, "ACTION_SEEK_TO: ${e.message}", e)
+            return
+        }
+        publishPlaybackState(isCurrentlyPlaying)
+        notificationManager.notify(NOTIFICATION_ID, buildNotification())
     }
 
     // ── Notification Channel (Android 8+) ──────────────────────────────────
@@ -283,19 +603,15 @@ class MediaPlaybackService : Service() {
             .setSilent(true)
             .setOnlyAlertOnce(true)
 
-        // MediaStyle: wire to the session token PlayerActivity
-        // passed in via EXTRA_SESSION_TOKEN so the notification's
-        // playback state matches the activity's MediaSession
-        // (Phase 15). If the token was lost across an activity
-        // rebuild, the style still renders (just without the
-        // session integration).
-        val token = sessionToken
+        // MediaStyle points at *this service's own* session — no token
+        // has to be handed in by an Activity any more.
+        val session = mediaSession
         val mediaStyle = androidx.media.app.NotificationCompat.MediaStyle()
             .setShowActionsInCompactView(INDEX_PLAY, INDEX_NEXT, INDEX_PREV)
             .setShowCancelButton(true)
             .setCancelButtonIntent(buildActionIntent(this, ACTION_STOP))
-        if (token != null) {
-            mediaStyle.setMediaSession(token)
+        if (session != null) {
+            mediaStyle.setMediaSession(session.sessionToken)
         }
         builder.setStyle(mediaStyle)
 
@@ -317,9 +633,14 @@ class MediaPlaybackService : Service() {
             buildActionIntent(this, ACTION_STOP),
         )
 
-        // Progress bar (seekable on Android 12+ when the session
-        // exposes SEEK_TO; not used here yet — Phase 20 wires it).
+        // Progress bar. Seekable now, because the session advertises
+        // ACTION_SEEK_TO and ACTION_SEEK_TO dispatches a real command.
         if (currentDuration > 0L) {
+            builder.addAction(
+                android.R.drawable.ic_media_play,
+                "Seek",
+                buildSeekIntent(currentPosition),
+            )
             builder.setProgress(
                 currentDuration.toInt(),
                 currentPosition.toInt(),
@@ -328,6 +649,19 @@ class MediaPlaybackService : Service() {
         }
 
         return builder.build()
+    }
+
+    private fun buildSeekIntent(positionMs: Long): PendingIntent {
+        val intent = Intent(this, MediaPlaybackService::class.java).apply {
+            action = ACTION_SEEK_TO
+            putExtra(EXTRA_POSITION_MS, positionMs)
+        }
+        return PendingIntent.getService(
+            this,
+            (ACTION_SEEK_TO + positionMs).hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     // ── Artwork Loading ────────────────────────────────────────────────────
@@ -354,32 +688,5 @@ class MediaPlaybackService : Service() {
             Log.w(TAG, "Failed to load artwork: ${e.message}")
             null
         }
-    }
-
-    // ── State Builders for Session (used when token is set) ────────────────
-
-    /**
-     * Build a [PlaybackStateCompat] from the cached fields. Called
-     * when the notification is rebuilt with a session token; the
-     * session's own [MediaSessionCompat.Callback] in `PlayerActivity`
-     * (Phase 15) handles the actual play/pause/seek calls.
-     */
-    private fun buildPlaybackStateCompat(): PlaybackStateCompat {
-        val state = if (isCurrentlyPlaying) {
-            PlaybackStateCompat.STATE_PLAYING
-        } else {
-            PlaybackStateCompat.STATE_PAUSED
-        }
-        return PlaybackStateCompat.Builder()
-            .setActions(
-                PlaybackStateCompat.ACTION_PLAY or
-                    PlaybackStateCompat.ACTION_PAUSE or
-                    PlaybackStateCompat.ACTION_PLAY_PAUSE or
-                    PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
-                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
-                    PlaybackStateCompat.ACTION_STOP,
-            )
-            .setState(state, currentPosition, 1.0f)
-            .build()
     }
 }
