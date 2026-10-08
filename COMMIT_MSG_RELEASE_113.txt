@@ -1,0 +1,13 @@
+Release 1.13.0
+
+Bundles V20 Phase C (audio with no window) on top of the notification
+fixes from b3aa6b1, which were held back for exactly this reason — the
+frozen-progress-bar fix needed the service-owned ticker that Phase C
+adds, and both touch MediaPlaybackService.kt. One release rather than
+two, and the two commits stay separately revertable.
+
+No breaking changes to the JS API beyond the deliberate one:
+`openPlayer` rejects `type: 'audio'` with E_AUDIO_REQUIRES_SERVICE.
+
+Verified: tsc 0 · jest 198/198 · :compileDebugKotlin BUILD SUCCESSFUL.
+Not yet verified on device.
