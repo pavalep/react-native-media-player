@@ -62,23 +62,26 @@ import java.net.URL
  * same shape: `MainActivity` + `PlayerActivity` + `PlaybackService`, with
  * the service owning the player and session.
  *
- * ## Why the notification buttons now work
+ * ## Why the notification has no hand-added buttons
  *
- * The previous handlers were:
+ * V20 Phase B replaced these handlers, which did nothing:
  *
  * ```
- * ACTION_SKIP_NEXT -> Log.d(TAG, "… (MediaSession is the source of truth)")
- * ACTION_SKIP_PREV -> Log.d(TAG, "… (MediaSession is the source of truth)")
+ * ACTION_SKIP_NEXT -> Log.d(TAG, "... (MediaSession is the source of truth)")
+ * ACTION_SKIP_PREV -> Log.d(TAG, "... (MediaSession is the source of truth)")
  * ```
  *
- * and a play/pause handler that flipped a cached boolean and rebuilt the
- * notification without touching the engine. Two visible buttons and one
- * visible transport control that did nothing. There was no ordering in
- * which those were correct — the MediaStyle may or may not have routed
- * the tap to the session instead, which is exactly the ambiguity that
- * makes a control untrustworthy. Now every button maps to a real
- * command, and [PlaybackStateCompat.ACTION_SEEK_TO] is advertised so the
- * notification's progress bar is actually seekable.
+ * with real commands - but *also* kept our own action buttons on top of a
+ * session-backed MediaStyle. Device verification showed both sets rendering at
+ * once: two play-looking buttons and no way to tell which one was live. That
+ * is the "control that may or may not be the real one" ambiguity the whole
+ * change set out to remove, reintroduced by the fix.
+ *
+ * The buttons are gone. A MediaStyle carrying a session token renders the
+ * transport controls from the session advertised actions and routes taps to
+ * the session callback, which issues the real command - so the session alone
+ * is the single path. ACTION_SEEK_TO is advertised, which is what makes the
+ * progress bar seekable rather than decorative.
  */
 class MediaPlaybackService : Service() {
 
@@ -91,10 +94,15 @@ class MediaPlaybackService : Service() {
         const val ACTION_START = "com.simba.player.MEDIA_PLAYBACK_START"
         const val ACTION_UPDATE = "com.simba.player.MEDIA_PLAYBACK_UPDATE"
         const val ACTION_STOP = "com.simba.player.MEDIA_PLAYBACK_STOP"
-        const val ACTION_PLAY_PAUSE = "com.simba.player.MEDIA_PLAYBACK_PLAY_PAUSE"
-        const val ACTION_SKIP_NEXT = "com.simba.player.MEDIA_PLAYBACK_SKIP_NEXT"
-        const val ACTION_SKIP_PREV = "com.simba.player.MEDIA_PLAYBACK_SKIP_PREV"
-        const val ACTION_SEEK_TO = "com.simba.player.MEDIA_PLAYBACK_SEEK_TO"
+
+        // V20 Phase B originally added ACTION_PLAY_PAUSE / ACTION_SKIP_NEXT /
+        // ACTION_SKIP_PREV / ACTION_SEEK_TO so the notification's own
+        // action buttons had somewhere to land. Those buttons are gone -
+        // see buildNotification(). A MediaStyle carrying a session token
+        // renders the transport controls from the session's advertised
+        // actions and routes taps to the session callback, so these
+        // handlers were reachable from nowhere and were deleted rather
+        // than left in place as plausible-looking dead code.
 
         // Intent extras (kept in sync with PlayerActivity's
         // [buildMediaPlaybackServiceIntent] helper).
@@ -230,12 +238,6 @@ class MediaPlaybackService : Service() {
         when (intent?.action) {
             ACTION_UPDATE -> handleUpdate(intent)
             ACTION_STOP -> handleStop()
-            // Every one of these now issues a real engine command. They
-            // were previously a boolean flip and two log statements.
-            ACTION_PLAY_PAUSE -> handlePlayPause()
-            ACTION_SKIP_NEXT -> handleSkipNext()
-            ACTION_SKIP_PREV -> handleSkipPrevious()
-            ACTION_SEEK_TO -> handleSeekTo(intent)
             else -> handleStart(intent)
         }
         return START_REDELIVER_INTENT
@@ -481,73 +483,6 @@ class MediaPlaybackService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
-
-    private fun handlePlayPause() {
-        val handle = ptr()
-        if (handle == 0L) {
-            Log.w(TAG, "ACTION_PLAY_PAUSE ignored: no engine handle")
-            return
-        }
-        val playing = !isCurrentlyPlaying
-        try {
-            if (playing) MPVLib.nativePlay(handle) else MPVLib.nativePause(handle)
-        } catch (e: Exception) {
-            Log.w(TAG, "ACTION_PLAY_PAUSE: command threw ${e.message}", e)
-            return
-        }
-        // State is published *after* the command, so the glyph reflects
-        // what the engine was actually told to do — not what we hoped.
-        publishPlaybackState(playing)
-        notificationManager.notify(NOTIFICATION_ID, buildNotification())
-    }
-
-    private fun handleSkipNext() {
-        if (ptr() == 0L) {
-            Log.w(TAG, "ACTION_SKIP_NEXT ignored: no engine handle")
-            return
-        }
-        try {
-            MPVLib.nativePlaylistNext(ptr())
-        } catch (e: Exception) {
-            Log.w(TAG, "ACTION_SKIP_NEXT: ${e.message}", e)
-            return
-        }
-        publishPlaybackState(playing = true)
-        notificationManager.notify(NOTIFICATION_ID, buildNotification())
-    }
-
-    private fun handleSkipPrevious() {
-        if (ptr() == 0L) {
-            Log.w(TAG, "ACTION_SKIP_PREV ignored: no engine handle")
-            return
-        }
-        try {
-            MPVLib.nativePlaylistPrev(ptr())
-        } catch (e: Exception) {
-            Log.w(TAG, "ACTION_SKIP_PREV: ${e.message}", e)
-            return
-        }
-        publishPlaybackState(playing = true)
-        notificationManager.notify(NOTIFICATION_ID, buildNotification())
-    }
-
-    private fun handleSeekTo(intent: Intent) {
-        val positionMs = intent.getLongExtra(EXTRA_POSITION_MS, -1L)
-        val handle = ptr()
-        if (handle == 0L || positionMs < 0L) {
-            Log.w(TAG, "ACTION_SEEK_TO ignored (handle=$handle, pos=$positionMs)")
-            return
-        }
-        try {
-            MPVLib.nativeSeek(handle, positionMs.toDouble() / 1000.0)
-        } catch (e: Exception) {
-            Log.w(TAG, "ACTION_SEEK_TO: ${e.message}", e)
-            return
-        }
-        publishPlaybackState(isCurrentlyPlaying)
-        notificationManager.notify(NOTIFICATION_ID, buildNotification())
-    }
-
     // ── Notification Channel (Android 8+) ──────────────────────────────────
 
     private fun createNotificationChannel() {
@@ -571,18 +506,16 @@ class MediaPlaybackService : Service() {
     // ── Notification Building ──────────────────────────────────────────────
 
     private fun buildNotification(): Notification {
-        val playbackAction = if (isCurrentlyPlaying) {
-            android.R.drawable.ic_media_pause
-        } else {
-            android.R.drawable.ic_media_play
-        }
-        val playbackContent = if (isCurrentlyPlaying) "Pause" else "Play"
-
-        val subtitle: String? = when {
+        // Never null. `setContentText(null)` renders the literal string
+        // "null" in the MediaStyle subtitle when artist and album are both
+        // blank - which is every untagged file. An untagged item should
+        // show nothing, not the word "null".
+        val subtitle = when {
             currentArtist.isNotBlank() && currentAlbum.isNotBlank() ->
                 "$currentArtist • $currentAlbum"
             currentArtist.isNotBlank() -> currentArtist
-            else -> null
+            currentAlbum.isNotBlank() -> currentAlbum
+            else -> ""
         }
 
         val artwork: Bitmap? = loadArtworkBitmap(currentArtworkPath) ?: BitmapFactory.decodeResource(
@@ -615,32 +548,26 @@ class MediaPlaybackService : Service() {
         }
         builder.setStyle(mediaStyle)
 
-        // Action buttons
-        builder.addAction(
-            android.R.drawable.ic_media_previous,
-            "Previous",
-            buildActionIntent(this, ACTION_SKIP_PREV),
-        )
-        builder.addAction(playbackAction, playbackContent, buildActionIntent(this, ACTION_PLAY_PAUSE))
-        builder.addAction(
-            android.R.drawable.ic_media_next,
-            "Next",
-            buildActionIntent(this, ACTION_SKIP_NEXT),
-        )
-        builder.addAction(
-            android.R.drawable.ic_menu_close_clear_cancel,
-            "Stop",
-            buildActionIntent(this, ACTION_STOP),
-        )
+        // No manual actions are added here, deliberately.
+        //
+        // Once a MediaStyle carries a session token, the system renders
+        // the transport controls from `session.playbackState.actions` and
+        // routes taps to the session callback. Adding our own on top
+        // produced TWO overlapping control sets on device - two
+        // play-looking buttons and an ambiguous tap target - which is
+        // exactly the "control that may or may not be the real one"
+        // ambiguity this class was rewritten to remove.
+        //
+        // The session advertises PLAY / PAUSE / PLAY_PAUSE / STOP /
+        // SKIP_TO_NEXT / SKIP_TO_PREVIOUS / SEEK_TO, so every control we
+        // need is already rendered and already wired to a real command.
+        // Stop additionally gets the MediaStyle cancel button below.
+        builder.setStyle(mediaStyle)
 
         // Progress bar. Seekable now, because the session advertises
-        // ACTION_SEEK_TO and ACTION_SEEK_TO dispatches a real command.
+        // ACTION_SEEK_TO - which is what makes the system render this
+        // seekable rather than as decoration.
         if (currentDuration > 0L) {
-            builder.addAction(
-                android.R.drawable.ic_media_play,
-                "Seek",
-                buildSeekIntent(currentPosition),
-            )
             builder.setProgress(
                 currentDuration.toInt(),
                 currentPosition.toInt(),
@@ -649,19 +576,6 @@ class MediaPlaybackService : Service() {
         }
 
         return builder.build()
-    }
-
-    private fun buildSeekIntent(positionMs: Long): PendingIntent {
-        val intent = Intent(this, MediaPlaybackService::class.java).apply {
-            action = ACTION_SEEK_TO
-            putExtra(EXTRA_POSITION_MS, positionMs)
-        }
-        return PendingIntent.getService(
-            this,
-            (ACTION_SEEK_TO + positionMs).hashCode(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
     }
 
     // ── Artwork Loading ────────────────────────────────────────────────────

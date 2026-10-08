@@ -1,0 +1,47 @@
+fix(notification): stop rendering the literal string "null", and delete the duplicate control set
+
+Both found by device verification of 1.12.0, not by tests.
+
+The "null" subtitle
+-------------------
+buildNotification computed `subtitle` as String? and passed null into
+setContentText when artist and album were both blank - which is every
+untagged file. The notification then displayed the literal word "null".
+Pre-existing, plainly user-visible in the shade.
+
+The subtitle is now a non-null String that never produces "null", and a
+lone album now renders instead of being silently dropped.
+
+The duplicate control set
+-------------------------
+Phase B gave the notification real handlers, but also added our own
+action buttons on top of a session-backed MediaStyle. On device both
+sets rendered at once: a second play/pause glyph beside the first, two
+play-looking buttons, and no way to tell which was live.
+
+That is exactly the "control that may or may not be the real one"
+ambiguity this subsystem was rewritten to remove - reintroduced by the
+fix itself. A regression I introduced, found by looking rather than by
+reasoning about it.
+
+The right mechanism was already in use. A MediaStyle carrying a session
+token renders the transport controls from
+`session.playbackState.actions` and routes taps to the session
+callback. The session advertises PLAY / PAUSE / PLAY_PAUSE / STOP /
+SKIP_TO_NEXT / SKIP_TO_PREVIOUS / SEEK_TO, so every control we need is
+already rendered and already wired to a real command.
+
+So the manual addAction calls are gone, and with them the four handlers
+they fed - ACTION_PLAY_PAUSE, ACTION_SKIP_NEXT, ACTION_SKIP_PREV,
+ACTION_SEEK_TO, buildSeekIntent - all of which became unreachable and
+were deleted rather than left in place as plausible-looking dead code.
+Stop keeps its MediaStyle cancel button.
+
+Not fixed here, deliberately: the progress bar still freezes when no
+Activity is driving updates, because the 1 Hz ticker lives in
+PlayerActivity and stops on pause. That needs the service to own a
+ticker, which is a MiniPlayer prerequisite - bundling it now would
+ship a fix for a surface that does not exist yet. It goes in with
+Phase E.
+
+Gate: compileDebugKotlin BUILD SUCCESSFUL.
