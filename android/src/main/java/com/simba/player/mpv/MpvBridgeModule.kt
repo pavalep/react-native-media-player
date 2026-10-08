@@ -1832,7 +1832,15 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     //
     // Reject codes (matched by the TS Spec's `E_*` contract in
     // NativeMpvPlayer.ts):
-    //   • E_INVALID_TYPE           — `type` is not "video" or "audio"
+    //   • E_INVALID_TYPE           — `type` is neither "video" nor "audio"
+    //   • E_AUDIO_REQUIRES_SERVICE — `type` IS "audio". V20 Phase C
+    //     narrowed this method to video only. Audio is no longer forced
+    //     into a window it has nothing to draw in; it goes through
+    //     [startAudioPlayback], which starts the media service with no
+    //     Activity at all. Rejecting rather than quietly still opening an
+    //     Activity is deliberate: a stale JS bundle sending "audio" here
+    //     gets a named, greppable failure instead of a full-screen blank
+    //     player with no notification and no media keys.
     //   • E_NO_ACTIVITY            — no current activity (RN bridge down)
     //   • E_ACTIVITY_NOT_FOUND     — PlayerActivity not declared in manifest
     //   • E_SECURITY               — manifest restriction refused the launch
@@ -1846,14 +1854,21 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         startPositionMs: Double,
         promise: Promise,
     ) {
+        // V20 Phase C: audio no longer belongs here. See the docblock.
+        if (type == com.simba.player.PlayerActivity.TYPE_AUDIO) {
+            Log.w(TAG, "[PlaybackTrace][Bridge][openPlayer] type='audio' is no longer a window launch, rejecting E_AUDIO_REQUIRES_SERVICE")
+            promise.reject(
+                "E_AUDIO_REQUIRES_SERVICE",
+                "openPlayer is video-only as of 1.13.0; audio must use startAudioPlayback() so it does not need a window",
+            )
+            return
+        }
         // 3.3: validate `type` — defensive against the JS layer ever
         // passing a typo (the TS Spec already types it as the union
         // `'video' | 'audio'`, but a stale bundle could skip the check).
-        if (type != com.simba.player.PlayerActivity.TYPE_VIDEO &&
-            type != com.simba.player.PlayerActivity.TYPE_AUDIO
-        ) {
+        if (type != com.simba.player.PlayerActivity.TYPE_VIDEO) {
             Log.w(TAG, "[PlaybackTrace][Bridge][openPlayer] invalid type='$type', rejecting with E_INVALID_TYPE")
-            promise.reject("E_INVALID_TYPE", "type must be 'video' or 'audio', got '$type'")
+            promise.reject("E_INVALID_TYPE", "type must be 'video', got '$type'")
             return
         }
         // 3.4: require a current activity. In bridgeless RN this is null
@@ -1917,6 +1932,212 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             Log.e(TAG, "[PlaybackTrace][Bridge][openPlayer] launch failed", e)
             emitErrorEvent("E_OPEN_PLAYER_FAILED", e.message ?: "openPlayer failed", e)
             promise.reject("E_OPEN_PLAYER_FAILED", e.message ?: "openPlayer failed", e)
+        }
+    }
+
+    // ── Audio playback without an Activity (V20 Phase C) ────────────────────
+    // The primitive that makes the mini player possible.
+    //
+    // Until now the only way to start `MediaPlaybackService` was
+    // `PlayerActivity.onCreate`. So the media session, the notification
+    // and media-key routing existed only while a window was open, and
+    // audio was forced into a full-screen Activity purely to get the
+    // service running. That is an Activity used as a launcher for
+    // something it does not draw — audio has no surface, no PiP
+    // requirement, and nothing to show in a window.
+    //
+    // So this method does, natively and in this order:
+    //
+    //   1. engine   ensure a handle, load the file, seek, play
+    //   2. service  startForegroundService with the media metadata
+    //
+    // Engine first is the whole design. The service builds its
+    // notification out of the engine's `duration` / `time-pos`, so
+    // loading first means the notification is right on its first frame
+    // rather than being visibly corrected a second later. Doing this as
+    // two JS round-trips would leave a real gap where the file is
+    // loaded and playing but nothing owns it: audio with no
+    // notification, no media keys, and no session — which is exactly
+    // the defect class this whole phase set out to remove.
+    //
+    // No Activity is required. `reactApplicationContext` outlives every
+    // window, which is the same reason the engine itself is a
+    // process-global rather than an Activity field.
+
+    @ReactMethod
+    @Override
+    override fun startAudioPlayback(options: ReadableMap?, promise: Promise) {
+        val uri = optString(options, "uri").orEmpty()
+        if (uri.isBlank()) {
+            Log.w(TAG, "[PlaybackTrace][Bridge][startAudioPlayback] blank uri, rejecting E_INVALID_URI")
+            promise.reject("E_INVALID_URI", "options.uri is required")
+            return
+        }
+
+        // `ensurePtr` throws; a Promise caller needs a named code, not a
+        // bridge-level exception with no rejection. Create the engine if
+        // JS has not already done so — a cold start can legitimately
+        // reach audio before anything called `initPlayer()`.
+        if (nativePtr == 0L && !initPlayer()) {
+            Log.e(TAG, "[PlaybackTrace][Bridge][startAudioPlayback] no engine handle, rejecting E_ENGINE_UNAVAILABLE")
+            promise.reject("E_ENGINE_UNAVAILABLE", "libmpv instance unavailable; initPlayer() returned false")
+            return
+        }
+        val handle = nativePtr
+        if (handle == 0L) {
+            Log.e(TAG, "[PlaybackTrace][Bridge][startAudioPlayback] handle still zero after init, rejecting E_ENGINE_UNAVAILABLE")
+            promise.reject("E_ENGINE_UNAVAILABLE", "libmpv instance unavailable; handle is zero")
+            return
+        }
+
+        val resolvedPath = normalizeMpvInput(resolveContentUri(uri))
+        try {
+            MPVLib.nativeLoadFile(handle, resolvedPath)
+        } catch (e: Throwable) {
+            Log.e(TAG, "[PlaybackTrace][Bridge][startAudioPlayback] nativeLoadFile failed for '$resolvedPath'", e)
+            promise.reject("E_LOAD_FAILED", e.message ?: "mpv refused '$uri'", e)
+            return
+        }
+
+        // Seek is applied regardless of `autoPlay`: resuming a paused
+        // episode at a bookmark is a real case, and it would be odd for
+        // the position to depend on whether we happen to start playing.
+        val startPositionMs = optDouble(options, "startPositionMs") ?: 0.0
+        if (startPositionMs > 0.0) {
+            try {
+                MPVLib.nativeSeek(handle, startPositionMs / 1000.0)
+            } catch (e: Throwable) {
+                // A seek that cannot land is not fatal to playback —
+                // the file is loaded and will play from the top. Say so
+                // rather than dropping it.
+                Log.w(TAG, "[PlaybackTrace][Bridge][startAudioPlayback] initial seek to ${startPositionMs.toLong()}ms failed: ${e.message}")
+            }
+        }
+
+        val autoPlay = optBoolean(options, "autoPlay") ?: true
+        if (autoPlay) {
+            try {
+                MPVLib.nativePlay(handle)
+            } catch (e: Throwable) {
+                Log.e(TAG, "[PlaybackTrace][Bridge][startAudioPlayback] nativePlay failed", e)
+                promise.reject("E_LOAD_FAILED", e.message ?: "mpv could not start playback", e)
+                return
+            }
+        }
+
+        val title = optString(options, "title")?.takeIf { it.isNotBlank() } ?: uri
+        val intent = android.content.Intent(
+            reactApplicationContext,
+            com.simba.player.MediaPlaybackService::class.java,
+        ).apply {
+            action = com.simba.player.MediaPlaybackService.ACTION_START
+            putExtra(com.simba.player.MediaPlaybackService.EXTRA_TITLE, title)
+            putExtra(com.simba.player.MediaPlaybackService.EXTRA_ARTIST, optString(options, "artist").orEmpty())
+            putExtra(com.simba.player.MediaPlaybackService.EXTRA_ALBUM, optString(options, "album").orEmpty())
+            putExtra(com.simba.player.MediaPlaybackService.EXTRA_ARTWORK_PATH, optString(options, "artworkPath").orEmpty())
+            putExtra(com.simba.player.MediaPlaybackService.EXTRA_POSITION_MS, startPositionMs.toLong())
+            putExtra(com.simba.player.MediaPlaybackService.EXTRA_DURATION_MS, 0L)
+            putExtra(com.simba.player.MediaPlaybackService.EXTRA_IS_PLAYING, autoPlay)
+        }
+
+        try {
+            // startForegroundService, not startService: the service calls
+            // startForeground in its onStartCommand, and Android 8+
+            // throws ForegroundServiceDidNotStartInTimeException if it
+            // was started as a background service instead.
+            androidx.core.content.ContextCompat.startForegroundService(reactApplicationContext, intent)
+        } catch (e: Throwable) {
+            // Background-start restrictions, or a missing
+            // FOREGROUND_SERVICE permission / service declaration.
+            // Named loudly: this is the case where audio is loaded and
+            // playing with no notification and no media keys, and a
+            // silent failure here is how that gets shipped.
+            Log.e(TAG, "[PlaybackTrace][Bridge][startAudioPlayback] startForegroundService failed", e)
+            promise.reject("E_START_SERVICE_FAILED", e.message ?: "could not start MediaPlaybackService", e)
+            return
+        }
+
+        Log.i(
+            TAG,
+            "[PlaybackTrace][Bridge][startAudioPlayback] playing uri='$resolvedPath' title='$title' startMs=${startPositionMs.toLong()} autoPlay=$autoPlay",
+        )
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    @Override
+    override fun stopAudioPlayback() {
+        val context = reactApplicationContext
+        val serviceUp = com.simba.player.MediaPlaybackService.isRunning()
+        // Stop the engine unconditionally. If the service is already
+        // gone, the session's own stop callback is not around to do it,
+        // and leaving audio running with no way to stop it is the worse
+        // failure of the two.
+        if (nativePtr != 0L) {
+            try {
+                MPVLib.nativeStop(nativePtr)
+            } catch (e: Throwable) {
+                Log.w(TAG, "[PlaybackTrace][Bridge][stopAudioPlayback] nativeStop threw ${e.message}")
+            }
+        } else {
+            Log.w(TAG, "[PlaybackTrace][Bridge][stopAudioPlayback] no engine handle; nothing to stop")
+        }
+
+        if (!serviceUp) {
+            Log.i(TAG, "[PlaybackTrace][Bridge][stopAudioPlayback] service not running; engine stopped, nothing to tear down")
+            return
+        }
+        try {
+            // Ordinary startService: the service is already foreground,
+            // so there is no startForeground deadline to meet.
+            context.startService(
+                android.content.Intent(context, com.simba.player.MediaPlaybackService::class.java).apply {
+                    action = com.simba.player.MediaPlaybackService.ACTION_STOP
+                },
+            )
+        } catch (e: Throwable) {
+            Log.e(TAG, "[PlaybackTrace][Bridge][stopAudioPlayback] could not deliver ACTION_STOP", e)
+        }
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    @Override
+    override fun isAudioPlaybackServiceRunning(): Boolean =
+        com.simba.player.MediaPlaybackService.isRunning()
+
+    /**
+     * `ReadableMap` reads that tolerate absent keys.
+     *
+     * A JS caller that writes `{uri, startPositionMs: undefined}` hands us
+     * a key that *exists* and holds null, so `hasKey` alone would send
+     * `getDouble` into a throw on the bridge thread. These treat
+     * "absent" and "explicitly null" the same way, which is what the
+     * TS optional-property contract already means to a caller.
+     */
+    private fun optString(options: ReadableMap?, key: String): String? {
+        if (options == null || !options.hasKey(key) || options.isNull(key)) return null
+        return try {
+            options.getString(key)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun optDouble(options: ReadableMap?, key: String): Double? {
+        if (options == null || !options.hasKey(key) || options.isNull(key)) return null
+        return try {
+            options.getDouble(key)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun optBoolean(options: ReadableMap?, key: String): Boolean? {
+        if (options == null || !options.hasKey(key) || options.isNull(key)) return null
+        return try {
+            options.getBoolean(key)
+        } catch (_: Throwable) {
+            null
         }
     }
 

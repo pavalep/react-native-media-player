@@ -10,7 +10,9 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -89,6 +91,15 @@ class MediaPlaybackService : Service() {
         const val TAG = "MediaPlaybackService"
         const val CHANNEL_ID = "simba_player_media_playback"
         const val NOTIFICATION_ID = 1101
+
+        /**
+         * How often the service refreshes its own position cache, the
+         * session state and the notification. Matches the 1Hz the
+         * Activity-side ticker used to run at; the notification is the
+         * coarsest consumer of the three, so going finer would spend
+         * wake-ups on something no user can see move.
+         */
+        private const val TICK_INTERVAL_MS = 1000L
 
         // Intent actions
         const val ACTION_START = "com.simba.player.MEDIA_PLAYBACK_START"
@@ -223,6 +234,75 @@ class MediaPlaybackService : Service() {
     private var currentDuration: Long = 0L
     private var isCurrentlyPlaying: Boolean = true
 
+    // ── Position ticker (V20 Phase C) ──────────────────────────────────────
+
+    /**
+     * This service owns its own 1Hz position ticker.
+     *
+     * It used to be driven by `PlayerActivity`'s
+     * `progressUpdateRunnable`, which only ran between that Activity's
+     * `onResume` and `onPause`. Once the window went away the tick stopped
+     * and `currentPosition` froze: the session's own state kept
+     * extrapolating via `speed = 1.0f`, so the system's lock-screen
+     * widget looked alive, while the notification's progress bar and this
+     * cache went stale. Two clocks disagreeing is worse than one frozen
+     * clock, because it reads as a bug in whichever one you are watching.
+     *
+     * It has to live here. With V20 Phase C, audio no longer opens an
+     * Activity at all, so there is frequently nothing left to drive a
+     * ticker that lived on an Activity — the notification would simply
+     * never move.
+     *
+     * Reads the engine directly each tick rather than trusting
+     * [isCurrentlyPlaying], so a track that ends underneath us (EOF) is
+     * noticed instead of being reported as playing forever.
+     */
+    private val tickerHandler = Handler(Looper.getMainLooper())
+    private var tickerRunning = false
+
+    private val positionTicker = object : Runnable {
+        override fun run() {
+            if (!tickerRunning) return
+            if (ptr() == 0L) {
+                // Engine torn down under us. Stop instead of spinning at
+                // 1Hz against a dead handle for as long as the service lives.
+                Log.w(TAG, "position ticker stopping: no engine handle")
+                tickerRunning = false
+                return
+            }
+            val idle = engineFlag("idle-active")
+            if (idle) {
+                // Nothing is loaded or the file reached its end. Publishing
+                // PLAYING here is how "the notification says it is playing
+                // and nothing is audible" happens.
+                Log.i(TAG, "position ticker: engine idle, publishing stopped state")
+                tickerRunning = false
+                publishPlaybackState(playing = false, state = PlaybackStateCompat.STATE_STOPPED)
+                notificationManager.notify(NOTIFICATION_ID, buildNotification())
+                return
+            }
+            val paused = engineFlag("pause")
+            isCurrentlyPlaying = !paused
+            publishPlaybackState(playing = !paused)
+            notificationManager.notify(NOTIFICATION_ID, buildNotification())
+            tickerHandler.postDelayed(this, TICK_INTERVAL_MS)
+        }
+    }
+
+    private fun startTicker() {
+        if (tickerRunning) return
+        tickerRunning = true
+        tickerHandler.postDelayed(positionTicker, TICK_INTERVAL_MS)
+        Log.i(TAG, "position ticker started (interval=${TICK_INTERVAL_MS}ms)")
+    }
+
+    private fun stopTicker(reason: String) {
+        if (!tickerRunning) return
+        tickerRunning = false
+        tickerHandler.removeCallbacks(positionTicker)
+        Log.i(TAG, "position ticker stopped ($reason)")
+    }
+
     // ── Lifecycle ──────────────────────────────────────────────────────────
 
     override fun onCreate() {
@@ -249,6 +329,7 @@ class MediaPlaybackService : Service() {
         // Media3 puts player + session release in the *service's*
         // onDestroy. Doing it in an Activity's is what tied the session's
         // lifetime to a window.
+        stopTicker("service destroyed")
         releaseMediaSession()
         isRunning = false
         instance = null
@@ -271,26 +352,31 @@ class MediaPlaybackService : Service() {
             override fun onPlay() = command("onPlay") {
                 MPVLib.nativePlay(ptr())
                 publishPlaybackState(playing = true)
+                startTicker()
             }
 
             override fun onPause() = command("onPause") {
                 MPVLib.nativePause(ptr())
                 publishPlaybackState(playing = false)
+                stopTicker("paused")
             }
 
             override fun onStop() = command("onStop") {
                 MPVLib.nativeStop(ptr())
                 publishPlaybackState(playing = false, state = PlaybackStateCompat.STATE_STOPPED)
+                stopTicker("stopped")
             }
 
             override fun onSkipToNext() = command("onSkipToNext") {
                 MPVLib.nativePlaylistNext(ptr())
                 publishPlaybackState(playing = true)
+                startTicker()
             }
 
             override fun onSkipToPrevious() = command("onSkipToPrevious") {
                 MPVLib.nativePlaylistPrev(ptr())
                 publishPlaybackState(playing = true)
+                startTicker()
             }
 
             override fun onSeekTo(pos: Long) = command("onSeekTo($pos)") {
@@ -378,6 +464,16 @@ class MediaPlaybackService : Service() {
         }
     }
 
+    /**
+     * mpv renders boolean properties as the strings `"yes"` / `"no"`.
+     *
+     * Anything else — empty, `"null"`, a parse error — is reported as
+     * `false`, because "I could not read this" must not be mistaken for
+     * "this is true". A ticker's whole job is to be trustworthy.
+     */
+    private fun engineFlag(name: String): Boolean =
+        engineProperty(name).equals("yes", ignoreCase = true)
+
     /** Push the current transport state into the session. */
     private fun publishPlaybackState(
         playing: Boolean,
@@ -456,6 +552,10 @@ class MediaPlaybackService : Service() {
         isRunning = true
         applyMetadata(currentTitle, currentArtist, currentAlbum, currentArtworkPath, "", "")
         startForeground(NOTIFICATION_ID, buildNotification())
+        // Phase C: the engine has already been handed the file by the
+        // caller before this intent was built, so the ticker starts
+        // against a live engine rather than an empty one.
+        if (isCurrentlyPlaying) startTicker() else stopTicker("start without autoplay")
         Log.i(
             TAG,
             "Media playback started: title='$currentTitle' artist='$currentArtist' playing=$isCurrentlyPlaying",
@@ -476,6 +576,7 @@ class MediaPlaybackService : Service() {
     }
 
     private fun handleStop() {
+        stopTicker("stop command")
         command("notification-stop") {
             if (ptr() != 0L) MPVLib.nativeStop(ptr())
         }
@@ -483,6 +584,7 @@ class MediaPlaybackService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
+
     // ── Notification Channel (Android 8+) ──────────────────────────────────
 
     private fun createNotificationChannel() {
@@ -538,16 +640,7 @@ class MediaPlaybackService : Service() {
 
         // MediaStyle points at *this service's own* session — no token
         // has to be handed in by an Activity any more.
-        val session = mediaSession
-        val mediaStyle = androidx.media.app.NotificationCompat.MediaStyle()
-            .setShowActionsInCompactView(INDEX_PLAY, INDEX_NEXT, INDEX_PREV)
-            .setShowCancelButton(true)
-            .setCancelButtonIntent(buildActionIntent(this, ACTION_STOP))
-        if (session != null) {
-            mediaStyle.setMediaSession(session.sessionToken)
-        }
-        builder.setStyle(mediaStyle)
-
+        //
         // No manual actions are added here, deliberately.
         //
         // Once a MediaStyle carries a session token, the system renders
@@ -562,6 +655,14 @@ class MediaPlaybackService : Service() {
         // SKIP_TO_NEXT / SKIP_TO_PREVIOUS / SEEK_TO, so every control we
         // need is already rendered and already wired to a real command.
         // Stop additionally gets the MediaStyle cancel button below.
+        val session = mediaSession
+        val mediaStyle = androidx.media.app.NotificationCompat.MediaStyle()
+            .setShowActionsInCompactView(INDEX_PLAY, INDEX_NEXT, INDEX_PREV)
+            .setShowCancelButton(true)
+            .setCancelButtonIntent(buildActionIntent(this, ACTION_STOP))
+        if (session != null) {
+            mediaStyle.setMediaSession(session.sessionToken)
+        }
         builder.setStyle(mediaStyle)
 
         // Progress bar. Seekable now, because the session advertises

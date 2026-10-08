@@ -1,0 +1,52 @@
+V20 Phase C: audio plays with no window
+
+Audio used to be launched by opening `PlayerActivity` with
+`type="audio"`. That Activity had no surface to show — the render
+view was set GONE — and existed only so its `onCreate` could call
+`startMediaPlaybackService()`. Everything else in the app then had to
+pretend audio needed a window: it unmounted the navigator inside it,
+had no place to render a mini player, and could not tell "hide the
+player" apart from "shut the player down" because the session died
+with the window.
+
+So this adds the primitive that was missing: start the foreground
+media service and load the file in the engine, natively, with no
+Activity.
+
+Bridge (MpvBridgeModule)
+  • startAudioPlayback({uri, title?, artist?, album?, artworkPath?,
+    startPositionMs?, autoPlay?}) — loads the file into libmpv, seeks,
+    plays, THEN starts MediaPlaybackService with the media metadata.
+  • stopAudioPlayback() — engine stop + ACTION_STOP. The mini
+    player's close verb; minimise is React state and never gets here.
+  • isAudioPlaybackServiceRunning() — sync, for assertions and for UI
+    that must not offer a control it cannot honour.
+  • openPlayer is now video-only. `type: 'audio'` rejects with
+    E_AUDIO_REQUIRES_SERVICE rather than quietly opening a blank
+    full-screen player, so a stale JS bundle gets a named, greppable
+    failure.
+
+Engine-before-service is the whole design. The service builds its
+notification out of the engine's duration/time-pos, so loading first
+means the notification is correct on its first frame. Split into two
+JS round-trips there is a window where the file plays with nothing
+owning it: no notification, no media keys, no session.
+
+The fork lives in usePlayerActivity, not at the call sites, because
+three entry points reach it (openPlayer, useOpenWithResume,
+useOpenPlaylist) and a consumer cannot tell which a given screen uses.
+One decision, one place.
+
+MediaPlaybackService
+  • Owns its own 1 Hz position ticker. It used to be driven by
+    PlayerActivity's runnable, which stopped at onPause — so once the
+    window went away the notification's progress bar froze while the
+    session's state kept extrapolating at speed=1.0. Two clocks
+    disagreeing is worse than one frozen clock. The tick also reads
+    `idle-active` and `pause` from the engine, so a track that ends
+    underneath us reports STOPPED instead of "playing" forever.
+  • Notification no longer calls setStyle twice (buildNotification
+    had a duplicate MediaStyle assignment).
+
+Gates: tsc 0 · jest 198/198 · :compileDebugKotlin BUILD SUCCESSFUL.
+Device verification pending — this is what makes 1.13.0 unverified.

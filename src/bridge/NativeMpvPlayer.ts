@@ -162,16 +162,90 @@ export interface Spec extends TurboModule {
   getDuration(): number;
   getPlaybackState(): string;
 
-  // ── Activity launch (V12 Phase 3 / V13 Phase 52) ───────────────────────
-  // Promise<boolean> — Kotlin @ReactMethod rejects with E_INVALID_TYPE /
-  // E_NO_ACTIVITY / E_ACTIVITY_NOT_FOUND / E_SECURITY / E_OPEN_PLAYER_FAILED.
-  // See `MpvBridgeModule.kt:1240-1320` for the launch implementation.
+  // ── Video window launch (V12 Phase 3 / V13 Phase 52 / V20 Phase C) ─────
+  // VIDEO ONLY as of 1.13.0.
+  //
+  // Promise<boolean> — Kotlin @ReactMethod rejects with
+  //   • E_INVALID_TYPE           — type is neither "video" nor "audio"
+  //   • E_AUDIO_REQUIRES_SERVICE — type IS "audio". Audio no longer opens
+  //     a window; it must go through `startAudioPlayback` below. Sending
+  //     "audio" here rejects loudly rather than opening an Activity that
+  //     has no surface and no notification.
+  //   • E_NO_ACTIVITY / E_ACTIVITY_NOT_FOUND / E_SECURITY /
+  //     E_OPEN_PLAYER_FAILED
   openPlayer(
     uri: string,
     title: string,
     type: string,
     startPositionMs: number,
   ): Promise<boolean>;
+
+  // ── Audio playback, no Activity (V20 Phase C) ──────────────────────────
+  /**
+   * Start an AUDIO track in the foreground media service, with no
+   * `PlayerActivity` and therefore no window and no surface.
+   *
+   * Why this exists: before V20, `MediaPlaybackService` could only be
+   * started from `PlayerActivity.onCreate`, so the session, the media
+   * notification and the media-key routing existed *only* while a window
+   * was open. Audio was forced into a full-screen Activity purely to get
+   * that service running — an Activity exists to draw, and audio has
+   * nothing to draw. `PlayerActivity` remains for video because PiP is
+   * per-Activity *window state* and cannot be attached to a React
+   * Navigation destination; nothing in the platform requires that of
+   * audio.
+   *
+   * Both steps happen natively, in this order, and the promise resolves
+   * only when both have run:
+   *   1. engine  — ensure a handle exists, load the file, seek, play
+   *   2. service — `startForegroundService` with the media metadata
+   *
+   * Engine-first is deliberate. The service builds its notification from
+   * the engine's `duration` and `time-pos`, so loading first means the
+   * notification is correct on its first frame instead of being rebuilt
+   * once the position ticker catches up. Doing this as two JS round-trips
+   * would leave a window where the file is loaded but nothing owns
+   * playback — audio would play with no notification and no media keys.
+   *
+   * No Activity is required: this uses the React *application* context,
+   * which outlives every window.
+   *
+   * Reject codes:
+   *   • E_INVALID_URI        — `uri` blank
+   *   • E_ENGINE_UNAVAILABLE — no libmpv handle and one could not be made
+   *   • E_LOAD_FAILED        — mpv refused the file
+   *   • E_START_SERVICE_FAILED — the OS refused the foreground start
+   *     (background-start restrictions, missing FOREGROUND_SERVICE)
+   */
+  startAudioPlayback(options: {
+    uri: string;
+    title?: string;
+    artist?: string;
+    album?: string;
+    /** Local path, `file://`, or an `http(s)` URL. Blank falls back to
+     *  the app's drawable icon, as the notification always has. */
+    artworkPath?: string;
+    startPositionMs?: number;
+    /** Default true. Seek is applied regardless of `autoPlay`. */
+    autoPlay?: boolean;
+  }): Promise<boolean>;
+
+  /**
+   * Stop playback and tear the foreground service down. This is the mini
+   * player's close (X) verb — distinct from *minimize*, which is a React
+   * state change and never reaches the native layer.
+   *
+   * Synchronous and idempotent: the service's own `ACTION_STOP` handler
+   * already tolerates being called when nothing is loaded.
+   */
+  stopAudioPlayback(): void;
+
+  /**
+   * Whether the foreground service currently holds a live session.
+   * For assertions and for UI that must not offer a control it cannot
+   * honour. Synchronous: it reads a `@Volatile` flag the service owns.
+   */
+  isAudioPlaybackServiceRunning(): boolean;
   // Returns null when no launch is pending or after the first read.
   getLaunchParams(): Promise<{
     uri: string;

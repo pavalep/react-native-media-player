@@ -191,6 +191,7 @@ export interface CaptureFrameOptions {
  *  - Filters + playlist
  *  - State queries
  *  - Activity launch (openPlayer/getLaunchParams)
+ *  - Audio without an Activity (startAudioPlayback/stopAudioPlayback)
  *  - Configuration (setConfig)
  *  - PiP + screen
  *  - Orientation + immersive
@@ -396,6 +397,26 @@ export interface MpvPlayerModuleBridge {
     type: 'video' | 'audio',
     startPositionMs: number,
   ): Promise<boolean>;
+  /**
+   * Start an AUDIO track in the foreground media service with no
+   * `PlayerActivity` and therefore no window and no surface. V20
+   * Phase C. See `NativeMpvPlayer.ts` for the full reject-code
+   * contract (`E_INVALID_URI`, `E_ENGINE_UNAVAILABLE`, `E_LOAD_FAILED`,
+   * `E_START_SERVICE_FAILED`).
+   */
+  startAudioPlayback(options: {
+    uri: string;
+    title?: string;
+    artist?: string;
+    album?: string;
+    artworkPath?: string;
+    startPositionMs?: number;
+    autoPlay?: boolean;
+  }): Promise<boolean>;
+  /** Stop playback and tear the foreground service down. */
+  stopAudioPlayback(): void;
+  /** Whether the foreground service currently holds a live session. */
+  isAudioPlaybackServiceRunning(): boolean;
   /**
    * One-shot accessor for the launch params the most recent
    * `openPlayer` call handed to `PlayerActivity`. Returns `null`
@@ -647,6 +668,26 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
     void _startPositionMs;
     return Promise.resolve(false);
   },
+  // Audio playback without an Activity (V20 Phase C).
+  //
+  // Resolves `false` for the same reason `openPlayer` does: the fallback
+  // bridge is what jest and web previews get, and it has no engine and
+  // no service. `false` is falsy and assertable; a throw would take down
+  // a screen that only wanted to know the launch did not happen.
+  startAudioPlayback: (_options: {
+    uri: string;
+    title?: string;
+    artist?: string;
+    album?: string;
+    artworkPath?: string;
+    startPositionMs?: number;
+    autoPlay?: boolean;
+  }) => {
+    void _options;
+    return Promise.resolve(false);
+  },
+  stopAudioPlayback: () => {},
+  isAudioPlaybackServiceRunning: () => false,
   // V22.0.0 / 1.5.8 (D-035 fix #6): now matches the real
   // Promise<LaunchParams | null> runtime return type.
   getLaunchParams: () => Promise.resolve(null),

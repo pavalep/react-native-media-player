@@ -16,10 +16,37 @@ export interface OpenPlayerOptions {
   uri: string;
   /** Display title for the notification / top bar. */
   title: string;
-  /** `'video'` launches the full-screen activity; `'audio'` plays in the background. */
+  /**
+   * `'video'` opens `PlayerActivity`. `'audio'` does NOT — it starts the
+   * foreground media service and plays with no window at all.
+   *
+   * That fork lives here rather than at the call sites on purpose.
+   * Three separate entry points reach this hook (`openPlayer`,
+   * `useOpenWithResume`, `useOpenPlaylist`) and a consumer has no way to
+   * tell which one a given screen uses. Deciding "does audio need a
+   * window?" at each of those would mean three places to keep in sync,
+   * and the one forgotten would open a blank full-screen player for a
+   * track with no surface.
+   */
   type: 'video' | 'audio';
   /** Resume position in milliseconds. 0 (or omitted) starts from the beginning. */
   startPositionMs?: number;
+  /**
+   * Optional artwork for the media notification's large icon — a local
+   * path, `file://`, or an `http(s)` URL.
+   *
+   * Audio only: `PlayerActivity` shows the video frame itself, so it has
+   * nothing to be handed. Consumed by `startAudioPlayback`; ignored on
+   * the video path, which is why passing it unconditionally is safe.
+   */
+  artworkPath?: string;
+  /**
+   * Optional artist / album lines for the notification subtitle.
+   * Audio only, for the same reason as `artworkPath`. Both are optional:
+   * an untagged file shows a title and nothing else.
+   */
+  artist?: string;
+  album?: string;
 }
 
 /**
@@ -94,11 +121,31 @@ export function usePlayerActivity(): UsePlayerActivityResult {
     () => ({
       openPlayer: (opts) => {
         const bridge = getMpvPlayerModule();
+        const startPositionMs = opts.startPositionMs ?? 0;
+
+        // Audio never opens a window. See `OpenPlayerOptions.type`.
+        if (opts.type === 'audio') {
+          return bridge.startAudioPlayback({
+            uri: opts.uri,
+            title: opts.title,
+            startPositionMs,
+            // A launch means "play this". The only reason not to would
+            // be an explicit pause request, and the way to ask for one
+            // is `commands.pause()` after the fact — not a launch that
+            // silently does nothing, which is what `autoPlay: false`
+            // here would look like to every existing caller.
+            autoPlay: true,
+            ...(opts.artworkPath ? {artworkPath: opts.artworkPath} : {}),
+            ...(opts.artist ? {artist: opts.artist} : {}),
+            ...(opts.album ? {album: opts.album} : {}),
+          });
+        }
+
         return bridge.openPlayer(
           opts.uri,
           opts.title,
           opts.type,
-          opts.startPositionMs ?? 0,
+          startPositionMs,
         );
       },
       getLaunchParams: () => {
