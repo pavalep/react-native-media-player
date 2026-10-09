@@ -2064,27 +2064,43 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         promise.resolve(true)
     }
 
+    /**
+     * The one teardown, for both lanes.
+     *
+     * Renamed from `stopAudioPlayback` because the body never was
+     * audio-specific: it stops the process-global engine and sends the
+     * service `ACTION_STOP`, neither of which knows or cares which lane
+     * loaded the media. The old name became a lie the moment video
+     * needed it too — and video does, because `exitPipAndFinish()` only
+     * finishes the Activity. Closing the window left the engine running
+     * with the notification still posted, so "back" looked like it closed
+     * the player while the audio carried on with no window to stop it.
+     *
+     * Idempotent: safe with nothing loaded, and safe when the service is
+     * already gone (the engine is still stopped in that case, because
+     * leaving media running with no way to stop it is the worse failure).
+     */
     @ReactMethod
     @Override
-    override fun stopAudioPlayback() {
+    override fun stopPlayback() {
         val context = reactApplicationContext
         val serviceUp = com.simba.player.MediaPlaybackService.isRunning()
         // Stop the engine unconditionally. If the service is already
         // gone, the session's own stop callback is not around to do it,
-        // and leaving audio running with no way to stop it is the worse
+        // and leaving media running with no way to stop it is the worse
         // failure of the two.
         if (nativePtr != 0L) {
             try {
                 MPVLib.nativeStop(nativePtr)
             } catch (e: Throwable) {
-                Log.w(TAG, "[PlaybackTrace][Bridge][stopAudioPlayback] nativeStop threw ${e.message}")
+                Log.w(TAG, "[PlaybackTrace][Bridge][stopPlayback] nativeStop threw ${e.message}")
             }
         } else {
-            Log.w(TAG, "[PlaybackTrace][Bridge][stopAudioPlayback] no engine handle; nothing to stop")
+            Log.w(TAG, "[PlaybackTrace][Bridge][stopPlayback] no engine handle; nothing to stop")
         }
 
         if (!serviceUp) {
-            Log.i(TAG, "[PlaybackTrace][Bridge][stopAudioPlayback] service not running; engine stopped, nothing to tear down")
+            Log.i(TAG, "[PlaybackTrace][Bridge][stopPlayback] service not running; engine stopped, nothing to tear down")
             return
         }
         try {
@@ -2096,7 +2112,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                 },
             )
         } catch (e: Throwable) {
-            Log.e(TAG, "[PlaybackTrace][Bridge][stopAudioPlayback] could not deliver ACTION_STOP", e)
+            Log.e(TAG, "[PlaybackTrace][Bridge][stopPlayback] could not deliver ACTION_STOP", e)
         }
     }
 

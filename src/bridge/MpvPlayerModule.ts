@@ -191,7 +191,7 @@ export interface CaptureFrameOptions {
  *  - Filters + playlist
  *  - State queries
  *  - Activity launch (openPlayer/getLaunchParams)
- *  - Audio without an Activity (startAudioPlayback/stopAudioPlayback)
+ *  - Audio without an Activity (startAudioPlayback/stopPlayback)
  *  - Configuration (setConfig)
  *  - PiP + screen
  *  - Orientation + immersive
@@ -413,8 +413,8 @@ export interface MpvPlayerModuleBridge {
     startPositionMs?: number;
     autoPlay?: boolean;
   }): Promise<boolean>;
-  /** Stop playback and tear the foreground service down. */
-  stopAudioPlayback(): void;
+  /** Stop playback and tear the foreground service down. Both lanes. */
+  stopPlayback(): void;
   /** Whether the foreground service currently holds a live session. */
   isAudioPlaybackServiceRunning(): boolean;
   /**
@@ -686,7 +686,7 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
     void _options;
     return Promise.resolve(false);
   },
-  stopAudioPlayback: () => {},
+  stopPlayback: () => {},
   isAudioPlaybackServiceRunning: () => false,
   // V22.0.0 / 1.5.8 (D-035 fix #6): now matches the real
   // Promise<LaunchParams | null> runtime return type.

@@ -231,14 +231,22 @@ export interface Spec extends TurboModule {
   }): Promise<boolean>;
 
   /**
-   * Stop playback and tear the foreground service down. This is the mini
-   * player's close (X) verb — distinct from *minimize*, which is a React
-   * state change and never reaches the native layer.
+   * Stop playback and tear the foreground service down.
+   *
+   * This is *the* teardown, for both lanes. It is what "close" means:
+   * the engine stops and the foreground service is released, so the
+   * notification goes away and the media keys stop driving a session.
+   * It is NOT what "minimize" means — minimize is a React state change
+   * and never reaches the native layer.
+   *
+   * Video needs this too. `exitPipAndFinish()` only finishes the
+   * Activity; the engine is process-global, so finishing the window
+   * left the media running with no window left to stop it.
    *
    * Synchronous and idempotent: the service's own `ACTION_STOP` handler
    * already tolerates being called when nothing is loaded.
    */
-  stopAudioPlayback(): void;
+  stopPlayback(): void;
 
   /**
    * Whether the foreground service currently holds a live session.

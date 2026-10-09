@@ -162,6 +162,11 @@ export interface PlayerCommands {
   togglePlayPause(): void;
   /** Stop playback entirely. */
   stop(): void;
+  /**
+   * Stop playback AND tear the foreground service down (notification
+   * dismissed, media session released). This is what "close" means.
+   */
+  stopPlayback(): void;
   /** Relative seek in milliseconds. Negative seeks backward. */
   seekBy(deltaMs: number): void;
   /** Seek to the chapter at `index` (via mpv `setProperty('chapter', index)`). */
@@ -510,6 +515,16 @@ function buildCommands(): PlayerCommands {
     stop: () => {
       dlog('commands.stop()');
       getMpvPlayerModule().stop();
+    },
+    /**
+     * The full teardown: engine + foreground service. Distinct from
+     * `stop()`, which only halts the engine and leaves the session and
+     * notification alive — correct for "pause the media, keep the
+     * transport available", wrong for "close the player".
+     */
+    stopPlayback: () => {
+      dlog('commands.stopPlayback()');
+      getMpvPlayerModule().stopPlayback();
     },
     seekBy: (deltaMs: number) => {
       dlog('commands.seekBy(', deltaMs, ')');

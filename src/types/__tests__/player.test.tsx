@@ -173,6 +173,16 @@ describe('usePlayer (no provider)', () => {
     expect(typeof c.playlistRemove).toBe('function');
     expect(typeof c.shuffle).toBe('function');
     expect(typeof c.clear).toBe('function');
+    // `stopPlayback` is the FULL teardown (engine + foreground service).
+    // It must exist alongside `stop`, which only halts the engine and
+    // leaves the session and notification alive. Video's back button
+    // needs the full one: `exitPipAndFinish()` finishes the Activity, and
+    // the process-global engine would otherwise keep playing behind a
+    // closed window.
+    expect(typeof c.stopPlayback).toBe('function');
+    // The old lane-specific name must NOT survive — a consumer reaching
+    // for it would silently get undefined and skip the teardown.
+    expect((c as unknown as Record<string, unknown>).stopAudioPlayback).toBeUndefined();
     expect(typeof c.cycleTrack).toBe('function');
     expect(typeof c.setTrack).toBe('function');
     expect(typeof c.enterPip).toBe('function');
