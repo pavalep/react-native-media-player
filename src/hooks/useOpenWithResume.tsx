@@ -207,30 +207,59 @@ export { PlayerResumeContext };
 export type ContentKind =
   | 'video' | 'audio'              // stream types (passthrough)
   | 'music' | 'audiobook' | 'podcast' | 'radio' | 'archive-audio'  // audio content
-  | 'movie' | 'episode' | 'live-tv' | 'video-file'  // video content
+  | 'movie' | 'episode' | 'live-tv' | 'video-file' | 'archive-video'  // video content
   | string;                         // unknown — falls back to 'audio'
 
+/**
+ * Content kind → playback lane.
+ *
+ * ## Why a single map rather than two sets plus a default
+ *
+ * Two sets with an unknown-value fallback cannot be tested for
+ * correctness in the one case that matters. If a kind is dropped from
+ * both sets it falls through to the default, and for an AUDIO kind that
+ * default is also `'audio'` — so the mistake is invisible to any
+ * assertion on the return value. A kind only becomes visible once it has
+ * already been mis-tabulated *into* the other lane.
+ *
+ * That is not hypothetical: `'episode'` sat in the video list while the
+ * rest of the app treats a podcast episode as audio, and `'archive-video'`
+ * was absent entirely so it took the audio default. Both produced a file
+ * opening the wrong PLAYER WINDOW, and neither was reachable from a
+ * return-value test.
+ *
+ * Exported so a consumer can audit the table against its own `MediaKind`
+ * union instead of discovering a gap as a mis-routed file.
+ */
+export const CONTENT_KIND_LANES: Readonly<Record<string, 'audio' | 'video'>> =
+  Object.freeze({
+    // Audio content kinds. A podcast episode belongs here, not in video.
+    audio: 'audio',
+    music: 'audio',
+    audiobook: 'audio',
+    podcast: 'audio',
+    radio: 'audio',
+    episode: 'audio',
+    'archive-audio': 'audio',
+
+    // Video content kinds, listed explicitly rather than as "everything
+    // else" — a negative list would silently send any kind dropped from
+    // the audio table to video.
+    video: 'video',
+    movie: 'video',
+    'live-tv': 'video',
+    'video-file': 'video',
+    'archive-video': 'video',
+  });
+
+/**
+ * Map a content/media-kind string to a stream type (`'video' | 'audio'`).
+ *
+ * The fallback for an unrecognised kind is `'audio'`, unchanged: an
+ * unknown file is genuinely more likely to be audio-only, and the audio
+ * player still plays it. The defect this fixes was never the fallback —
+ * it was recognised kinds falling INTO it.
+ */
 export function resolveStreamType(input: ContentKind): 'video' | 'audio' {
-  // Already a stream type — passthrough.
-  if (input === 'video' || input === 'audio') return input;
-  // Audio content kinds.
-  switch (input) {
-    case 'music':
-    case 'audiobook':
-    case 'podcast':
-    case 'radio':
-    case 'archive-audio':
-      return 'audio';
-    // Video content kinds.
-    case 'movie':
-    case 'episode':
-    case 'live-tv':
-    case 'video-file':
-      return 'video';
-    default:
-      // Unknown kind — conservative default. Better to launch an
-      // audio player on an unknown file than to crash on a video
-      // mismatch.
-      return 'audio';
-  }
+  return CONTENT_KIND_LANES[input] ?? 'audio';
 }
