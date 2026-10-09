@@ -996,6 +996,90 @@ describe('commands.loadFile applies the launch title (v1.9.3)', () => {
   });
 });
 
+// ── V21: seekable re-seed on file load ──────────────────────────────────────
+
+describe('seekable re-seed on file load', () => {
+  it('re-reads seekable when a file loads, because mpv only emits it as an edge', async () => {
+    clearBridgeMocks();
+    const getProperty = NativeModules.MpvPlayerModule
+      .getProperty as jest.Mock;
+
+    // At mount nothing is loaded yet, so mpv legitimately reports false.
+    // This is the ordinary launch order — the seed at mount alone can
+    // therefore never be the thing that makes a seek bar usable.
+    getProperty.mockImplementation((name: string) =>
+      name === 'seekable' ? 'false' : 'null',
+    );
+
+    const capture = captureSubscribes();
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PlayerProvider>{children}</PlayerProvider>
+    );
+
+    const { result, unmount } = await renderHook(() => usePlayerProgress(), {
+      wrapper,
+    });
+
+    expect(result.current.seekable).toBe(false);
+
+    // The file is loaded now and mpv has flipped the flag. Measured on
+    // device, the PROPERTY_CHANGE edge for `seekable` reached JS zero
+    // times, so the provider has to re-read the level itself.
+    getProperty.mockImplementation((name: string) =>
+      name === 'seekable' ? 'true' : 'null',
+    );
+
+    await act(async () => {
+      for (const handler of capture.handlers.get('onFileLoaded') ?? []) {
+        handler({ file: { uri: 'file:///a.mp4', title: 'A', duration: 3600 } });
+      }
+    });
+
+    // The seek bar must become usable. This is the assertion that fails
+    // with the pre-fix provider, where `seekable` stayed at
+    // DEFAULT_PROGRESS and the bar rendered permanently disabled.
+    expect(result.current.seekable).toBe(true);
+
+    capture.restore();
+    await unmount();
+  });
+
+  it('does not treat a reported duration as proof of seekability', async () => {
+    // The tempting app-side "fix" was `state.seekable || state.durationMs > 0`.
+    // A live stream can report a duration and still have no seekable range;
+    // inferring seekability from duration lights up a seek bar that cannot
+    // work, which is the same "control that looks live and is not" class
+    // this refactor is removing elsewhere.
+    clearBridgeMocks();
+    const getProperty = NativeModules.MpvPlayerModule
+      .getProperty as jest.Mock;
+    // A live stream: duration known, seekable still false, and no flip.
+    getProperty.mockImplementation((name: string) =>
+      name === 'seekable' ? 'false' : 'null',
+    );
+
+    const capture = captureSubscribes();
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PlayerProvider>{children}</PlayerProvider>
+    );
+
+    const { result, unmount } = await renderHook(() => usePlayerProgress(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      for (const handler of capture.handlers.get('onFileLoaded') ?? []) {
+        handler({ file: { uri: 'live/hls', title: 'Live', duration: 0 } });
+      }
+    });
+
+    expect(result.current.seekable).toBe(false);
+
+    capture.restore();
+    await unmount();
+  });
+});
+
 // ── V21: single-Activity surface control ────────────────────────────────────
 
 describe('V21 surface control (setVideoBounds family)', () => {

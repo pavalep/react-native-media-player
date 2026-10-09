@@ -597,6 +597,58 @@ export function PlayerProvider({
     // the progress equality short-circuit correct under React's
     // batching.
     const unsubs: Array<() => void> = [];
+
+    // ── 2a-bis. Re-seed the EDGE-only level fields on file load ──────────
+    //
+    // `seekable` is a LEVEL value that mpv delivers only as an EDGE:
+    // MPV_EVENT_PROPERTY_CHANGE fires once, at the instant the flag flips
+    // false -> true. Two consequences:
+    //
+    //   1. A provider that mounts (or remounts, e.g. in a second React
+    //      root) AFTER that flip never observes the event.
+    //   2. In the normal launch order the flag cannot have flipped yet at
+    //      mount time either — the file has not been loaded. The mount-time
+    //      seed therefore reads `false`, which is correct-but-useless, and
+    //      the later edge is the only thing that can ever set it.
+    //
+    // Measured on device (Android 37): `onCacheState`, which changes
+    // continuously, reached JS 827 times while `onSeekable` arrived ZERO
+    // times across a cold start and an app restart — the edge was consumed
+    // natively and never surfaced to this subscriber.
+    //
+    // So re-read the level whenever a file loads. This is the correct place
+    // rather than in `applyPlayerEvent`, because that function is pure and
+    // has no bridge access, and rather than in the consumer, because the
+    // consumer has no way to know the flag is an edge.
+    //
+    // Do NOT "fix" this in the UI by treating `durationMs > 0` as proof of
+    // seekability: a live stream can report a duration and still have no
+    // seekable range, and that would light up a seek bar that cannot work.
+    const reseedEdgeLevels = (reason: string) => {
+      try {
+        const raw = bridge.getProperty('seekable');
+        // The bridge serialises MPV_FORMAT_FLAG to the JSON literals
+        // `true` / `false`. Anything else - "null" for an unavailable
+        // property, "" for the NOOP bridge - is not a value and must not be
+        // coerced to false, which would silently un-seek a playing file.
+        if (raw === 'true' || raw === 'false') {
+          const seekable = raw === 'true';
+          if (seekable !== progressRef.current.seekable) {
+            progressRef.current = { ...progressRef.current, seekable };
+            setProgress(progressRef.current);
+          }
+        }
+      } catch (e) {
+        // Best-effort: a bridge without `getProperty` (or no live mpv
+        // instance yet) leaves the field to the event stream.
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[simba-player] seekable seed failed (${reason}):`,
+          e,
+        );
+      }
+    };
+
     for (const event of ALL_PLAYER_EVENTS) {
       const unsub = subscribePlayerEvent(
         event,
@@ -637,6 +689,14 @@ export function PlayerProvider({
             progressRef.current = nextProgress;
             return nextProgress;
           });
+
+          // A freshly loaded file is the moment `seekable` can first become
+          // true. Re-read the level so the seek bar is usable as soon as the
+          // media actually has a seekable range, rather than waiting for an
+          // edge this subscriber is not reliably delivered.
+          if (event === 'onFileLoaded') {
+            reseedEdgeLevels('onFileLoaded');
+          }
         },
       );
       unsubs.push(unsub);
@@ -667,46 +727,13 @@ export function PlayerProvider({
 
     // ── 2b. Re-read the LEVEL-only progress fields ───────────────────────
     //
-    // `seekable` is a LEVEL value that mpv delivers only as an EDGE:
-    // MPV_EVENT_PROPERTY_CHANGE is emitted once, at the instant the flag
-    // flips from false to true. Any provider that mounts — or remounts,
-    // e.g. in a second React root — after that flip never observes the
-    // event, so the field stays at DEFAULT_PROGRESS forever and the
-    // consumer's seek bar renders permanently disabled.
-    //
-    // Measured on device (Android 37): `onCacheState` — which changes
-    // continuously — reached JS 827 times, while `onSeekable` arrived
-    // ZERO times across both a cold start and an app restart, because by
-    // then the flag had already settled and mpv will not repeat it.
-    //
-    // So read the level once at mount. The event keeps driving updates
-    // afterwards; this only closes the gap for a provider that starts
-    // mid-session. Without it the only correct usage pattern is
-    // "subscribe strictly before loadFile", which no consumer can be
-    // asked to guarantee across activities.
-    try {
-      const raw = bridge.getProperty('seekable');
-      // The bridge serialises MPV_FORMAT_FLAG to the JSON literals
-      // `true` / `false` (property.cpp, appendNode). Anything else -
-      // "null" for an unavailable property, "" for the NOOP bridge -
-      // is not a value, and must not be coerced to false.
-      if (raw === 'true' || raw === 'false') {
-        const seekable = raw === 'true';
-        if (seekable !== progressRef.current.seekable) {
-          const seeded: PlayerProgress = {
-            ...progressRef.current,
-            seekable,
-          };
-          progressRef.current = seeded;
-          setProgress(seeded);
-        }
-      }
-    } catch (e) {
-      // Best-effort: a bridge without `getProperty` (or no live mpv
-      // instance yet) leaves the field to the event stream.
-      // eslint-disable-next-line no-console
-      console.warn('[simba-player] seekable seed failed:', e);
-    }
+    // See `reseedEdgeLevels` above for why `seekable` cannot be trusted to
+    // arrive as an event. Seeding here closes the gap for a provider that
+    // starts mid-session (the engine is process-global, so it can already be
+    // playing when a new React root mounts). The mount read alone is not
+    // sufficient in the normal launch order, which is why the same helper is
+    // also called on `onFileLoaded`.
+    reseedEdgeLevels('mount');
 
     // ── 2c. Seed the `mute` LEVEL too (same reasoning as `seekable`) ───
     //
