@@ -1,0 +1,36 @@
+Hardware back now closes the player instead of orphaning playback
+
+PlayerActivity.onBackPressed() finished the Activity natively via
+super.onBackPressed(). Because the finish happens in native code, the
+event never reaches React Native and the JS BackHandler in VideoPlayer.tsx
+cannot run. That left two back paths that disagreed:
+
+  - header chevron -> JS exitPlayer() -> stop engine, stop foreground
+    service, then finish;
+  - hardware key   -> super.onBackPressed() -> finish only.
+
+Because g_mpv is a process-global C++ handle (native_state.h) and the mpv
+engine outlives any Activity, the second path closed the window while the
+media carried on: audio still audible, MediaSession still reporting
+PLAYING, notification still posted, and no window left to stop it.
+
+Verified on device (emulator-5554, API 37) before this change: after the
+hardware key, `dumpsys media_session` still showed state=PLAYING and logcat
+contained zero occurrences of stopPlayback / nativeStop / handleStop across
+the whole capture, even with a JS BackHandler registered.
+
+onBackPressed() now performs the same teardown natively:
+PlaybackHost.handle() -> MPVLib.nativeStop, then
+MediaPlaybackService.ACTION_STOP via startService, then finish(). In PiP the
+behaviour is unchanged (finish only, returning to MainActivity).
+
+The JS BackHandler is deliberately kept rather than removed: predictive
+back (API 33+) never calls onBackPressed, so it is the only path that
+covers that case. The two paths now agree.
+
+Teardown is done natively rather than delegated to JS on purpose —
+delegating would make the player un-closable whenever the bundle is
+unhealthy, stranding a playing session with no window and no working
+dismiss.
+
+No JS API change, no .so rebuild.

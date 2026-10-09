@@ -1,0 +1,30 @@
+stopAudioPlayback -> stopPlayback: one teardown for both lanes
+
+The method was never audio-specific. Its body stops the
+process-global mpv engine and sends MediaPlaybackService
+ACTION_STOP - neither of which knows or cares which lane loaded
+the media.
+
+It became a lie the moment video needed it. exitPipAndFinish()
+only finishes PlayerActivity and tears the SurfaceView down; the
+engine outlives the Activity. So closing a video closed the window
+while the media carried on - audio still audible, notification
+still posted, engine still advancing - with no window left to stop
+it. Reported as "closing doesn't actually close".
+
+The name was part of the cause: an app reaching for a teardown
+found only an *audio* teardown, so wiring video to it looked wrong
+and was deferred.
+
+Also adds commands.stopPlayback() so consumers call one facade
+instead of reaching through getMpvPlayerModule(). stop() keeps its
+meaning - halt the engine, keep the session and notification
+available - because that is correct for "pause the media, keep the
+transport", and wrong for "close".
+
+Breaking: stopAudioPlayback is removed rather than aliased. An
+alias would leave a name that lies about the operation; a consumer
+reaching for it would get undefined and skip the teardown silently.
+The app is the only consumer and moves in the same change.
+
+Kotlin gate green. lib: tsc 0, jest 12 suites / 198 passed.
