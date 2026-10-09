@@ -1282,27 +1282,85 @@ class PlayerActivity : ReactActivity() {
   }
 
   /**
-   * Phase 10.7: back-button behaviour. V11's contract was: pressing
-   * back while in PiP finishes the activity (exits PiP, returns to
-   * the parent app) — back from fullscreen does default behaviour.
-   * V12 keeps the same contract.
+   * Back-button behaviour.
    *
-   * NOTE: `onBackPressed` is deprecated in API 33+; the platform
-   * wants apps to use `OnBackInvokedCallback` (predictive back
-   * gesture). For Phase 10 we keep the V11 approach and guard by
-   * `isInPictureInPictureMode`; a Phase 35 hardening pass will move
-   * to the new API for API 33+ targets.
+   * ## Why this does the teardown itself
+   *
+   * This used to be:
+   *
+   * ```kotlin
+   * if (isInPictureInPictureMode) { finish(); return }
+   * super.onBackPressed()
+   * ```
+   *
+   * which finishes the Activity **natively**. The event never reaches
+   * React Native, so a JS `BackHandler` cannot run — which left two back
+   * paths that disagreed:
+   *
+   *   - the header chevron -> JS `exitPlayer()` -> stop the engine,
+   *     release the foreground service, then finish;
+   *   - the hardware key -> `super.onBackPressed()` -> finish only.
+   *
+   * Since the mpv engine is a process-global C++ handle that outlives any
+   * Activity, the second path closed the window while the media carried
+   * on: audio still audible, notification still posted, no window left to
+   * stop it. Verified on device — after the hardware key the media
+   * session was still `PLAYING` with zero `stopPlayback` / `nativeStop`
+   * lines in logcat, even with a JS BackHandler registered.
+   *
+   * ## Why natively rather than delegating to JS
+   *
+   * Delegating would make the player un-closable whenever the bundle is
+   * unhealthy — a JS crash would strand a playing session with no window
+   * and no working dismiss. The Activity already owns the engine through
+   * `PlaybackHost`, so the teardown here is both shorter and strictly
+   * more robust.
+   *
+   * The JS `BackHandler` in `VideoPlayer.tsx` is KEPT: it covers whatever
+   * does reach React (notably predictive back, where `onBackPressed` is
+   * never called), and the two paths now agree.
    */
   override fun onBackPressed() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode) {
       // Finish exits PiP and returns the user to MainActivity (the
-      // parent of PlayerActivity in the task stack). This matches the
-      // V11 behaviour bit-for-bit.
+      // parent of PlayerActivity in the task stack).
       Log.i(TAG, "onBackPressed: in PiP, finishing PlayerActivity")
       finish()
       return
     }
-    super.onBackPressed()
+
+    // Not PiP: leaving means CLOSING. Stop the engine unconditionally —
+    // if the service is already gone its own stop callback is not around
+    // to do it, and leaving media running with no way to stop it is the
+    // worse of the two failures.
+    val ptr = PlaybackHost.handle()
+    if (ptr != 0L) {
+      try {
+        MPVLib.nativeStop(ptr)
+        Log.i(TAG, "onBackPressed: stopped mpv (ptr=$ptr)")
+      } catch (e: Throwable) {
+        Log.w(TAG, "onBackPressed: nativeStop threw ${e.message}")
+      }
+    } else {
+      Log.w(TAG, "onBackPressed: no engine handle; nothing to stop")
+    }
+
+    if (MediaPlaybackService.isRunning()) {
+      try {
+        // Plain startService: the service is already foreground, so there
+        // is no startForeground deadline to meet.
+        startService(
+          android.content.Intent(this, MediaPlaybackService::class.java).apply {
+            action = MediaPlaybackService.ACTION_STOP
+          },
+        )
+        Log.i(TAG, "onBackPressed: delivered ACTION_STOP to MediaPlaybackService")
+      } catch (e: Throwable) {
+        Log.e(TAG, "onBackPressed: could not deliver ACTION_STOP", e)
+      }
+    }
+
+    finish()
   }
 
   // ── PiP helpers (Phase 9) ──────────────────────────────────────────
