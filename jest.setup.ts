@@ -163,6 +163,16 @@ nativeModulesMock.default.MpvPlayerModule = {
   setScreenBrightness: fn(() => undefined),
   getScreenBrightness: fn(() => 1.0),
 
+  // V21 single-Activity surface control.
+  // Defaults report success so a component under test is not forced to
+  // gate its mini-player chrome on a surface it cannot create in jest.
+  // The NOOP-fallback test asserts the opposite contract where no native
+  // module exists at all.
+  setVideoBounds: fn(() => Promise.resolve(true)),
+  fillVideoBounds: fn(() => Promise.resolve(true)),
+  setSurfaceVisible: fn(() => Promise.resolve(true)),
+  isSurfaceMounted: fn(() => true),
+
   // Notification
   requestNotificationPermission: fn(() => Promise.resolve()),
   isNotificationActive: fn(() => false),

@@ -254,6 +254,52 @@ export interface Spec extends TurboModule {
    * honour. Synchronous: it reads a `@Volatile` flag the service owns.
    */
   isAudioPlaybackServiceRunning(): boolean;
+
+  /**
+   * Resize the video surface to an absolute rect inside its container, in
+   * device pixels.
+   *
+   * V21 moves the player into the consumer app's single Activity, where the
+   * same surface renders fullscreen and as the in-app mini player's live
+   * picture. This mutates the surface's layout bounds — it does NOT reparent
+   * or remount it, so the Surface is never destroyed and mpv never re-attaches.
+   *
+   * Resolves `false` rather than throwing when no surface is mounted, when the
+   * call arrives off the main thread, or when the extents are non-positive. A
+   * caller that gets `false` must not treat the video as presented: that is
+   * the whole reason this is a Promise instead of a fire-and-forget void.
+   */
+  setVideoBounds(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): Promise<boolean>;
+
+  /**
+   * Expand the video surface to fill its container. Resolves `false` if it
+   * did not take effect.
+   */
+  fillVideoBounds(): Promise<boolean>;
+
+  /**
+   * Show or hide the video surface.
+   *
+   * Hidden is the correct state for audio-only playback: mpv keeps running
+   * with no render target. Showing it re-binds the surface, so an
+   * audio → video handoff does not need the caller to know anything about
+   * Surface lifetimes.
+   */
+  setSurfaceVisible(visible: boolean): Promise<boolean>;
+
+  /**
+   * Whether a video surface is currently mounted and usable.
+   *
+   * Lets a control decide its own affordance instead of assuming a surface
+   * exists because the user happens to be on a video screen. Synchronous: it
+   * reads a `WeakReference`.
+   */
+  isSurfaceMounted(): boolean;
   // Returns null when no launch is pending or after the first read.
   getLaunchParams(): Promise<{
     uri: string;

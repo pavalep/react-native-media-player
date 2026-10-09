@@ -306,6 +306,33 @@ export interface PlayerCommands {
   getScreenBrightness(): number;
 
   /**
+   * V21 — place the video surface at an absolute rect (device pixels).
+   *
+   * Layout bounds only. Never reparents or remounts the view, so the Surface
+   * is not destroyed and mpv does not re-attach — which is what makes an
+   * in-app mini player possible without a black flash.
+   *
+   * Resolves `false` when nothing took effect. Callers must treat `false` as
+   * "the surface is not where I asked for it" rather than proceeding as if
+   * the video were on screen.
+   */
+  setVideoBounds(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): Promise<boolean>;
+  /** Expand the video surface to fill its container. Resolves `false` if it did not. */
+  fillVideoBounds(): Promise<boolean>;
+  /**
+   * Show or hide the video surface. Hidden is the correct state for
+   * audio-only playback — mpv keeps running with no render target.
+   */
+  setSurfaceVisible(visible: boolean): Promise<boolean>;
+  /** Whether a video surface is mounted and usable right now. */
+  isSurfaceMounted(): boolean;
+
+  /**
    * Toggle an mpv audio filter. Backed by `--af-add` / `--af-remove`.
    * Examples: `setAudioFilter('scaletempo2=max-speed=32.0', true)` enables
    * skip-silence's `scaletempo2` audio filter. Setting `enabled=false`
@@ -697,6 +724,23 @@ function buildCommands(): PlayerCommands {
     getScreenBrightness: () => {
       dlog('commands.getScreenBrightness()');
       return getMpvPlayerModule().getScreenBrightness();
+    },
+    // V21 single-Activity surface control
+    setVideoBounds: (x, y, width, height) => {
+      dlog('commands.setVideoBounds(', x, y, width, height, ')');
+      return getMpvPlayerModule().setVideoBounds(x, y, width, height);
+    },
+    fillVideoBounds: () => {
+      dlog('commands.fillVideoBounds()');
+      return getMpvPlayerModule().fillVideoBounds();
+    },
+    setSurfaceVisible: (visible) => {
+      dlog('commands.setSurfaceVisible(', visible, ')');
+      return getMpvPlayerModule().setSurfaceVisible(visible);
+    },
+    isSurfaceMounted: () => {
+      dlog('commands.isSurfaceMounted()');
+      return getMpvPlayerModule().isSurfaceMounted();
     },
     setAudioFilter: (filter: string, enabled: boolean) => {
       dlog('commands.setAudioFilter(', filter, ',', enabled, ')');

@@ -417,6 +417,32 @@ export interface MpvPlayerModuleBridge {
   stopPlayback(): void;
   /** Whether the foreground service currently holds a live session. */
   isAudioPlaybackServiceRunning(): boolean;
+
+  /**
+   * Resize the video surface to an absolute rect inside its container.
+   *
+   * V21 places the player in the consumer app's single Activity, where the
+   * one surface renders both fullscreen and the in-app mini player's live
+   * picture. This changes layout bounds only — it never reparents or
+   * remounts the view, so the Surface is not destroyed and mpv does not
+   * re-attach.
+   *
+   * Resolves `false` when there is no surface, when the call arrives off the
+   * main thread, or when the extents are non-positive. A caller that gets
+   * `false` must not present the video as shown.
+   */
+  setVideoBounds(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): Promise<boolean>;
+  /** Expand the video surface to fill its container. Resolves `false` if it did not. */
+  fillVideoBounds(): Promise<boolean>;
+  /** Show or hide the video surface. Hidden is correct for audio-only playback. */
+  setSurfaceVisible(visible: boolean): Promise<boolean>;
+  /** Whether a video surface is currently mounted and usable. */
+  isSurfaceMounted(): boolean;
   /**
    * One-shot accessor for the launch params the most recent
    * `openPlayer` call handed to `PlayerActivity`. Returns `null`
@@ -688,6 +714,16 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
   },
   stopPlayback: () => {},
   isAudioPlaybackServiceRunning: () => false,
+  // V21: no surface exists in the fallback environment (jest / Storybook /
+  // web), so every surface mutator must report that it did nothing.
+  // Reporting `false` rather than resolving `true` is deliberate: a caller
+  // that treats a resolved `true` as "the video is on screen" would render
+  // chrome over a surface that was never mounted — a control that looks
+  // live and is not, which is the failure mode this module exists to avoid.
+  setVideoBounds: () => Promise.resolve(false),
+  fillVideoBounds: () => Promise.resolve(false),
+  setSurfaceVisible: () => Promise.resolve(false),
+  isSurfaceMounted: () => false,
   // V22.0.0 / 1.5.8 (D-035 fix #6): now matches the real
   // Promise<LaunchParams | null> runtime return type.
   getLaunchParams: () => Promise.resolve(null),

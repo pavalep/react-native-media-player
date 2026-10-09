@@ -995,3 +995,112 @@ describe('commands.loadFile applies the launch title (v1.9.3)', () => {
     );
   });
 });
+
+// ── V21: single-Activity surface control ────────────────────────────────────
+
+describe('V21 surface control (setVideoBounds family)', () => {
+  beforeEach(() => {
+    clearBridgeMocks();
+  });
+
+  it('exposes the surface commands on the command surface', async () => {
+    const { result } = await renderHook(() => usePlayer());
+    const c = result.current.commands;
+    expect(typeof c.setVideoBounds).toBe('function');
+    expect(typeof c.fillVideoBounds).toBe('function');
+    expect(typeof c.setSurfaceVisible).toBe('function');
+    expect(typeof c.isSurfaceMounted).toBe('function');
+  });
+
+  it('forwards the rect verbatim to the bridge', async () => {
+    // The whole design rests on these exact numbers reaching native: the
+    // surface is placed by mutating its layout bounds, so a rounded,
+    // clamped, or reordered argument would put the picture in the wrong
+    // rect with no error anywhere.
+    const setVideoBounds = NativeModules.MpvPlayerModule
+      .setVideoBounds as jest.Mock;
+    setVideoBounds.mockResolvedValue(true);
+
+    const { result } = await renderHook(() => usePlayer());
+    await act(async () => {
+      await result.current.commands.setVideoBounds(12, 34, 56, 78);
+    });
+
+    expect(setVideoBounds).toHaveBeenCalledWith(12, 34, 56, 78);
+  });
+
+  it('propagates a false result so callers can refuse to present video', async () => {
+    // This is the reason these return a Promise<boolean> instead of
+    // fire-and-forget: `false` means "there was no surface to move".
+    // A caller that cannot see that would render chrome over a video
+    // that was never shown - a control that looks live and is not.
+    const setVideoBounds = NativeModules.MpvPlayerModule
+      .setVideoBounds as jest.Mock;
+    setVideoBounds.mockResolvedValue(false);
+
+    const { result } = await renderHook(() => usePlayer());
+    let applied: boolean | undefined;
+    await act(async () => {
+      applied = await result.current.commands.setVideoBounds(0, 0, 10, 10);
+    });
+
+    expect(applied).toBe(false);
+  });
+
+  it('reports isSurfaceMounted from the bridge rather than assuming true', async () => {
+    const isSurfaceMounted = NativeModules.MpvPlayerModule
+      .isSurfaceMounted as jest.Mock;
+    isSurfaceMounted.mockReturnValue(false);
+
+    const { result } = await renderHook(() => usePlayer());
+    expect(result.current.commands.isSurfaceMounted()).toBe(false);
+
+    isSurfaceMounted.mockReturnValue(true);
+    expect(result.current.commands.isSurfaceMounted()).toBe(true);
+  });
+
+  it('forwards the visibility flag, including the hide direction', async () => {
+    const setSurfaceVisible = NativeModules.MpvPlayerModule
+      .setSurfaceVisible as jest.Mock;
+    setSurfaceVisible.mockResolvedValue(true);
+
+    const { result } = await renderHook(() => usePlayer());
+    await act(async () => {
+      await result.current.commands.setSurfaceVisible(false);
+    });
+    expect(setSurfaceVisible).toHaveBeenCalledWith(false);
+
+    setSurfaceVisible.mockClear();
+    await act(async () => {
+      await result.current.commands.setSurfaceVisible(true);
+    });
+    expect(setSurfaceVisible).toHaveBeenCalledWith(true);
+  });
+});
+
+describe('NOOP fallback honesty (V21)', () => {
+  const original = NativeModules.MpvPlayerModule;
+
+  afterEach(() => {
+    NativeModules.MpvPlayerModule = original;
+  });
+
+  it('reports that no surface exists instead of claiming success', async () => {
+    // With no native module present, `getMpvPlayerModule()` hands back the
+    // NOOP bridge. Every surface mutator must report failure there.
+    //
+    // If any of these returned success, a consumer would light up
+    // mini-player chrome over a surface that was never mounted: a control
+    // that looks live and is not, which is exactly the class of bug this
+    // module's fallback exists to prevent.
+    (NativeModules as { MpvPlayerModule?: unknown }).MpvPlayerModule =
+      undefined;
+
+    const bridge = BridgeModule.getMpvPlayerModule();
+
+    expect(bridge.isSurfaceMounted()).toBe(false);
+    await expect(bridge.fillVideoBounds()).resolves.toBe(false);
+    await expect(bridge.setSurfaceVisible(true)).resolves.toBe(false);
+    await expect(bridge.setVideoBounds(0, 0, 10, 10)).resolves.toBe(false);
+  });
+});

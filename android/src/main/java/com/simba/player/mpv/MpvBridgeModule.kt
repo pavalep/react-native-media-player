@@ -15,6 +15,7 @@ import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.fbreact.specs.NativeMpvPlayerSpec
@@ -2120,6 +2121,67 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     @Override
     override fun isAudioPlaybackServiceRunning(): Boolean =
         com.simba.player.MediaPlaybackService.isRunning()
+
+    // ── V21: single-Activity surface control ────────────────────────────
+    //
+    // These take a Promise rather than being `isBlockingSynchronousMethod`
+    // because view mutation is main-thread-only while a blocking sync method
+    // runs on the module queue. The Promise carries the result back so JS can
+    // distinguish "the surface moved" from "there was no surface to move",
+    // and disable a control rather than render one that quietly does nothing.
+
+    /**
+     * Resize the video surface to an absolute rect inside its container.
+     *
+     * Resolves `false` — never throws — when no surface is mounted, the call
+     * arrives off the main thread, or the extents are non-positive. A caller
+     * that gets `false` must not treat the video as presented.
+     */
+    @ReactMethod
+    override fun setVideoBounds(
+        x: Double,
+        y: Double,
+        width: Double,
+        height: Double,
+        promise: Promise,
+    ) {
+        UiThreadUtil.runOnUiThread {
+            promise.resolve(
+                PlayerSurface.setBounds(x.toInt(), y.toInt(), width.toInt(), height.toInt()),
+            )
+        }
+    }
+
+    /** Expand the video surface to fill its container. Resolves `false` if it did not. */
+    @ReactMethod
+    override fun fillVideoBounds(promise: Promise) {
+        UiThreadUtil.runOnUiThread {
+            promise.resolve(PlayerSurface.fillBounds())
+        }
+    }
+
+    /**
+     * Show or hide the video surface.
+     *
+     * Hiding is the correct state for audio-only playback: mpv keeps running
+     * with no render target, which is exactly what an audio session needs.
+     */
+    @ReactMethod
+    override fun setSurfaceVisible(visible: Boolean, promise: Promise) {
+        UiThreadUtil.runOnUiThread {
+            promise.resolve(PlayerSurface.setVisible(visible))
+        }
+    }
+
+    /**
+     * Whether a video surface is currently mounted and usable.
+     *
+     * Lets a control decide its own affordance instead of assuming a surface
+     * exists because the user is on a video screen.
+     */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    @Override
+    override fun isSurfaceMounted(): Boolean = PlayerSurface.current() != null
 
     /**
      * `ReadableMap` reads that tolerate absent keys.

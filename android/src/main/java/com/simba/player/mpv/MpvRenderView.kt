@@ -2,9 +2,11 @@ package com.simba.player.mpv
 
 import android.content.Context
 import android.util.Log
+import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import android.view.ViewGroup
+import android.view.View
+import android.widget.FrameLayout
 
 /**
  * SurfaceView-backed video renderer that hands an Android Surface to libmpv
@@ -71,9 +73,9 @@ class MpvRenderView(context: Context) : SurfaceView(context),
 
     init {
         holder.addCallback(this)
-        layoutParams = ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
+        layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
         )
         // Default z-order (BELOW the activity window) is intentional and
         // required for PiP. Do NOT call setZOrderOnTop or setZOrderMediaOverlay.
@@ -81,7 +83,65 @@ class MpvRenderView(context: Context) : SurfaceView(context),
         isClickable = false
     }
 
-    // ── SurfaceHolder.Callback ─────────────────────────────────────────────
+    // ── Bounds (V21) ──────────────────────────────────────────────────────
+    //
+    // V21 moves the player into the consumer app's single Activity, where
+    // the same MpvRenderView must render both fullscreen and as the
+    // in-app mini player's live picture.
+    //
+    // These mutate `LayoutParams` and nothing else. That distinction is
+    // the whole point: `removeView`/`addView` would destroy and recreate
+    // the Surface, forcing mpv to re-attach and flashing black, whereas a
+    // LayoutParams change re-lays-out the existing SurfaceView in place.
+    // Because the surface composites BELOW the window, shrinking it to a
+    // small rect leaves the React tree drawing normally everywhere else.
+    //
+    // This is the same mechanism the audio mini bar already relies on.
+
+    /**
+     * Place the surface at an absolute rect, in pixels, inside the host
+     * container. Used by the in-app mini player.
+     *
+     * Refuses non-positive extents rather than clamping: a zero-sized
+     * SurfaceView is an invalid target for libmpv, and silently substituting
+     * a default here would hide a real layout bug behind a plausible-looking
+     * black frame.
+     */
+    fun setVideoBounds(x: Int, y: Int, width: Int, height: Int) {
+        if (width <= 0 || height <= 0) {
+            Log.w(TAG, "setVideoBounds refused ${width}x$height at ($x,$y): extents must be > 0")
+            return
+        }
+        val lp = frameParams()
+        lp.width = width
+        lp.height = height
+        lp.gravity = Gravity.TOP or Gravity.START
+        lp.leftMargin = x
+        lp.topMargin = y
+        layoutParams = lp
+        Log.i(TAG, "setVideoBounds -> ${width}x$height at ($x,$y)")
+    }
+
+    /** Expand the surface to fill the host container. */
+    fun fillBounds() {
+        val lp = frameParams()
+        lp.width = FrameLayout.LayoutParams.MATCH_PARENT
+        lp.height = FrameLayout.LayoutParams.MATCH_PARENT
+        lp.gravity = Gravity.TOP or Gravity.START
+        lp.leftMargin = 0
+        lp.topMargin = 0
+        layoutParams = lp
+        Log.i(TAG, "fillBounds -> MATCH_PARENT")
+    }
+
+    private fun frameParams(): FrameLayout.LayoutParams =
+        (layoutParams as? FrameLayout.LayoutParams)
+            ?: FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            )
+
+    // ── Surface attachment ─────────────────────────────────────────────────
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         Log.d(TAG, "surfaceCreated")
@@ -100,7 +160,7 @@ class MpvRenderView(context: Context) : SurfaceView(context),
         detachSurfaceLocked()
     }
 
-    // ── Surface attachment ─────────────────────────────────────────────────
+    // ── Public API ─────────────────────────────────────────────────────────
 
     /**
      * Call when the native mpv handle is available.
@@ -110,34 +170,75 @@ class MpvRenderView(context: Context) : SurfaceView(context),
         // New handle — any previously attached surface must be rebound
         // (mpv's wid still points at the previous handle's surface).
         attachedSurface = null
-        if (holder.surface != null && holder.surface.isValid) {
-            attachSurfaceLocked(holder.surface)
-        }
+        ensureSurfaceAttached("setNativePtr")
+    }
+
+    /**
+     * Show or hide the surface.
+     *
+     * [View.GONE] for audio-only playback: mpv keeps running audio with no
+     * render target, which is the correct configuration.
+     *
+     * Flipping back to [View.VISIBLE] re-evaluates the surface binding, so a
+     * GONE → VISIBLE transition (audio mini player → video mini player) does
+     * not need the caller to know anything about Surface lifetimes.
+     */
+    fun setSurfaceVisible(visible: Boolean) {
+        val target = if (visible) View.VISIBLE else View.GONE
+        if (visibility == target) return
+        Log.i(TAG, "setSurfaceVisible(visible=$visible)")
+        visibility = target
+        if (visible) ensureSurfaceAttached("setSurfaceVisible")
+    }
+
+    /**
+     * Re-attempt the mpv ↔ Surface binding if it is not currently established.
+     *
+     * The binding has three independent preconditions — a live mpv handle, a
+     * valid Surface, and this view being attached to a window — and any of
+     * them can become true after any other. Hooking the two lifecycle
+     * callbacks that can flip them means callers never have to re-assert
+     * the binding by hand.
+     */
+    fun ensureSurfaceAttached(reason: String) {
+        if (attachedSurface != null) return
+        if (nativePtr == 0L) return
+        if (!isAttachedToWindow) return
+        val surface = holder.surface ?: return
+        if (!surface.isValid) return
+        Log.i(TAG, "ensureSurfaceAttached($reason): binding surface to mpv")
+        attachSurfaceLocked(surface)
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        ensureSurfaceAttached("onAttachedToWindow")
+    }
+
+    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+        super.onVisibilityChanged(changedView, visibility)
+        if (visibility == View.VISIBLE) ensureSurfaceAttached("onVisibilityChanged")
     }
 
     private fun attachSurfaceLocked(surface: android.view.Surface?) {
-        // Phase 33 defensive guards (added to satisfy Phase 33.5 unit
-        // test). The original code already guarded `nativePtr == 0L`
-        // and `!surface.isValid`, but a null `surface` would NPE on
-        // the `isValid` deref. In practice the public call sites
-        // (`setNativePtr` + `surfaceCreated`) already check for null,
-        // but a future refactor could forget — guard here too.
+        // Defensive guards. Each precondition can be false independently and
+        // legitimately — there is no error to report, only a binding that is
+        // not yet possible. `ensureSurfaceAttached` re-runs once the missing
+        // precondition becomes true.
         if (nativePtr == 0L) return
         if (surface == null) return
         if (!surface.isValid) return
-        // Phase 12.2.1: defensive guard for audio mode (View.GONE). When
-        // the view is set to GONE in PlayerActivity (Phase 12.1.1), it
-        // can still receive surfaceCreated (the holder is registered
-        // and the Surface IS created), but the view has not been
-        // attached to a window. Trying to drive an mpv render target
-        // that has no window is a no-op at best and a crash on some
-        // OEMs. Returning here is safe — when the view later becomes
-        // visible / window-attached (e.g. user expands from PiP into a
-        // full audio UI in a future phase), the holder will fire
-        // surfaceChanged and we'll re-evaluate via setNativePtr's
-        // re-attach path.
+        // A SurfaceView that is not attached to a window has no Surface
+        // Flinger layer to composite, so handing it to mpv produces a render
+        // target that can never be seen.
+        //
+        // Note this is NOT the same condition as `visibility == GONE`: a
+        // GONE view is still attached to its window. An earlier revision of
+        // this comment claimed they were equivalent and blamed audio mode,
+        // which is why audio→video had no reliable path back to a bound
+        // surface.
         if (!isAttachedToWindow) {
-            Log.d(TAG, "attachSurfaceLocked: view not attached to window, skipping (likely audio mode / GONE)")
+            Log.d(TAG, "attachSurfaceLocked: not attached to a window, deferring")
             return
         }
         if (attachedSurface === surface) return // same Surface → no-op
