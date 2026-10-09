@@ -242,10 +242,19 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             // Do NOT cycle the surface binding here. Cycling detaches →
             // re-attaches → triggers a mpv VO reinit → kills MediaCodec
             // (decoder falls back to software, ~1s render gap, PiP
-            // shows black). Instead, the SurfaceView with
-            // setZOrderMediaOverlay(true) and force-window=yes keeps the
-            // gpu video output rendering into the attached surface, and
-            // the PiP compositor samples that surface layer directly.
+            // shows black).
+            //
+            // The surface keeps rendering because it is an ordinary
+            // SurfaceView at DEFAULT z-order (below the window). An
+            // earlier version of this comment claimed the opposite —
+            // that "the SurfaceView with setZOrderMediaOverlay(true)
+            // and force-window=yes" keeps the GPU output alive and the
+            // PiP compositor samples that layer. Neither call is made
+            // anywhere: `MpvRenderView` explicitly forbids them, because
+            // a media-overlay surface is not composited into PiP by the
+            // platform. The comment outlived the implementation and made
+            // the next reader believe the z-order was doing work it
+            // never did.
             val params = Arguments.createMap().apply {
                 putBoolean("isInPip", isInPictureInPictureMode)
             }
@@ -662,10 +671,16 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                 "sensor"    -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
                 else        -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
+            // Read the previous value BEFORE the write. Reading it after
+            // would log the new value as "was", so every rotation would
+            // print as though nothing changed — which is exactly the
+            // symptom this log exists to diagnose, and it made the
+            // orientation lock look broken for the wrong reason.
+            val previous = activity.requestedOrientation
             activity.requestedOrientation = requested
             android.util.Log.d(
                 TAG,
-                "setOrientation('$mode') -> requestedOrientation=$requested (was ${activity.requestedOrientation})",
+                "setOrientation('$mode') -> requestedOrientation=$requested (was $previous)",
             )
         }
     }
@@ -1883,12 +1898,20 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         }
         // 3.5: build the intent. Title falls back to the URI when blank
         // so the notification / lock-screen widget always has a display
-        // string. We use FLAG_ACTIVITY_NEW_TASK because we are launching
-        // from a non-Activity context (the bridge runs in the React
-        // context's main looper; the startActivity call is technically
-        // from the activity, but the flag is harmless and makes the
-        // intent correct if the activity is ever swapped for a
-        // background-launched one).
+        // string.
+        //
+        // No intent flags are set, deliberately. An earlier version of this
+        // comment said "we use FLAG_ACTIVITY_NEW_TASK because we are
+        // launching from a non-Activity context ... the flag is harmless".
+        // Both halves were wrong: we launch from `activity`, and the flag is
+        // NOT harmless — it starts the target in a new task, which breaks
+        // the `singleTask` reuse that keeps a second `openPlayer` from
+        // stacking a duplicate player window, and leaves the video in a task
+        // the user's back gesture does not return from.
+        //
+        // If this ever does need to launch without an Activity, the flag
+        // belongs there — and the task-affinity consequences need dealing
+        // with, not waving through as "harmless".
         val resolvedTitle = title.takeIf { it.isNotBlank() } ?: uri
         val intent = android.content.Intent(
             activity,
