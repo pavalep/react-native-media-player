@@ -25,6 +25,7 @@ import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnable
 import com.facebook.react.defaults.DefaultReactActivityDelegate
 import com.simba.player.mpv.MPVLib
 import com.simba.player.mpv.MpvRenderView
+import com.simba.player.mpv.PlayerSurface
 
 /**
  * Dedicated ReactActivity that hosts the SIMBA video/audio player.
@@ -454,48 +455,39 @@ class PlayerActivity : ReactActivity() {
       Log.i(TAG, "Audio mode entered: MpvRenderView will be hidden in Phase 12; mpv engine will run without video output")
     }
 
-    // ── Phase 6: Mount MpvRenderView at content root index 0 ────────
-    // Step 6.1.1 + 6.1.2: get root via android.R.id.content (the
-    // standard FrameLayout that AppCompat installs as the activity's
-    // content view). super.onCreate has populated it; ReactRootView is
-    // already added at index 1 by super, so we add the SurfaceView at
-    // index 0 to sit BENEATH the React tree (PiP-friendly layering).
-    val rootView = findViewById<ViewGroup>(android.R.id.content)
-    if (rootView !is FrameLayout) {
-      Log.w(
-        TAG,
-        "content root is not FrameLayout (got ${rootView?.javaClass?.simpleName}); MpvRenderView may not layer correctly",
-      )
-    }
-    // Step 6.2: create MpvRenderView (constructor widened to Context
-    // in Phase 6 — see MpvRenderView.kt docblock).
-    // Step 6.3: layout params. We use FrameLayout.LayoutParams so we
-    // can later set gravity / insets via additional Phase 8 work;
-    // MATCH_PARENT x MATCH_PARENT keeps the surface full-bleed.
-    val renderView = MpvRenderView(this).apply {
-      layoutParams = FrameLayout.LayoutParams(
-        FrameLayout.LayoutParams.MATCH_PARENT,
-        FrameLayout.LayoutParams.MATCH_PARENT,
-      )
-    }
-    // Step 6.4: add at index 0 so it sits below the ReactRootView that
-    // super.onCreate installed. The React UI will float on top with a
-    // transparent background (Phase 8) so the surface shows through.
-    rootView.addView(renderView, 0)
-    mpvRenderView = renderView
-    // Step 6.5: log.
-    Log.i(TAG, "MpvRenderView mounted at content root, index=0")
-    // Phase 12.1.1: for audio files, hide the MpvRenderView. The
-    // SurfaceView is still created and the mpv engine still runs (so
-    // audio plays) — the view is just visually absent. View.GONE
-    // collapses the layout slot AND skips drawing; we use GONE (not
-    // INVISIBLE) because INVISIBLE would still take layout space
-    // which would push the future audio UI (Phase 13) below the
-    // fold on first render. Phase 12.2's MpvRenderView guard makes
-    // the surface attach path robust to this state.
-    if (launchType == TYPE_AUDIO) {
-      renderView.visibility = android.view.View.GONE
-      Log.i(TAG, "MpvRenderView hidden for audio mode (visibility=GONE)")
+    // ── Mount the render surface (V21) ─────────────────────────────────
+    // This block used to create the MpvRenderView inline, size it
+    // MATCH_PARENT, add it at index 0, and hide it only for audio. That
+    // duplicated the one piece of knowledge the bridge also needs — "is
+    // there a surface, and where is it" — inside an Activity, while
+    // `PlayerSurface` (the registry the bridge reads) was never populated by
+    // anyone. `isSurfaceMounted()` therefore answered `false` and all four
+    // surface mutators refused, on a fully working video path.
+    //
+    // Mounting is now the library's job, through `PlayerSurface.mount`,
+    // which is the single implementation of "create it, put it under the
+    // React root, register it". The Activity supplies an Activity and
+    // nothing else; `MainActivity` will do exactly the same after the
+    // collapse.
+    //
+    // mount() deliberately leaves the view GONE at 0x0, so showing video is
+    // always two explicit acts — give it size, then show it — and no host can
+    // end up with an accidental full-bleed surface over its own UI.
+    val renderView = PlayerSurface.mount(this)
+    if (renderView == null) {
+      // mount() has already logged the concrete reason. Carrying on with a
+      // null view is safe (onEngineAvailable returns early, onDestroy is
+      // null-safe) and it means audio still plays if only video cannot.
+      Log.e(TAG, "no render surface mounted; this window cannot present video")
+    } else {
+      mpvRenderView = renderView
+      if (launchType != TYPE_AUDIO) {
+        PlayerSurface.fillBounds()
+        PlayerSurface.setVisible(true)
+        Log.i(TAG, "render surface sized to fill and shown for video")
+      } else {
+        Log.i(TAG, "render surface left hidden for audio mode")
+      }
     }
 
     // ── Wire the libmpv handle into MpvRenderView (V20 Phase A) ─────────
@@ -1570,16 +1562,15 @@ class PlayerActivity : ReactActivity() {
     // and zero the native pointer so any late native callback becomes
     // a no-op).
     mpvRenderView?.cleanup()
-    // Step 6.6.2: remove from the content root. Guard against the
-    // view having already been detached by the framework (defensive
-    // but cheap; indexOfChildById-style call would be heavier).
-    mpvRenderView?.let { view ->
-      val parent = view.parent as? ViewGroup
-      parent?.removeView(view)
-    }
+    // Step 6.6.2: unmount through the library, which both removes the view
+    // from the content root and withdraws it from the registry in one
+    // identity-checked step. Removing it here without withdrawing it would
+    // leave `PlayerSurface` publishing a detached view, and the surface
+    // mutators would keep reporting success against a surface with no window.
+    mpvRenderView?.let { view -> PlayerSurface.unmount(view) }
     // Step 6.6.3: null the reference.
     mpvRenderView = null
-    Log.i(TAG, "onDestroy: MpvRenderView cleaned up and removed")
+    Log.i(TAG, "onDestroy: MpvRenderView cleaned up and unmounted")
     // V22.0.0 / 1.5.10 (D-034): clear the player-host flag. We set
     // the flag in onCreate before RN mounts; we clear it here so
     // the next time JS asks `isCurrentActivityPlayer()` it sees
