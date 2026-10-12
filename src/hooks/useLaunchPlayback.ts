@@ -52,7 +52,17 @@ export function useLaunchPlayback(
   const startPositionSec = launchParams?.startPositionMs
     ? launchParams.startPositionMs / 1000
     : 0;
-  const launchKey = uri != null ? `${uri}|${startPositionSec}` : null;
+  // A caller-supplied `requestId` ADDS launch identity to the key; it does
+  // not replace the uri|position part. Without it the key was `uri|position`,
+  // which is not unique across launches: that was only ever sound because
+  // each launch used to start a fresh Activity (fresh React root → fresh
+  // mount → always fires). A consumer that loads into an already-open window
+  // keeps this hook mounted, so re-launching the same file at the same
+  // position would produce the same key, skip the load, and the user would
+  // press play and see nothing.
+  const requestId = launchParams?.requestId;
+  const launchKey =
+    uri == null ? null : `${requestId ?? ''}|${uri}|${startPositionSec}`;
 
   useEffect(() => {
     if (launchKey == null || uri == null) {

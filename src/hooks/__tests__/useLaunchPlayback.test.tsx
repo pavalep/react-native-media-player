@@ -95,6 +95,41 @@ describe('useLaunchPlayback', () => {
     );
   });
 
+  // ── requestId: re-launching the SAME media must load again ───────────
+  //
+  // `uri` + `startPositionMs` is not a unique identity for a launch. It was
+  // sound only because every launch used to start a fresh `PlayerActivity` —
+  // a new React root, so this hook mounted fresh and always fired.
+  //
+  // The moment playback is loaded into an already-open window, this hook
+  // stays mounted across launches and that guarantee disappears. The
+  // everyday action that breaks is "back out of a film, tap it again": same
+  // URI, resume policy hands back the same position, same key, no load, and
+  // the user presses play and nothing happens.
+
+  it('loads again for the SAME uri and position when requestId differs', async () => {
+    const {rerender} = await render(
+      <Harness params={{...PARAMS, requestId: 'session-1'}} />,
+    );
+    await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
+
+    await rerender(<Harness params={{...PARAMS, requestId: 'session-2'}} />);
+    await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(2));
+  });
+
+  it('does NOT re-fire when requestId is present but unchanged', async () => {
+    // The 1 Hz position poll still re-renders consumers constantly; a new
+    // object literal for the same launch must not reload.
+    const {rerender} = await render(
+      <Harness params={{...PARAMS, requestId: 'session-1'}} />,
+    );
+    await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
+
+    await rerender(<Harness params={{...PARAMS, requestId: 'session-1'}} />);
+    await rerender(<Harness params={{...PARAMS, requestId: 'session-1'}} />);
+    await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
+  });
+
   it('converts startPositionMs from milliseconds to seconds', async () => {
     render(<Harness params={{...PARAMS, startPositionMs: 90_000}} />);
     await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));

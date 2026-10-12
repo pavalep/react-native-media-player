@@ -86,6 +86,23 @@ export interface LaunchParams {
   readonly title: string;
   readonly type: 'video' | 'audio';
   readonly startPositionMs: number;
+  /**
+   * Monotonic identity of one launch request. Optional.
+   *
+   * `uri` + `startPositionMs` is not a unique identity for a launch, and
+   * `useLaunchPlayback` keys its load effect on exactly that pair. That was
+   * sound while every launch started a fresh `PlayerActivity` — a new React
+   * root, so the hook mounted fresh and always fired.
+   *
+   * It stops being sound the moment playback is loaded into an already-open
+   * window: the hook stays mounted across launches, so backing out of a film
+   * and tapping it again produces the same key and no second load happens.
+   * The user presses play and nothing occurs.
+   *
+   * A caller that loads in-window should therefore supply this. It matches
+   * `loadFileWithRequestId`, which already exists for the same reason.
+   */
+  readonly requestId?: string;
 }
 
 /** All 22 events emitted by the Kotlin bridge. */
