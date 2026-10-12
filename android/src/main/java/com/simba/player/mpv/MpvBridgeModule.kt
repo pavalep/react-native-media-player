@@ -2391,11 +2391,27 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                     "(no file, or audio-only); PiP window will use 16:9",
             )
         }
+        // Source rect hint: where the video actually is right now, in window
+        // coordinates. This is what makes PiP entry animate the real frame into
+        // the window instead of growing out of a black rectangle.
+        //
+        // The hint's shape has to match the aspect ratio above, or the system
+        // scales the frame non-proportionally to fit and the video visibly
+        // arrives stretched. Both come from the same place -- the surface is
+        // sized with the video's own shape by `setVideoBounds` / `fillBounds`,
+        // and `boundsInWindow()` reports that same surface -- so they agree by
+        // construction instead of being kept in sync by hand.
+        //
+        // Null when the surface is hidden or zero-sized: no video rect to
+        // animate from. That degrades to the no-hint behaviour, which costs a
+        // black transition but never a distorted one.
+        val sourceRect = PlayerSurface.boundsInWindow()
         try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 val pipParams = com.simba.player.PipManager.buildPipParams(
                     context = activity,
                     aspect = aspect ?: (16f / 9f),
+                    sourceRectHint = sourceRect,
                     chapterTitle = title,
                     progressPercentage = pct,
                 )
