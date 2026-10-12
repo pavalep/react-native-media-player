@@ -123,6 +123,15 @@ object PipManager {
             .setAspectRatio(aspectRational)
             .setActions(actions)
 
+        // Seamless resize (Android 12+). Without it the PiP window animates
+        // between two discrete sizes on rotation / return, which reads as a
+        // stutter rather than a resize. This is a rendering-quality flag only:
+        // it changes how the transition is drawn, never whether PiP is
+        // entered, so it carries no behavioural risk.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setSeamlessResizeEnabled(true)
+        }
+
         // Source rect hint for smooth entry animation (Android 12+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && sourceRectHint != null) {
             builder.setSourceRectHint(sourceRectHint)

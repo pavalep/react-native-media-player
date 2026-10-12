@@ -2373,10 +2373,29 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         // rather than blank.
         val title = chapterTitle?.takeIf { it.isNotBlank() } ?: "Simba Player"
         val pct = progressPct?.takeIf { it.isNotBlank() } ?: "0 %"
+        // The PiP window's shape is the loaded video's shape. This used to
+        // take the `16f / 9f` default from buildPipParams, so every PiP
+        // window was 16:9 no matter what was playing -- a 4:3 archive or a
+        // 2.35:1 scope film was letterboxed into the wrong window, and the
+        // mismatch was baked in at entry so the system animated to a shape
+        // that did not match the picture inside it.
+        //
+        // Read from the same `width` / `height` properties `getVideoParams`
+        // already reads, rather than adding a second, parallel way to ask
+        // mpv about dimensions.
+        val aspect = currentVideoAspect()
+        if (aspect == null) {
+            Log.w(
+                TAG,
+                "[PlaybackTrace][Bridge][enterPip] no video dimensions loaded " +
+                    "(no file, or audio-only); PiP window will use 16:9",
+            )
+        }
         try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 val pipParams = com.simba.player.PipManager.buildPipParams(
                     context = activity,
+                    aspect = aspect ?: (16f / 9f),
                     chapterTitle = title,
                     progressPercentage = pct,
                 )
@@ -2400,6 +2419,29 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * Exit PiP mode by bringing the activity to the front.
      * Called from JS when user taps "Expand" in PiP RemoteActions.
      */
+    /**
+     * Display aspect (width / height) of the loaded video, or `null` when it
+     * is not known.
+     *
+     * Reads the same `width` / `height` properties as [getVideoParams]. Null
+     * is the honest answer for "no file loaded" and for "audio only" -- both
+     * are real, expected states rather than failures -- and callers decide
+     * what a shape-less PiP window means for them.
+     */
+    private fun currentVideoAspect(): Float? {
+        val ptr = nativePtr
+        if (ptr == 0L) return null
+        return try {
+            val w = MPVLib.nativeGetProperty(ptr, "width").trim().trim('"').toDoubleOrNull()
+            val h = MPVLib.nativeGetProperty(ptr, "height").trim().trim('"').toDoubleOrNull()
+            if (w != null && h != null && w > 0.0 && h > 0.0) (w / h).toFloat() else null
+        } catch (e: Exception) {
+            // The native lease guard refuses reads against a destroyed engine.
+            Log.w(TAG, "[PlaybackTrace][Bridge][currentVideoAspect] ${e.message}")
+            null
+        }
+    }
+
     @ReactMethod
     @Override
     override fun exitPip() {
