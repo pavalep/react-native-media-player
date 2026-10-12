@@ -436,13 +436,21 @@ export interface MpvPlayerModuleBridge {
   isAudioPlaybackServiceRunning(): boolean;
 
   /**
-   * Resize the video surface to an absolute rect inside its container.
+   * Resize the video surface to an absolute rect, in **window** pixels.
    *
    * V21 places the player in the consumer app's single Activity, where the
    * one surface renders both fullscreen and the in-app mini player's live
    * picture. This changes layout bounds only — it never reparents or
    * remounts the view, so the Surface is not destroyed and mpv does not
    * re-attach.
+   *
+   * The coordinates are window-relative so a caller can pass straight
+   * through what React Native's `measureInWindow` returned, with no
+   * coordinate-system translation in the middle. Converting to
+   * content-relative margins is the native side's job: it is the only side
+   * that knows the window inset, and it is zero under edge-to-edge and
+   * non-zero otherwise, so a translation done in JS would be right exactly
+   * once and silently wrong after any change to the window setup.
    *
    * Resolves `false` when there is no surface, when the call arrives off the
    * main thread, or when the extents are non-positive. A caller that gets

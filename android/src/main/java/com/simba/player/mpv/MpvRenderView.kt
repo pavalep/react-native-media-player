@@ -6,6 +6,7 @@ import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
 
 /**
@@ -99,8 +100,21 @@ class MpvRenderView(context: Context) : SurfaceView(context),
     // This is the same mechanism the audio mini bar already relies on.
 
     /**
-     * Place the surface at an absolute rect, in pixels, inside the host
-     * container. Used by the in-app mini player.
+     * Place the surface at an absolute rect, in **window** pixels, inside the
+     * host window. Used by the in-app mini player.
+     *
+     * The coordinates are window-relative on purpose. The only thing that
+     * knows a view's window rect is the platform, and RN's
+     * `measureInWindow` is the JS-side equivalent of the same space — so
+     * accepting window pixels makes "measure a view, hand the result over"
+     * a straight pass-through with no coordinate-system translation in the
+     * middle. The alternative (content-relative margins) looks simpler but
+     * silently disagrees with JS by the window inset, which is zero under
+     * edge-to-edge and non-zero the moment that is not — a video that lands
+     * offset inside its dock, with nothing in the logs.
+     *
+     * The conversion to content-relative margins happens here, where the
+     * container's own window offset is available and exact.
      *
      * Refuses non-positive extents rather than clamping: a zero-sized
      * SurfaceView is an invalid target for libmpv, and silently substituting
@@ -112,14 +126,27 @@ class MpvRenderView(context: Context) : SurfaceView(context),
             Log.w(TAG, "setVideoBounds refused ${width}x$height at ($x,$y): extents must be > 0")
             return
         }
+        val parent = parent as? ViewGroup
+        if (parent == null) {
+            Log.w(TAG, "setVideoBounds refused: the surface has no container to position within")
+            return
+        }
+        // Where the container itself starts in window coordinates. Subtracting
+        // it turns the caller's window rect into the margin the container
+        // expects.
+        val containerOffset = IntArray(2)
+        parent.getLocationInWindow(containerOffset)
+        val left = x - containerOffset[0]
+        val top = y - containerOffset[1]
+
         val lp = frameParams()
         lp.width = width
         lp.height = height
         lp.gravity = Gravity.TOP or Gravity.START
-        lp.leftMargin = x
-        lp.topMargin = y
+        lp.leftMargin = left
+        lp.topMargin = top
         layoutParams = lp
-        Log.i(TAG, "setVideoBounds -> ${width}x$height at ($x,$y)")
+        Log.i(TAG, "setVideoBounds -> ${width}x$height at window($x,$y) = margin($left,$top)")
     }
 
     /** Expand the surface to fill the host container. */
