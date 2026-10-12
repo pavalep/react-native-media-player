@@ -336,7 +336,21 @@ export interface Spec extends TurboModule {
   setConfig(configJson: string): Promise<number>;
 
   // ── Picture-in-Picture ─────────────────────────────────────────────────
-  enterPip(chapterTitle: string, progressPct: string): void;
+  // Both params are OPTIONAL, and this spec is the one that matters.
+  //
+  // TurboModule codegen reads *this* file, not the `MpvPlayerModule`
+  // facade — so a facade that declares them optional is not enough. This
+  // signature said `string` (required) while the Kotlin impl says
+  // `String?` and `commands.enterPip()` (src/types/player.ts) calls it
+  // with zero arguments. Codegen therefore advertised an arity the JS
+  // side never uses and the native side never required, and the Kotlin
+  // fix that made them nullable could not take effect through a spec
+  // still promising two required arguments.
+  //
+  // Two declarations of one method, disagreeing, is the same class of
+  // defect as the MediaKind/MediaLane confusion: the real bug is that
+  // there are two sources of truth, not that either value was wrong.
+  enterPip(chapterTitle?: string, progressPct?: string): void;
   exitPip(): void;
   exitPipAndFinish(): void;
 
