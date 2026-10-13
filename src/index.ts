@@ -76,7 +76,6 @@ export {
 } from './hooks/useOpenWithResume';
 
 export {SimbaPlayer, type SimbaPlayerProps, type ResumePolicy} from './hooks/SimbaPlayer';
-export {SimbaPlayerRoot, type SimbaPlayerRootProps} from './hooks/SimbaPlayerRoot';
 export {useOpenFromUrl} from './hooks/useOpenFromUrl';
 export {
   useOpenPlaylist,
@@ -99,7 +98,6 @@ export {
   useQueueSelectedIndices,
   type PlayerQueueSelectionStore,
 } from './hooks/useQueueSelection';
-export {useLaunchParams} from './hooks/useLaunchParams';
 // v1.10.0 — the "frame at the position you left off" thumbnail. The
 // first genuinely PUBLIC frame API: `screenshot` / `captureThumbnail`
 // live in the bridge but were never exported here, so a consumer had
@@ -112,16 +110,12 @@ export {
   DEFAULT_FRAME_QUALITY,
   type CaptureFrameOptions,
 } from './hooks/useResumeThumbnail';
-// 1.8.0 — the load half of `<PlayerRoot>`, exposed so a consumer using
-// `<SimbaPlayerRoot headless>` (which delegates the player UI) can call
-// it directly for a payload the module did not originate. See
-// `useLaunchPlayback`'s docstring for the once-per-payload contract.
+// V21 F5 — the load half of `<PlayerRoot>`, and the in-window launch
+// primitive. Video no longer starts an Activity, so a consumer that
+// wants to play media into its own already-mounted surface drives it
+// from here: pass the payload, and `useLaunchPlayback` loads it exactly
+// once. See its docstring for the once-per-payload contract.
 export {useLaunchPlayback} from './hooks/useLaunchPlayback';
-// V19 W6.0 — synchronous, idempotent "is this tree hosted by
-// PlayerActivity?" predicate for consumers that render their own
-// chrome over the native video surface. See the hook's docstring for
-// why `useLaunchParams` is the wrong tool for that question.
-export {useIsPlayerActivity} from './hooks/useIsPlayerActivity';
 
 export {
   getMpvPlayerModule,

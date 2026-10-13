@@ -51,8 +51,9 @@ A standalone NPM package that gives your React Native Android app a unified **vi
 
 **Highlights:**
 
-- **Dedicated `PlayerActivity`** — extends `ReactActivity`, mounts the mpv-powered `SurfaceView` at the content root (the proven pattern for stable PiP on Android). No more black-screen PiP bugs.
+- **One Activity** — playback renders into a `SurfaceView` your app already hosts. There is no second player window to declare, and no second Activity to keep in sync with yours.
 - **Unified audio + video** — one engine, one set of controls. Audio files use the same `libmpv` instance with the surface hidden; no second player to maintain.
+- **In-window video** — the surface is mounted once and resized to whatever rect you give it, so a docked mini player shows a **live picture**, not a poster frame.
 - **Picture-in-Picture** — auto-enter on background (configurable), manual toggle, custom RemoteActions. Works correctly with the React Native view tree (no nested-SurfaceView surprises).
 - **MediaSession + lock-screen controls** — title / artist / album on the lock screen; play / pause / skip / seek from Bluetooth headphones, wired headsets, Android Auto, etc.
 - **Foreground service** — keeps audio alive when the activity backgrounds (Spotify-style behavior, opt-in).
@@ -75,20 +76,28 @@ Autolinking handles the rest — RN's `react-native config` will find the packag
 
 ### Consumer setup
 
-Add the player to your `AndroidManifest.xml` (the package ships its own `<service>` and `<receiver>` declarations, but the **launchable activity** has to be registered in your app's manifest so the consumer can launch it):
+Nothing to register. The package ships its own `<service>` and `<receiver>` declarations, and playback renders into **your** existing launcher Activity — there is no player Activity to declare.
+
+Your launcher Activity does need the PiP prerequisites on Android 12+:
 
 ```xml
 <!-- MOBILE_APP_REACT_NATIVE/android/app/src/main/AndroidManifest.xml -->
 <activity
-    android:name="com.simba.player.PlayerActivity"
+    android:name=".MainActivity"
     android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|navigation"
     android:launchMode="singleTask"
     android:supportsPictureInPicture="true"
     android:resizeableActivity="true"
-    android:autoRemoveFromRecents="true"
     android:theme="@style/AppTheme"
-    android:exported="false" />
+    android:exported="true">
+    <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+    </intent-filter>
+</activity>
 ```
+
+`resizeableActivity="true"` is **not optional**. Its absence in an earlier release was misdiagnosed as "the SurfaceView is nested in React Native's view tree", which is what produced the original PiP black screen and the whole second-Activity architecture built on top of it.
 
 If you plan to use **background audio**, declare the foreground-service permissions:
 
@@ -108,11 +117,10 @@ getMpvPlayerModule().requestNotificationPermission?.(); // graceful no-op on old
 ## Basic usage
 
 ```tsx
-// App.tsx — V15+ (one wrapper, one import, zero glue code)
+// App.tsx — one wrapper, one import, zero glue code
 import React from 'react';
 import {
   SimbaPlayer,
-  SimbaPlayerRoot,
   useOpenFromUrl,
 } from '@simba-dev/react-native-media-player';
 
@@ -137,17 +145,13 @@ function AppContent() {
     return () => sub.remove();
   }, [openFromUrl]);
 
-  // <SimbaPlayerRoot> handles the activity-launch branch
-  // (renders <PlayerRoot /> when launchParams is set, otherwise children).
-  return (
-    <SimbaPlayerRoot>
-      <YourNavigator />
-    </SimbaPlayerRoot>
-  );
+  return <YourNavigator />;
 }
 ```
 
-That's it — `<SimbaPlayer>` is the one-import, one-wrapper integration point. It composes the `PlayerProvider` (config + state) and `PlayerResumeProvider` (bookmark-aware resume lookup). `<SimbaPlayerRoot>` (V14) absorbs the `useLaunchParams()` + activity-branch switch. `useOpenFromUrl()` (V14) absorbs the deep-link URI-scheme filter + title-derivation + extension-classification. `getResumePosition` (V14) is the new function-prop shape for the resume lookup (replaces V13's `lookup={...}` object shape).
+That's it — `<SimbaPlayer>` is the one-import, one-wrapper integration point. It composes the `PlayerProvider` (config + state) and `PlayerResumeProvider` (bookmark-aware resume lookup). `useOpenFromUrl()` absorbs the deep-link URI-scheme filter + title-derivation + extension-classification. `getResumePosition` is the function-prop shape for the resume lookup.
+
+To play media in-window, drive it with `useLaunchPlayback(payload)` from your own tree — it loads the payload into the surface you have mounted, exactly once per launch identity. There is no activity branch to switch on, because there is no second Activity.
 
 ### Per-screen usage (V15+)
 
@@ -199,7 +203,8 @@ function TrackRow({ track }) {
     </Pressable>
   );
 }
-// PlayerActivity launches, plays the file, supports PiP, etc.
+// Audio starts the foreground service; video loads into the surface
+// your app already has mounted. Either way you own the chrome.
 ```
 
 ### Resume-aware openPlayer (with bookmarks)
@@ -441,8 +446,7 @@ Every public export lives in [`src/index.ts`](./src/index.ts). The **V13+ surfac
 
 | Component | Purpose |
 |---|---|
-| `<SimbaPlayer>` | **One-import, one-wrapper integration.** Composes `PlayerProvider` + `PlayerResumeProvider`. V14 adds the `getResumePosition` function prop (alongside the legacy `lookup` object prop). Use this at the app root. |
-| **`<SimbaPlayerRoot>`** | **V14 — activity-branch wrapper.** Calls `useLaunchParams()` internally; renders `<PlayerRoot />` when the activity was launched with playback params, otherwise renders its `children`. Replaces the V13 `if (launchParams) return <PlayerRoot />` boilerplate. |
+| `<SimbaPlayer>` | **One-import, one-wrapper integration.** Composes `PlayerProvider` + `PlayerResumeProvider`. Adds the `getResumePosition` function prop (alongside the legacy `lookup` object prop). Use this at the app root. |
 | `<PlayerRoot>` | Renders `<PlayerSurface>` + the controls overlay (default `<DefaultControls>` or custom via `renderControls`). |
 | `<PlayerSurface>` | `<View flex:1>` placeholder for the native SurfaceView. a11y-hidden. |
 | `<DefaultControls>` | Pre-built controls (top bar, scrubber, transport, auto-hide). |
@@ -452,7 +456,7 @@ Every public export lives in [`src/index.ts`](./src/index.ts). The **V13+ surfac
 
 | Hook | Returns | Throws outside provider? |
 |---|---|---|
-| `usePlayerActivity()` | `{ openPlayer(opts), getLaunchParams() }` | ❌ No (no-op fallback) |
+| `usePlayerActivity()` | `{ openPlayer(opts) }` - `audio` starts the foreground service; `video` loads into the mounted surface and resolves `false` if there is none. | ❌ No (no-op fallback) |
 | `useOpenWithResume()` | `(opts: OpenPlayerOptions & { resumeId? }) => Promise<boolean>` | ❌ No (no-op lookup) |
 | **`useOpenFromUrl()`** | **`(uri: string) => Promise<boolean>`** — **deep-link helper** that filters `content://` + `file://` URIs, derives a title from the basename, classifies audio/video by extension, and forwards to `useOpenWithResume().openPlayer(...)` | ❌ No |
 | **`useOpenPlaylist()`** | __V15 — `{ openPlaylist(entries, opts) }` — "play all from a list" two-step absorption. `opts: { type?, startIndex?, startPositionMs?, shuffle?, startExtras? }`__ | ❌ No |
@@ -464,7 +468,6 @@ Every public export lives in [`src/index.ts`](./src/index.ts). The **V13+ surfac
 | __`useIsLiked(uri)` / `useToggleLiked()`__ | __V15 — per-file "liked" state (Record<uri, boolean>) + toggle action.__ | ❌ No |
 | __`useShuffle()` / `useShuffleEnabled()`__ | __V15 — shuffle flag + toggle action.__ | ❌ No |
 | `usePlayItem()` | `(item, opts) => Promise<boolean>` | ❌ No (sugar on `useOpenWithResume`) |
-| `useLaunchParams()` | `LaunchParams \| null` | ❌ No (returns null) |
 | `usePlayer()` | `{ state: PlayerState, commands: PlayerCommands, progress: PlayerProgress }` | ❌ No (returns defaults) |
 | `usePlayerProgress()` | `{ positionMs, durationMs, isBuffering, isSeeking, seekable, cacheRanges, cacheFill }` | ❌ No (returns 0/0) |
 | `usePlayerConfig()` | `ResolvedPlayerConfig` | ✅ Yes (programmer error) |
@@ -477,14 +480,13 @@ Every public export lives in [`src/index.ts`](./src/index.ts). The **V13+ surfac
 |---|---|
 | `PlayerState` | 20 fields: `isPlaying`, `title`, `artist`, `album`, `positionMs`, `durationMs`, `isBuffering`, `isSeeking`, `seekable`, `volume`, `isMuted`, `speed`, `loopMode`, `playlist`, `currentIndex`, `tracks`, `chapters`, `currentChapter`, `videoParams`, `error` |
 | `PlayerProgress` | 7 fields: `positionMs`, `durationMs`, `isBuffering`, `isSeeking`, `seekable`, `cacheRanges`, `cacheFill` |
-| `PlayerCommands` | 38 methods: `play`, `pause`, `seek`, `skipBackward`, `skipForward`, `togglePlayPause`, `stop`, `seekBy`, `seekToChapter`, `next`, `previous`, `setVolume`, `setMuted`, `toggleMute`, `setSpeed`, `setLoopMode`, `loadFile`, `loadPlaylist`, `playlistRemove`, `shuffle`, `clear`, `cycleTrack`, `setTrack`, `enterPip`, `exitPip`, `exitPipAndFinish`, `setKeepScreenOn`, `setOrientation`, `setImmersive`, `setScreenBrightness`, `requestNotificationPermission`, `openPlayer`, `getLaunchParams`, `getProperty`, `setProperty`, `observeProperty`, `unobserveProperty`, `grantPersistablePermission`, `verifyContentUri` |
+| `PlayerCommands` | 38 methods: `play`, `pause`, `seek`, `skipBackward`, `skipForward`, `togglePlayPause`, `stop`, `seekBy`, `seekToChapter`, `next`, `previous`, `setVolume`, `setMuted`, `toggleMute`, `setSpeed`, `setLoopMode`, `loadFile`, `loadPlaylist`, `playlistRemove`, `shuffle`, `clear`, `cycleTrack`, `setTrack`, `enterPip`, `exitPip`, `exitPipAndFinish`, `setKeepScreenOn`, `setOrientation`, `setImmersive`, `setScreenBrightness`, `requestNotificationPermission`, `openPlayer`, `getProperty`, `setProperty`, `observeProperty`, `unobserveProperty`, `grantPersistablePermission`, `verifyContentUri` |
 | `OpenPlayerOptions` | `{ uri, title, type: 'video' \| 'audio', startPositionMs? }` — the V13 `openPlayer` arg shape (replaces V11's positional args) |
-| `LaunchParams` | `{ uri, title, type, startPositionMs }` — read from the activity via `useLaunchParams()` |
+| `LaunchParams` | `{ uri, title, type, startPositionMs, requestId? }` - one playback launch payload. Pass it to `useLaunchPlayback(...)` to load it in-window. `requestId` gives the launch a unique identity so re-launching the same file at the same position still reloads. |
 | `ContentKind` | `'video' \| 'audio' \| 'music' \| 'movie' \| 'podcast' \| 'live-tv' \| 'radio' \| 'audiobook' \| 'archive-audio' \| 'episode' \| 'video-file' \| string` |
 | `PlayerResumeLookup` | `{ getResumePosition(itemId: string): number \| undefined }` — adapter for the bookmark-aware resume lookup |
 | **`GetResumePosition`** | **V14 — `(itemId: string) => number \| undefined`** — the function reference shape for `<SimbaPlayer getResumePosition={...}>` |
 | `SimbaPlayerProps` | `{ config?, lookup?, getResumePosition?, children }` — V14 adds `getResumePosition` (function prop, recommended). If both `lookup` and `getResumePosition` are passed, `getResumePosition` wins. |
-| **`SimbaPlayerRootProps`** | **V14 — `{ children: React.ReactNode }`** — the children are rendered when the activity was launched WITHOUT playback params |
 | `MpvPlayerModuleBridge` | Typed view of the native module (78 methods) |
 | `PlayerConfig`, `ResolvedPlayerConfig`, `PlayerTheme`, `PipConfig`, `AudioConfig`, `SubtitleConfig`, `NotificationConfig`, `DebugConfig`, `HardwareDecodingPolicy` | V12 surface — same as before |
 | `MpvTrack`, `MpvChapter`, `MpvFileInfo`, `MpvVideoParams`, `MpvAudioDevice`, `MpvPlaybackState`, `MpvLoopMode`, `MpvEventName`, `MpvEvents`, `MpvEventPayloads`, `PlayerEventName`, `PlayerEventPayloads` | Low-level mpv types |
@@ -614,7 +616,7 @@ When the system signals memory pressure via `ComponentCallbacks2.onTrimMemory()`
 | `TRIM_MEMORY_BACKGROUND` | 10 |
 | `TRIM_MEMORY_COMPLETE` | 0 |
 
-No configuration needed — the bridge listens via `PlayerActivity` registration and adjusts `mpv.setPropertyString('cache-secs', ...)`.
+No configuration needed — the bridge adjusts `mpv.setPropertyString('cache-secs', ...)` from the host Activity's own `onTrimMemory` callbacks.
 
 #### Native module init log
 

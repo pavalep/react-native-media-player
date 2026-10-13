@@ -147,8 +147,10 @@ class MediaPlaybackService : Service() {
          * This is a convenience handle, not an ownership mechanism: the
          * session and the notification are created and released by the
          * Service's own lifecycle regardless of who holds a reference.
-         * It mirrors the existing `currentActivityIsPlayer` pattern used
-         * elsewhere in this library.
+         * It is the process-global the module reads across Activity
+         * boundaries, which is the same shape `currentActivityIsPlayer`
+         * used to have before V21 F5 deleted that flag along with the
+         * second Activity it identified.
          */
         @Volatile
         private var instance: MediaPlaybackService? = null
@@ -201,7 +203,7 @@ class MediaPlaybackService : Service() {
          *
          * ## Why this is resolved and not written down
          *
-         * Both this and the session-activity [PendingIntent] used to name
+         * This and the session-activity [PendingIntent] used to name
          * their target as the string literal `"com.simba.player.PlayerActivity"`.
          * A hardcoded component name is the one kind of dependency that
          * survives every gate: it typechecks, it compiles, it packages, and
@@ -210,23 +212,24 @@ class MediaPlaybackService : Service() {
          * at build time, which is exactly why it has to not exist.
          *
          * It also made the V21 collapse unsafe *by construction*: the
-         * library was naming a class the application is about to delete, so
-         * deleting it would have shipped a green build with two dead
-         * notification paths in it.
+         * library was naming a class the application was about to delete,
+         * so deleting it would have shipped a green build with two dead
+         * notification paths in it. That class is now gone.
          *
-         * The player host IS the application entry point once playback lives
-         * in a single Activity — so rather than assert a name and keep it in
-         * sync, ask Android which component the launcher icon resolves to.
-         * `CATEGORY_LAUNCHER` + `setPackage` is the platform's own answer to
-         * "what does launching this app do", scoped to this package so it
-         * cannot pick up another app's activity.
+         * The player host IS the application entry point — playback lives
+         * in the single Activity the launcher already opens — so rather
+         * than assert a name and keep it in sync, ask Android which
+         * component the launcher icon resolves to. `CATEGORY_LAUNCHER` +
+         * `setPackage` is the platform's own answer to "what does
+         * launching this app do", scoped to this package so it cannot pick
+         * up another app's activity.
          *
          * Returns null when the package declares no launchable activity.
          * Callers must degrade rather than invent a component — a
          * [PendingIntent] aimed at a class that may not exist is precisely
          * the bug this replaces.
          */
-        private fun hostPlayerActivityIntent(context: Context): Intent? {
+        private fun hostActivityIntent(context: Context): Intent? {
             val pm = context.packageManager
             val launchIntent = Intent(Intent.ACTION_MAIN)
                 .addCategory(Intent.CATEGORY_LAUNCHER)
@@ -265,11 +268,11 @@ class MediaPlaybackService : Service() {
          * its task is still alive, or launches a fresh instance otherwise.
          *
          * Null when the package declares no launchable activity; see
-         * [hostPlayerActivityIntent] for why that degrades instead of
+         * [hostActivityIntent] for why that degrades instead of
          * guessing a component.
          */
         private fun buildContentIntent(context: Context): PendingIntent? {
-            val intent = hostPlayerActivityIntent(context) ?: return null
+            val intent = hostActivityIntent(context) ?: return null
             return PendingIntent.getActivity(
                 context,
                 0,
@@ -457,11 +460,11 @@ class MediaPlaybackService : Service() {
             // Tapping the lock-screen widget should surface the player.
             //
             // Resolved from the manifest rather than hardcoded — see
-            // `hostPlayerActivityIntent`. `setSessionActivity(null)` is the
+            // `hostActivityIntent`. `setSessionActivity(null)` is the
             // documented "this session has no UI target" value, so an
             // unresolvable host degrades to a widget that simply does not
             // offer a tap target instead of one that throws when tapped.
-            hostPlayerActivityIntent(this@MediaPlaybackService)?.let { hostIntent ->
+            hostActivityIntent(this@MediaPlaybackService)?.let { hostIntent ->
                 setSessionActivity(
                     PendingIntent.getActivity(
                         this@MediaPlaybackService,

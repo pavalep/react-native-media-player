@@ -132,17 +132,12 @@ nativeModulesMock.default.MpvPlayerModule = {
   getDuration: fn(() => 0),
   getPlaybackState: fn(() => 'idle'),
 
-  // Activity launch
-  openPlayer: fn(() => Promise.resolve(true)),
-  getLaunchParams: fn(() => null),
-  // Added in 1.5.7 (D-034) as a synchronous `@ReactMethod`, but the
-  // mock had never been updated, so `useLaunchParams`'s activity guard
-  // threw on `undefined` and every test silently took the
-  // "pre-1.5.10 legacy fallback" branch — i.e. the guard was never
-  // actually exercised. `false` matches the real Kotlin default
-  // (MainActivity / a non-player host), so tests that want the
-  // player-host branch must opt in explicitly.
-  isCurrentActivityPlayer: fn(() => false),
+  // Playback launch
+  //
+  // V21 F5: there is no `openPlayer` and no `getLaunchParams` any more.
+  // Video loads into the consumer's mounted surface (see `loadAndPlay`)
+  // and audio goes to the service.
+  startAudioPlayback: fn(() => Promise.resolve(true)),
 
   // Configuration
   setConfig: fn(() => Promise.resolve(0)),

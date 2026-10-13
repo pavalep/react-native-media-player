@@ -1,37 +1,36 @@
 /**
- * Unit tests for `useLaunchPlayback` (lib 1.8.0) and the `headless`
- * mode of `<SimbaPlayerRoot>`.
+ * Unit tests for `useLaunchPlayback`.
  *
  * ## Why these exist
  *
- * Before 1.8.0, the load lifecycle lived inside `<PlayerRoot>`'s
- * render body, and `<SimbaPlayerRoot>` mounted `<PlayerRoot>` *instead
- * of* its children whenever launch params were present. A consumer with
- * its own chrome therefore had its UI discarded exactly when playback
- * started, and the only way to get the load guarantee was to surrender
- * the UI.
- *
- * 1.8.0 splits the two: `useLaunchPlayback` owns the load, and
- * `headless` keeps it while `children` (the consumer's UI) renders
- * unconditionally.
+ * Before 1.8.0, the load lifecycle lived inside `<PlayerRoot>`'s render
+ * body, so every re-render fired another `loadFile` — and
+ * `<PlayerProvider>` re-renders ~1 Hz off the position poll. The hook
+ * exists to guarantee a payload is loaded exactly once.
  *
  * ## What these pin
  *
- *  - The payload is loaded EXACTLY ONCE per `(uri, startPositionMs)`.
- *    The old render-body version re-fired on every re-render, and
- *    `<PlayerProvider>` re-renders ~1 Hz off the position poll.
+ *  - The payload is loaded EXACTLY ONCE per launch identity.
  *  - `startPositionMs` is authored in ms; mpv's `seekAbsolute` is in
  *    seconds. A silent unit error here seeks to the wrong place with no
  *    error anywhere.
- *  - `headless` still loads — that is the whole point of the flag.
  *  - A `null` payload is a no-op, not a `loadFile(null)`.
+ *  - The title is applied BEFORE the load, because mpv reads
+ *    `force-media-title` at load time.
+ *
+ * ## V21 F5
+ *
+ * This hook was one half of the two-Activity launch contract: the other
+ * half was a one-shot native queue (`getLaunchParams`) that only the
+ * deleted `PlayerActivity` ever filled. Both are gone, so this is now the
+ * public in-window launch primitive — a consumer passes the payload and
+ * the hook loads it into whatever surface it already has mounted.
  */
 
 import React from 'react';
 import { NativeModules, Text } from 'react-native';
 import { render, waitFor } from '@testing-library/react-native';
 import { useLaunchPlayback } from '../useLaunchPlayback';
-import { SimbaPlayerRoot } from '../SimbaPlayerRoot';
 import { PlayerProvider } from '../../components/PlayerProvider';
 import type { LaunchParams } from '../../bridge/MpvPlayerModule';
 
@@ -221,71 +220,52 @@ describe('useLaunchPlayback', () => {
   });
 });
 
-describe('SimbaPlayerRoot — headless', () => {
+describe('in-window launch (V21 F5)', () => {
   beforeEach(() => {
     clearBridgeMocks();
-    bridge().isCurrentActivityPlayer.mockReturnValue(true);
-    bridge().getLaunchParams.mockResolvedValue(PARAMS);
   });
 
-  it('still loads the payload (that is the point of the flag)', async () => {
+  /**
+   * The contract that replaced `<SimbaPlayerRoot headless>`.
+   *
+   * Video no longer starts an Activity, so a consumer drives the load
+   * from its own tree and keeps its own UI. This pins the two halves of
+   * the regression the `headless` flag used to guard: the module's own
+   * player UI must NOT take over the screen, and the payload must load
+   * exactly ONCE — two hook instances both firing would load the media
+   * twice per launch.
+   */
+  function ConsumerChrome() {
+    useLaunchPlayback(PARAMS);
+    return <Text>consumer-chrome</Text>;
+  }
+
+  it('loads the payload exactly once and keeps the consumer UI', async () => {
     // RNTL 14: `render` returns a Promise, so its queries must be
     // awaited off the resolved value — destructuring the Promise
     // itself yields `undefined` for every query.
-    await render(
+    const {queryByText, getByText} = await render(
       <PlayerProvider>
-        <SimbaPlayerRoot headless>
-          <Text>consumer-chrome</Text>
-        </SimbaPlayerRoot>
+        <ConsumerChrome />
       </PlayerProvider>,
     );
     await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
     expect(bridge().loadFile).toHaveBeenCalledWith(PARAMS.uri);
-  });
-
-  it("renders the consumer's children even when launch params exist", async () => {
-    // This is the regression 1.8.0 exists to fix: pre-1.8.0, params
-    // present meant children were DISCARDED and <PlayerRoot /> took
-    // over the screen.
-    const {queryByText, getByText} = await render(
-      <PlayerProvider>
-        <SimbaPlayerRoot headless>
-          <Text>consumer-chrome</Text>
-        </SimbaPlayerRoot>
-      </PlayerProvider>,
-    );
-    await waitFor(() => expect(getByText('consumer-chrome')).toBeTruthy());
-    // The module's own default controls must NOT be on screen.
+    expect(getByText('consumer-chrome')).toBeTruthy();
     expect(queryByText('Simba Player')).toBeNull();
   });
 
-  it('renders children when there are no launch params', async () => {
-    bridge().getLaunchParams.mockResolvedValue(null);
-    const {getByText} = await render(
+  it('never reads the deleted one-shot launch-params queue', async () => {
+    // V21 F5: `getLaunchParams` / `isCurrentActivityPlayer` no longer
+    // exist. A consumer that mounted the module's root no longer had a
+    // queue to consume, so it must not be consulted for anything.
+    await render(
       <PlayerProvider>
-        <SimbaPlayerRoot headless>
-          <Text>consumer-chrome</Text>
-        </SimbaPlayerRoot>
-      </PlayerProvider>,
-    );
-    await waitFor(() => expect(getByText('consumer-chrome')).toBeTruthy());
-    expect(bridge().loadFile).not.toHaveBeenCalled();
-  });
-
-  it('omitting headless keeps the pre-1.8.0 behaviour', async () => {
-    // Back-compat guard: the default must still mount the module's own
-    // player UI, discard children, AND — critically — still load
-    // exactly ONCE. `<SimbaPlayerRoot>` and `<PlayerRoot>` both call
-    // `useLaunchPlayback`; if both were active the media would load
-    // twice per launch.
-    const {queryByText} = await render(
-      <PlayerProvider>
-        <SimbaPlayerRoot>
-          <Text>consumer-chrome</Text>
-        </SimbaPlayerRoot>
+        <ConsumerChrome />
       </PlayerProvider>,
     );
     await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
-    expect(queryByText('consumer-chrome')).toBeNull();
+    expect(bridge().getLaunchParams).toBeUndefined();
+    expect(bridge().isCurrentActivityPlayer).toBeUndefined();
   });
 });

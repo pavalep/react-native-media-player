@@ -3,7 +3,6 @@ import { StyleSheet, View } from 'react-native';
 import { DefaultControls, type DefaultControlsProps } from './DefaultControls';
 import { useRenderControls } from './PlayerProvider';
 import { usePlayer } from '../types/player';
-import { useLaunchParams } from '../hooks/useLaunchParams';
 import { useLaunchPlayback } from '../hooks/useLaunchPlayback';
 import {
   getMpvPlayerModule,
@@ -14,6 +13,13 @@ import { PlayerSurface } from './PlayerSurface';
 /**
  * Phase 23 + Phase 25 root component for the PlayerActivity JS
  * tree.
+ *
+ * V21 F5: `launchParams` is now an explicit prop with no implicit
+ * fallback. It used to fall back to `useLaunchParams()`, which read a
+ * one-shot native queue that only a second Activity ever filled — so the
+ * fallback could not fire, and keeping it would have been a branch that
+ * looked live and was not. Pass the payload in, or drive loading
+ * yourself with the exported `useLaunchPlayback`.
  *
  * Renders the full player UI in two layers:
  *  1. **`<PlayerSurface />`** (Phase 25): the JS-side placeholder
@@ -75,24 +81,14 @@ export interface PlayerRootProps {
 }
 
 export function PlayerRoot({
-  launchParams: launchParamsProp,
+  launchParams,
 }: PlayerRootProps = {}): React.ReactElement {
   const renderControls = useRenderControls();
   const { state, commands } = usePlayer();
-  // V22.0.0 / 1.5.8 (D-035 fix #5): prefer the parent's resolved
-  // value when it was supplied (the SimbaPlayerRoot path). Fall back
-  // to the hook ONLY when the prop was omitted — direct consumers
-  // that mount PlayerRoot without SimbaPlayerRoot still need a way
-  // to learn the launch params, and the hook is the only entry point
-  // in that case.
-  const ownLaunchParams = useLaunchParams();
-  const launchParams = launchParamsProp ?? ownLaunchParams;
 
   // V22.0.0 / 1.5.8 (D-035 fix #3 + #5 + #7): feed the launch URI to
   // mpv exactly once per `(uri, startPositionMs)` payload, NOT once
-  // per render. `useLaunchPlayback` owns that contract (extracted
-  // verbatim from this component in 1.8.0 so `<SimbaPlayerRoot
-  // headless>` can keep the same guarantee while delegating the UI).
+  // per render. `useLaunchPlayback` owns that contract.
   // The effect is keyed on the URI + start position, so it fires once
   // when the payload resolves to a real URI, then never again until
   // the URI actually changes.

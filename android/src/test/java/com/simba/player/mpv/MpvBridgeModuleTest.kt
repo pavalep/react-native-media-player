@@ -209,24 +209,4 @@ class MpvBridgeModuleTest {
         assertEquals("MpvPlayerModule", MpvBridgeModule.NAME)
     }
 
-    @Test
-    fun emitPictureInPictureModeChanged_delegatesToCompanion() {
-        // Phase 10 added `IPipModeChangeEmitter` for PlayerActivity
-        // (in the module) to call into the companion without crossing
-        // the module boundary. Verify it correctly forwards both true
-        // and false. We can't easily instantiate MpvBridgeModule without
-        // a real ReactApplicationContext; instead, we set the
-        // companion's instance to null and confirm the method returns
-        // without throwing (it delegates to the same null-guarded
-        // companion path).
-        assertNull(instanceField.get(null))
-        // The instance-method `emitPictureInPictureModeChanged` is
-        // defined on the MpvBridgeModule INSTANCE — we can't call it
-        // without constructing the module. We instead test the
-        // companion path indirectly via the onPictureInPictureModeChanged
-        // method which is what the instance method delegates to.
-        MpvBridgeModule.onPictureInPictureModeChanged(true)
-        MpvBridgeModule.onPictureInPictureModeChanged(false)
-        // No exception thrown = delegation works as documented.
-    }
 }

@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
 import {
-  applyForceMediaTitle,
   getMpvPlayerModule,
   type LaunchParams,
 } from '../bridge/MpvPlayerModule';
+import { loadAndPlay } from '../bridge/loadAndPlay';
 
 /**
  * Feed a launch payload to mpv, exactly once per payload.
@@ -49,9 +49,8 @@ export function useLaunchPlayback(
 ): void {
   const uri = launchParams?.uri ?? null;
   const title = launchParams?.title ?? undefined;
-  const startPositionSec = launchParams?.startPositionMs
-    ? launchParams.startPositionMs / 1000
-    : 0;
+  const startPositionMs = launchParams?.startPositionMs ?? 0;
+  const startPositionSec = startPositionMs > 0 ? startPositionMs / 1000 : 0;
   // A caller-supplied `requestId` ADDS launch identity to the key; it does
   // not replace the uri|position part. Without it the key was `uri|position`,
   // which is not unique across launches: that was only ever sound because
@@ -77,13 +76,10 @@ export function useLaunchPlayback(
       // it away. Combined with `media-title` never being observed, that
       // is why every player header read "Simba Player".
       //
-      // Must precede `loadFile`: mpv reads the option at load time.
-      applyForceMediaTitle(bridge, title);
-      bridge.loadFile(uri);
-      if (startPositionSec > 0) {
-        bridge.seekAbsolute(startPositionSec);
-      }
-      bridge.play();
+      // `loadAndPlay` owns the title-then-load ordering now, shared
+      // with `usePlayerActivity.openPlayer` so the two entry points
+      // cannot drift into loading a file under the wrong title.
+      loadAndPlay(bridge, {uri, title, startPositionMs});
     } catch {
       // Bridge not present (jest/web) — ignore.
     }

@@ -10,6 +10,7 @@ import {
   MpvFileInfo,
   applyForceMediaTitle,
 } from '../bridge/MpvPlayerModule';
+import { loadAndPlay } from '../bridge/loadAndPlay';
 
 /**
  * V13 Phase 51: expanded `PlayerState`. The V12 surface (4 fields)
@@ -247,12 +248,15 @@ export interface PlayerCommands {
   /** Request the `POST_NOTIFICATIONS` permission on Android 13+. */
   requestNotificationPermission(): void;
 
-  // Activity launch (Phase 52 hooks wrap these for consumer ergonomics)
+  // Playback launch
   /**
-   * Hand off to the dedicated `PlayerActivity`. Resolves with `true`
-   * on a successful `startActivity`. The new signature is the V13
-   * module signature (no `duration` / `source` / `mediaType` — those
-   * were V11 Redux-dispatch concerns that V13 drops).
+   * Launch the given media. `audio` starts the foreground media service;
+   * `video` loads into the consumer's already-mounted surface and
+   * resolves `false` when no surface is mounted, rather than starting
+   * playback nobody can see.
+   *
+   * V21 F5: video no longer hands off to a dedicated `PlayerActivity`.
+   * The signature is unchanged — the video lane's destination is.
    */
   openPlayer(opts: {
     uri: string;
@@ -260,22 +264,6 @@ export interface PlayerCommands {
     type: 'video' | 'audio';
     startPositionMs?: number;
   }): Promise<boolean>;
-  /**
-   * One-shot accessor for the launch params the most recent
-   * `openPlayer` handed to `PlayerActivity`.
-   *
-   * V22.0.0 / 1.5.8 (D-035 fix #6): now correctly typed as a
-   * Promise — the Kotlin bridge method is `@ReactMethod` async.
-   * The previous sync signature was a type lie that caused
-   * `setParams(<Promise>)` in the consumer and a downstream
-   * `loadFile(undefined)` RedBox. Callers should `await` this.
-   */
-  getLaunchParams(): Promise<{
-    uri: string;
-    title: string;
-    type: 'video' | 'audio';
-    startPositionMs: number;
-  } | null>;
 
   // Generic property access (used by audioSettingsService, metadataService)
   /** Get the value of an mpv property as a string. */
@@ -681,16 +669,25 @@ function buildCommands(): PlayerCommands {
 
     openPlayer: async (opts) => {
       dlog('commands.openPlayer(', opts, ')');
-      return getMpvPlayerModule().openPlayer(
-        opts.uri,
-        opts.title,
-        opts.type,
-        opts.startPositionMs ?? 0,
-      );
-    },
-    getLaunchParams: () => {
-      dlog('commands.getLaunchParams()');
-      return getMpvPlayerModule().getLaunchParams();
+      const bridge = getMpvPlayerModule();
+      const startPositionMs = opts.startPositionMs ?? 0;
+
+      if (opts.type === 'audio') {
+        return bridge.startAudioPlayback({
+          uri: opts.uri,
+          title: opts.title,
+          startPositionMs,
+          autoPlay: true,
+        });
+      }
+
+      // Video: refuse when there is no surface rather than loading into
+      // nothing. See `usePlayerActivity.openPlayer` for why.
+      if (!bridge.isSurfaceMounted()) {
+        return false;
+      }
+      loadAndPlay(bridge, {uri: opts.uri, title: opts.title, startPositionMs});
+      return true;
     },
 
     getProperty: (name: string) => {

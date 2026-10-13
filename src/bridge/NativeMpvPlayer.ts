@@ -165,35 +165,30 @@ export interface Spec extends TurboModule {
   // ── Video window launch (V12 Phase 3 / V13 Phase 52 / V20 Phase C) ─────
   // VIDEO ONLY as of 1.13.0.
   //
-  // Promise<boolean> — Kotlin @ReactMethod rejects with
-  //   • E_INVALID_TYPE           — type is neither "video" nor "audio"
-  //   • E_AUDIO_REQUIRES_SERVICE — type IS "audio". Audio no longer opens
-  //     a window; it must go through `startAudioPlayback` below. Sending
-  //     "audio" here rejects loudly rather than opening an Activity that
-  //     has no surface and no notification.
-  //   • E_NO_ACTIVITY / E_ACTIVITY_NOT_FOUND / E_SECURITY /
-  //     E_OPEN_PLAYER_FAILED
-  openPlayer(
-    uri: string,
-    title: string,
-    type: string,
-    startPositionMs: number,
-  ): Promise<boolean>;
+  // V21 F5: there is no `openPlayer` here any more. Video used to be
+  // handed to a dedicated Activity via `startActivity`; it now loads
+  // into the consumer's already-mounted surface, because a
+  // `SurfaceView`'s Surface belongs to its window and a second window
+  // made an in-app video player impossible to build honestly. Audio goes
+  // to `startAudioPlayback` below.
 
-  // ── Audio playback, no Activity (V20 Phase C) ──────────────────────────
+  // ── Audio playback, no surface ──────────────────────────────────────────
   /**
    * Start an AUDIO track in the foreground media service, with no
-   * `PlayerActivity` and therefore no window and no surface.
+   window and therefore no surface.
    *
    * Why this exists: before V20, `MediaPlaybackService` could only be
    * started from `PlayerActivity.onCreate`, so the session, the media
    * notification and the media-key routing existed *only* while a window
    * was open. Audio was forced into a full-screen Activity purely to get
    * that service running — an Activity exists to draw, and audio has
-   * nothing to draw. `PlayerActivity` remains for video because PiP is
-   * per-Activity *window state* and cannot be attached to a React
-   * Navigation destination; nothing in the platform requires that of
-   * audio.
+   * nothing to draw.
+   *
+   * Video no longer gets an Activity either, for the same reason in
+   * reverse: it loads into the consumer's own mounted surface, so the
+   * in-app mini player can show a live picture instead of a poster frame.
+   * PiP needed the Activity only as a *host window*, and `MainActivity`
+   * hosts it.
    *
    * Both steps happen natively, in this order, and the promise resolves
    * only when both have run:
@@ -300,38 +295,6 @@ export interface Spec extends TurboModule {
    * reads a `WeakReference`.
    */
   isSurfaceMounted(): boolean;
-  // Returns null when no launch is pending or after the first read.
-  getLaunchParams(): Promise<{
-    uri: string;
-    title: string;
-    type: string;
-    startPositionMs: number;
-  } | null>;
-
-  // V22.0.0 / 1.5.10 (D-034): activity-aware launchParams guard.
-  //
-  // `MpvBridgeModule.lastLaunchParams` is the canonical handoff from
-  // `openPlayer(...)` to the next `PlayerActivity` mount. The previous
-  // architecture had `useLaunchParams()` consume it from BOTH
-  // MainActivity's React tree and PlayerActivity's React tree.
-  // Result on cold start: stale `lastLaunchParams` from a prior
-  // `openPlayer` call (set when the user previously tapped a card)
-  // was consumed by MainActivity's `<SimbaPlayerRoot>` and rendered
-  // `<PlayerRoot />` over the Home screen.
-  //
-  // The fix: PlayerActivity sets this flag to `true` in onCreate and
-  // `false` in onDestroy. `useLaunchParams()` consults it via this
-  // synchronous getter and returns `null` (without consuming
-  // lastLaunchParams) when we're in MainActivity.
-  //
-  // Why sync, not Promise: `useLaunchParams` runs the check before the
-  // Promise<T> | null decision, so the synchronous bridge path keeps
-  // the consumer's render logic straight-line (no Suspense / loading
-  // gate at app cold start). Codegen emits a synchronous bridge
-  // method as-is when the Kotlin signature is
-  // `@ReactMethod(isBlockingSynchronousMethod = true)`.
-  isCurrentActivityPlayer(): boolean;
-
   // ── Configuration (V12 Phase 21) ───────────────────────────────────────
   setConfig(configJson: string): Promise<number>;
 

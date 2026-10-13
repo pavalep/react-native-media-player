@@ -194,7 +194,10 @@ describe('usePlayer (no provider)', () => {
     expect(typeof c.setScreenBrightness).toBe('function');
     expect(typeof c.requestNotificationPermission).toBe('function');
     expect(typeof c.openPlayer).toBe('function');
-    expect(typeof c.getLaunchParams).toBe('function');
+    // V21 F5: `getLaunchParams` is gone. It read a one-shot native queue
+    // that only the deleted Activity ever filled, so it would have
+    // resolved `null` forever.
+    expect((c as Record<string, unknown>).getLaunchParams).toBeUndefined();
     expect(typeof c.getProperty).toBe('function');
     expect(typeof c.setProperty).toBe('function');
     expect(typeof c.observeProperty).toBe('function');
@@ -258,7 +261,7 @@ describe('usePlayer (no provider)', () => {
     expect(NativeModules.MpvPlayerModule.seekBackward).toHaveBeenCalledWith(3);
   });
 
-  it('commands.openPlayer reshapes {uri,title,type,startPositionMs} into positional bridge args', async () => {
+  it('commands.openPlayer sends audio to the foreground service, not a window', async () => {
     const { result } = await renderHook(() => usePlayer());
     await result.current.commands.openPlayer({
       uri: 'file:///song.mp3',
@@ -266,27 +269,56 @@ describe('usePlayer (no provider)', () => {
       type: 'audio',
       startPositionMs: 12345,
     });
-    expect(NativeModules.MpvPlayerModule.openPlayer).toHaveBeenCalledWith(
-      'file:///song.mp3',
-      'Song',
-      'audio',
-      12345,
-    );
-  });
-
-  it('commands.openPlayer defaults startPositionMs to 0 when omitted', async () => {
-    const { result } = await renderHook(() => usePlayer());
-    await result.current.commands.openPlayer({
+    expect(NativeModules.MpvPlayerModule.startAudioPlayback).toHaveBeenCalledWith({
       uri: 'file:///song.mp3',
       title: 'Song',
+      startPositionMs: 12345,
+      autoPlay: true,
+    });
+    // Video never touches the service, and nothing starts an Activity.
+    expect(NativeModules.MpvPlayerModule.loadFile).not.toHaveBeenCalled();
+  });
+
+  // V21 F5: video used to be handed to a dedicated Activity via
+  // `startActivity`. It now loads into the surface the consumer already
+  // mounted. These two tests pin the halves of that that matter.
+  it('commands.openPlayer loads video into the mounted surface', async () => {
+    NativeModules.MpvPlayerModule.isSurfaceMounted.mockReturnValue(true);
+    const { result } = await renderHook(() => usePlayer());
+    const ok = await result.current.commands.openPlayer({
+      uri: 'file:///film.mp4',
+      title: 'Film',
+      type: 'video',
+      startPositionMs: 5000,
+    });
+    expect(ok).toBe(true);
+    // Ordering is the contract: force-media-title is read at load time,
+    // and seek must follow load or it applies to the previous file.
+    expect(NativeModules.MpvPlayerModule.setProperty).toHaveBeenCalledWith(
+      'force-media-title',
+      'Film',
+    );
+    expect(NativeModules.MpvPlayerModule.loadFile).toHaveBeenCalledWith(
+      'file:///film.mp4',
+    );
+    expect(NativeModules.MpvPlayerModule.seekAbsolute).toHaveBeenCalledWith(5);
+    expect(NativeModules.MpvPlayerModule.play).toHaveBeenCalled();
+  });
+
+  // "Must not" test: loading into a surface that does not exist starts
+  // audio the user cannot see and reports success. Faithful mutant =
+  // delete the `isSurfaceMounted()` guard.
+  it('commands.openPlayer REFUSES video when no surface is mounted', async () => {
+    NativeModules.MpvPlayerModule.isSurfaceMounted.mockReturnValue(false);
+    const { result } = await renderHook(() => usePlayer());
+    const ok = await result.current.commands.openPlayer({
+      uri: 'file:///film.mp4',
+      title: 'Film',
       type: 'video',
     });
-    expect(NativeModules.MpvPlayerModule.openPlayer).toHaveBeenCalledWith(
-      'file:///song.mp3',
-      'Song',
-      'video',
-      0,
-    );
+    expect(ok).toBe(false);
+    expect(NativeModules.MpvPlayerModule.loadFile).not.toHaveBeenCalled();
+    expect(NativeModules.MpvPlayerModule.play).not.toHaveBeenCalled();
   });
 
   // V22.0.0 / 1.6.0 additions — surface-widening for the V19 vertical-swipe

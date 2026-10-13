@@ -19,8 +19,6 @@ import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.fbreact.specs.NativeMpvPlayerSpec
-import com.simba.player.IMpvConfigProvider
-import com.simba.player.IPipModeChangeEmitter
 import com.simba.player.PlaybackHost
 import org.json.JSONArray
 import org.json.JSONObject
@@ -33,9 +31,7 @@ import org.json.JSONObject
  */
 @ReactModule(name = MpvBridgeModule.NAME)
 class MpvBridgeModule(reactContext: ReactApplicationContext) :
-    NativeMpvPlayerSpec(reactContext),
-    IMpvConfigProvider,
-    IPipModeChangeEmitter {
+    NativeMpvPlayerSpec(reactContext) {
 
     companion object {
         const val NAME = "MpvPlayerModule"
@@ -83,30 +79,6 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         // the branch away in release entirely.
         private const val TRACE_PROPERTY_EVENTS = false
 
-        // V22.0.0 / 1.5.10 (D-034): activity-aware launchParams guard.
-        //
-        // Background: `lastLaunchParams` (declared further down) is the
-        // canonical handoff from `openPlayer(...)` to the next
-        // `PlayerActivity` mount. The previous architecture had
-        // `useLaunchParams()` consume it from BOTH MainActivity's React
-        // tree and PlayerActivity's React tree - both activities mount
-        // the same JS App and both wrap in `<SimbaPlayerRoot>` which
-        // calls the hook on mount. Result on cold start: stale
-        // lastLaunchParams from a prior `openPlayer` call got consumed
-        // by MainActivity's tree, and `<PlayerRoot />` got rendered over
-        // the Home screen (the V22 user regression).
-        //
-        // The fix: PlayerActivity's `onCreate` sets this flag to
-        // `true` and `onDestroy` resets to `false`. `useLaunchParams()`
-        // consults it via the synchronous `isCurrentActivityPlayer()`
-        // bridge method and returns `null` (without touching
-        // lastLaunchParams) when we are in any non-PlayerActivity host.
-        // The flag is process-wide (companion object), so React tree
-        // boundaries don't matter.
-        @Volatile
-        @JvmStatic
-        var currentActivityIsPlayer: Boolean = false
-
         // Holds the ReactApplicationContext from RN init time so non-module
         // call sites (e.g. MainActivity.onPictureInPictureModeChanged) can
         // emit DeviceEventManagerModule events. Bridgeless RN: MainActivity's
@@ -127,72 +99,21 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             private set
 
         /**
-         * Phase 13: snapshot of the launch params the most recent
-         * [openPlayer] call handed to `PlayerActivity`. Populated
-         * before `startActivity` and consumed (cleared) by the next
-         * [getLaunchParams] call. PlayerActivity's JS calls
-         * `getLaunchParams()` on mount to rebuild its PlaybackContext
-         * state — the launched activity's React context is fresh and
-         * has no MainActivity PlaybackContext state to inherit.
-         */
-        @Volatile
-        private var lastLaunchParams: LaunchParams? = null
-
-        /**
-         * D-039: PlayerActivity is the source of truth for launch
-         * params read from its Intent extras, but the JS tree inside
-         * the launched activity reads them back via [getLaunchParams]
-         * which inspects [lastLaunchParams]. Without this push, any
-         * PlayerActivity launch that bypasses [openPlayer] (deep link,
-         * app shortcut, `am start`, ADB) leaves JS `getLaunchParams()`
-         * returning null and `<PlayerRoot />` renders the empty
-         * fallback. Populated from [com.simba.player.PlayerActivity.onCreate]
-         * immediately after the `launchUri` / `launchTitle` /
-         * `launchType` / `launchStartPositionMs` lazy vals are first
-         * touched. No-op if `uri` is blank — MainActivity (which has
-         * no player intent extras) won't accidentally clobber a real
-         * launch in flight.
-         */
-        @JvmStatic
-        fun setLaunchParamsFromIntent(
-            uri: String,
-            title: String,
-            type: String,
-            startPositionMs: Long,
-        ) {
-            if (uri.isBlank()) return
-            lastLaunchParams = LaunchParams(uri, title, type, startPositionMs)
-            Log.i(
-                TAG,
-                "[PlaybackTrace][Bridge][setLaunchParamsFromIntent] populated from Intent extras uri='$uri' type='$type' startMs=$startPositionMs",
-            )
-        }
-
-        /**
-         * Phase 13.3: simple value class for the launch params
-         * cached for [getLaunchParams]. Mirrors the four intent
-         * extras that PlayerActivity reads from its own `by lazy {}`
-         * `launchUri` / `launchTitle` / `launchType` /
-         * `launchStartPositionMs` properties.
-         */
-        data class LaunchParams(
-            val uri: String,
-            val title: String,
-            val type: String,
-            val startPositionMs: Long,
-        )
-
-        /**
          * Phase 21: cached PlayerConfig pushed by `<PlayerProvider
          * config={...}>` via `setConfig(configJson)`. Stored as a
-         * Kotlin Map so module code (PlayerActivity) can read
-         * individual keys without re-parsing JSON. `@Volatile` because
-         * the push happens on the React Native JS thread while the
-         * read happens on the Android main thread.
+         * Kotlin Map so individual keys can be read without re-parsing
+         * JSON. `@Volatile` because the push happens on the React Native
+         * JS thread while a read happens on the Android main thread.
          *
-         * `null` when no Provider has wrapped the consumer app's
-         * root — PlayerActivity logs that case explicitly so the
-         * build verification can confirm the wire is live.
+         * `null` when no Provider has wrapped the consumer app's root.
+         *
+         * V21 F5: this cache no longer has a reader. Its only consumer
+         * was `IMpvConfigProvider.getCurrentConfig()`, called from
+         * `PlayerActivity`, which is deleted along with both
+         * module-side cast interfaces it existed to serve. `setConfig`
+         * itself stays — it is live public API every `<PlayerProvider>`
+         * calls — so the value is written and currently unread. Decide
+         * what reads it before adding another writer.
          */
         @Volatile
         private var currentConfig: Map<String, Any?>? = null
@@ -266,18 +187,6 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                 Log.w(TAG, "onPictureInPictureModeChanged: emit threw", e)
             }
         }
-    }
-
-    // ── IPipModeChangeEmitter (Phase 10) ────────────────────────────────
-    // Phase 10: PlayerActivity (in the module) cannot call
-    // `MpvBridgeModule.onPictureInPictureModeChanged` directly because
-    // of the Gradle module boundary. It looks us up via the React Native
-    // bridge (`getNativeModule("MpvPlayerModule") as? IPipModeChangeEmitter`)
-    // and calls this method. We delegate to the companion method so the
-    // single source of truth for PiP mode-change events stays in the
-    // companion (the JS event name + payload contract is defined there).
-    override fun emitPictureInPictureModeChanged(isInPictureInPictureMode: Boolean) {
-        onPictureInPictureModeChanged(isInPictureInPictureMode)
     }
 
     init {
@@ -1621,27 +1530,6 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         return if (nativePtr != 0L) MPVLib.nativeGetMuted(nativePtr) else false
     }
 
-    // V22.0.0 / 1.5.10 (D-034): activity-aware launchParams guard.
-    //
-    // Returns true while PlayerActivity is the foreground React host,
-    // false otherwise (MainActivity foreground, no React host, or
-    // about to attach). Mirrors the static
-    // `MpvBridgeModule.currentActivityIsPlayer` which PlayerActivity
-    // toggles in onCreate/onDestroy.
-    //
-    // Why a static companion flag rather than `getCurrentActivity()
-    // is PlayerActivity`: in `newArchEnabled=true` bridgeless mode,
-    // `getCurrentActivity()` can return null mid-attach (RN hasn't
-    // finished initializing), and the JS render path needs an
-    // authoritative answer the instant MainActivity's React tree
-    // mounts. The static flag set in `Activity.onCreate` (before
-    // React even renders) is always authoritative.
-    @ReactMethod(isBlockingSynchronousMethod = true)
-    @Override
-    override fun isCurrentActivityPlayer(): Boolean {
-        return currentActivityIsPlayer
-    }
-
     // ── Lifecycle ──────────────────────────────────────────────────────────
 
     private fun prepareMpvCaBundle(): String {
@@ -1831,132 +1719,6 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         // itself in its own `finally`.
         frameExecutor.shutdown()
         super.onCatalystInstanceDestroy()
-    }
-
-    // ── PlayerActivity Launch (V12 Phase 3 + Phase 11) ─────────────────────
-    // Hands off to the dedicated `com.simba.player.PlayerActivity` (which
-    // lives in the `@simba/react-native-media-player` library module and
-    // therefore cannot be referenced directly from this app-side class —
-    // we go through the fully-qualified name on the Intent target).
-    //
-    // The `type` extra is the key new piece in Phase 11: it tells
-    // PlayerActivity which rendering path to take. `"video"` mounts the
-    // SurfaceView; `"audio"` will hide it (Phase 12) and surface an
-    // audio-only UI (Phase 13). PlayerActivity.EXTRA_* / TYPE_* constants
-    // are mirrored into the intent extras here so PlayerActivity can read
-    // them back in `onCreate` via its `by lazy {}` launch params.
-    //
-    // Reject codes (matched by the TS Spec's `E_*` contract in
-    // NativeMpvPlayer.ts):
-    //   • E_INVALID_TYPE           — `type` is neither "video" nor "audio"
-    //   • E_AUDIO_REQUIRES_SERVICE — `type` IS "audio". V20 Phase C
-    //     narrowed this method to video only. Audio is no longer forced
-    //     into a window it has nothing to draw in; it goes through
-    //     [startAudioPlayback], which starts the media service with no
-    //     Activity at all. Rejecting rather than quietly still opening an
-    //     Activity is deliberate: a stale JS bundle sending "audio" here
-    //     gets a named, greppable failure instead of a full-screen blank
-    //     player with no notification and no media keys.
-    //   • E_NO_ACTIVITY            — no current activity (RN bridge down)
-    //   • E_ACTIVITY_NOT_FOUND     — PlayerActivity not declared in manifest
-    //   • E_SECURITY               — manifest restriction refused the launch
-    //   • E_OPEN_PLAYER_FAILED     — anything else (e.g. flag mismatch)
-    @ReactMethod
-    @Override
-    override fun openPlayer(
-        uri: String,
-        title: String,
-        type: String,
-        startPositionMs: Double,
-        promise: Promise,
-    ) {
-        // V20 Phase C: audio no longer belongs here. See the docblock.
-        if (type == com.simba.player.PlayerActivity.TYPE_AUDIO) {
-            Log.w(TAG, "[PlaybackTrace][Bridge][openPlayer] type='audio' is no longer a window launch, rejecting E_AUDIO_REQUIRES_SERVICE")
-            promise.reject(
-                "E_AUDIO_REQUIRES_SERVICE",
-                "openPlayer is video-only as of 1.13.0; audio must use startAudioPlayback() so it does not need a window",
-            )
-            return
-        }
-        // 3.3: validate `type` — defensive against the JS layer ever
-        // passing a typo (the TS Spec already types it as the union
-        // `'video' | 'audio'`, but a stale bundle could skip the check).
-        if (type != com.simba.player.PlayerActivity.TYPE_VIDEO) {
-            Log.w(TAG, "[PlaybackTrace][Bridge][openPlayer] invalid type='$type', rejecting with E_INVALID_TYPE")
-            promise.reject("E_INVALID_TYPE", "type must be 'video', got '$type'")
-            return
-        }
-        // 3.4: require a current activity. In bridgeless RN this is null
-        // before the first activity attaches, after the last activity
-        // detaches, or in headless contexts. Without an activity we
-        // cannot launch PlayerActivity.
-        val activity = getCurrentActivity() ?: run {
-            Log.w(TAG, "[PlaybackTrace][Bridge][openPlayer] no current activity, rejecting with E_NO_ACTIVITY")
-            promise.reject("E_NO_ACTIVITY", "no current activity available to launch PlayerActivity")
-            return
-        }
-        // 3.5: build the intent. Title falls back to the URI when blank
-        // so the notification / lock-screen widget always has a display
-        // string.
-        //
-        // No intent flags are set, deliberately. An earlier version of this
-        // comment said "we use FLAG_ACTIVITY_NEW_TASK because we are
-        // launching from a non-Activity context ... the flag is harmless".
-        // Both halves were wrong: we launch from `activity`, and the flag is
-        // NOT harmless — it starts the target in a new task, which breaks
-        // the `singleTask` reuse that keeps a second `openPlayer` from
-        // stacking a duplicate player window, and leaves the video in a task
-        // the user's back gesture does not return from.
-        //
-        // If this ever does need to launch without an Activity, the flag
-        // belongs there — and the task-affinity consequences need dealing
-        // with, not waving through as "harmless".
-        val resolvedTitle = title.takeIf { it.isNotBlank() } ?: uri
-        val intent = android.content.Intent(
-            activity,
-            com.simba.player.PlayerActivity::class.java,
-        ).apply {
-            putExtra(com.simba.player.PlayerActivity.EXTRA_URI, uri)
-            putExtra(com.simba.player.PlayerActivity.EXTRA_TITLE, resolvedTitle)
-            putExtra(com.simba.player.PlayerActivity.EXTRA_TYPE, type)
-            putExtra(
-                com.simba.player.PlayerActivity.EXTRA_START_POSITION_MS,
-                startPositionMs.toLong(),
-            )
-        }
-        // 3.6: launch + 3.7: catch the three documented failure modes
-        // plus a generic catch-all. The order matters: ActivityNotFound
-        // and SecurityException are subclasses of each other on some
-        // OEMs, so we check the more specific one first.
-        try {
-            // Phase 13: cache the resolved launch params in the
-            // companion so the JS layer inside the launched
-            // PlayerActivity can read them back via
-            // [getLaunchParams] on mount (the launched activity's
-            // JS context is fresh — it doesn't have the
-            // PlaybackContext state from MainActivity, so we
-            // have to ship the params through the bridge).
-            lastLaunchParams = LaunchParams(uri, resolvedTitle, type, startPositionMs.toLong())
-            activity.startActivity(intent)
-            Log.i(
-                TAG,
-                "[PlaybackTrace][Bridge][openPlayer] launched PlayerActivity uri='$uri' type='$type' startMs=${startPositionMs.toLong()}",
-            )
-            promise.resolve(true)
-        } catch (e: android.content.ActivityNotFoundException) {
-            Log.w(TAG, "[PlaybackTrace][Bridge][openPlayer] PlayerActivity not found: ${e.message}")
-            emitErrorEvent("E_ACTIVITY_NOT_FOUND", "PlayerActivity is not declared in the manifest", e)
-            promise.reject("E_ACTIVITY_NOT_FOUND", "PlayerActivity is not declared in the manifest", e)
-        } catch (e: SecurityException) {
-            Log.w(TAG, "[PlaybackTrace][Bridge][openPlayer] security refusal: ${e.message}")
-            emitErrorEvent("E_SECURITY", "Manifest restriction refused PlayerActivity launch", e)
-            promise.reject("E_SECURITY", "Manifest restriction refused PlayerActivity launch", e)
-        } catch (e: Throwable) {
-            Log.e(TAG, "[PlaybackTrace][Bridge][openPlayer] launch failed", e)
-            emitErrorEvent("E_OPEN_PLAYER_FAILED", e.message ?: "openPlayer failed", e)
-            promise.reject("E_OPEN_PLAYER_FAILED", e.message ?: "openPlayer failed", e)
-        }
     }
 
     // ── Audio playback without an Activity (V20 Phase C) ────────────────────
@@ -2242,59 +2004,15 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    /**
-     * Phase 13.3: one-shot accessor for the launch params the most
-     * recent [openPlayer] call handed to `PlayerActivity`. PlayerActivity
-     * (a fresh React context) calls this on mount so its JS can rebuild
-     * a `PlaybackEntry` from the same intent extras that PlayerActivity's
-     * own `by lazy {}` `launchUri` / `launchTitle` / `launchType` /
-     * `launchStartPositionMs` properties read.
-     *
-     * Returns `null` when called from MainActivity (no recent
-     * `openPlayer` invocation) — the App.tsx effect that calls this
-     * is a no-op in that case, and the regular V11 inline-mount path
-     * runs.
-     *
-     * One-shot semantics: the params are cleared after the first
-     * read so a re-read in the same activity does not double-apply.
-     * A second invocation from a different activity (e.g. an
-     * expand-from-PiP path) would no-op on the cleared state, which
-     * is correct — that path uses MainActivity's PlaybackContext, not
-     * PlayerActivity's.
-     */
-    @ReactMethod
-    @Override
-    override fun getLaunchParams(promise: Promise) {
-        val params = lastLaunchParams
-        if (params == null) {
-            // No launch pending (or already consumed) — resolve with JS `null`
-            // so the consumer's `await bridge.getLaunchParams()` sees the same
-            // nullable shape the spec promised (`Promise<LaunchParams | null>`).
-            promise.resolve(null)
-            return
-        }
-        // Clear immediately — we want the next call (in the same
-        // activity or any other) to see null. The first read is the
-        // only meaningful one.
-        lastLaunchParams = null
-        val map = Arguments.createMap()
-        map.putString("uri", params.uri)
-        map.putString("title", params.title)
-        map.putString("type", params.type)
-        map.putDouble("startPositionMs", params.startPositionMs.toDouble())
-        Log.i(TAG, "[PlaybackTrace][Bridge][getLaunchParams] returning uri='${params.uri}' type='${params.type}'")
-        promise.resolve(map)
-    }
-
     // ── PlayerConfig (Phase 21) ──────────────────────────────────────────────
     //
     // Phase 21: `<PlayerProvider config={...}>` calls this with the
     // JSON-serialised PlayerConfig. We parse + cache as a Kotlin Map
-    // so module code (PlayerActivity) can read individual keys
-    // without re-parsing JSON. PlayerActivity looks the cached
-    // config up via the module-side [IMpvConfigProvider] interface
-    // (mirrors the IMpvNativePtrProvider / IPipModeChangeEmitter
-    // pattern from Phases 7 + 10).
+    // so individual keys can be read without re-parsing JSON.
+    //
+    // V21 F5: nothing reads that cache any more (its only reader,
+    // `IMpvConfigProvider`, went with `PlayerActivity`). The setter
+    // stays because `<PlayerProvider>` calls it on every mount.
     //
     // Idempotent: re-calling with the same JSON is safe (just
     // overwrites the cache). The TS-side `PlayerProvider` only
@@ -2333,13 +2051,6 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             promise.reject("E_CONFIG_PARSE_FAILED", e.message ?: "setConfig parse failed", e)
         }
     }
-
-    // IMpvConfigProvider (Phase 21): module-side accessor used by
-    // PlayerActivity to read the active PlayerConfig without
-    // crossing the Gradle boundary. Returns the Kotlin Map cached
-    // by [setConfig], or null when no Provider has wrapped the
-    // consumer app's root.
-    override fun getCurrentConfig(): Map<String, Any?>? = currentConfig
 
     // ── Picture-in-Picture ─────────────────────────────────────────────────
 

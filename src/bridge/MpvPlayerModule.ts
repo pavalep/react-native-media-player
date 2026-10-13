@@ -80,24 +80,29 @@ export interface MpvAudioDevice {
   readonly isDefault: boolean;
 }
 
-/** Launch params shared with `PlayerActivity` via `getLaunchParams`. */
+/**
+ * The payload that describes one playback launch, consumed by
+ * `loadAndPlay` (directly) and by `useLaunchPlayback` (as its argument).
+ */
 export interface LaunchParams {
   readonly uri: string;
   readonly title: string;
   readonly type: 'video' | 'audio';
   readonly startPositionMs: number;
   /**
-   * Monotonic identity of one launch request. Optional.
+   * Monotonic identity of one launch request. Optional, but in practice
+   * every in-window caller needs it.
    *
    * `uri` + `startPositionMs` is not a unique identity for a launch, and
-   * `useLaunchPlayback` keys its load effect on exactly that pair. That was
-   * sound while every launch started a fresh `PlayerActivity` — a new React
-   * root, so the hook mounted fresh and always fired.
+   * `useLaunchPlayback` keys its load effect on exactly that pair. When
+   * every launch started a fresh `PlayerActivity`, that was sound — a new
+   * React root, so the hook mounted fresh and always fired.
    *
-   * It stops being sound the moment playback is loaded into an already-open
-   * window: the hook stays mounted across launches, so backing out of a film
-   * and tapping it again produces the same key and no second load happens.
-   * The user presses play and nothing occurs.
+   * That world is gone. Playback now loads into an already-open window, so
+   * the hook stays mounted across launches and the same key means the
+   * second load is skipped: backing out of a film and tapping it again
+   * produces the same key, no load happens, and the user presses play and
+   * nothing occurs.
    *
    * A caller that loads in-window should therefore supply this. It matches
    * `loadFileWithRequestId`, which already exists for the same reason.
@@ -207,8 +212,8 @@ export interface CaptureFrameOptions {
  *  - Property observe + get/set
  *  - Filters + playlist
  *  - State queries
- *  - Activity launch (openPlayer/getLaunchParams)
- *  - Audio without an Activity (startAudioPlayback/stopPlayback)
+ *  - Audio playback (startAudioPlayback/stopPlayback)
+ *  - Video surface control (setVideoBounds/fillVideoBounds/setSurfaceVisible)
  *  - Configuration (setConfig)
  *  - PiP + screen
  *  - Orientation + immersive
@@ -401,25 +406,19 @@ export interface MpvPlayerModuleBridge {
   /** Get the current playback state. */
   getPlaybackState(): MpvPlaybackState;
 
-  // ── Activity launch (V12 Phase 3 / V13 Phase 52) ───────────────────────
-  /**
-   * Hand off to the dedicated `PlayerActivity`. Returns true on
-   * successful `startActivity`. Rejects with `E_INVALID_TYPE`,
-   * `E_NO_ACTIVITY`, `E_ACTIVITY_NOT_FOUND`, `E_SECURITY`, or
-   * `E_OPEN_PLAYER_FAILED`.
-   */
-  openPlayer(
-    uri: string,
-    title: string | null,
-    type: 'video' | 'audio',
-    startPositionMs: number,
-  ): Promise<boolean>;
+  // ── Playback launch (V21 F5) ───────────────────────────────────────────
   /**
    * Start an AUDIO track in the foreground media service with no
-   * `PlayerActivity` and therefore no window and no surface. V20
-   * Phase C. See `NativeMpvPlayer.ts` for the full reject-code
-   * contract (`E_INVALID_URI`, `E_ENGINE_UNAVAILABLE`, `E_LOAD_FAILED`,
-   * `E_START_SERVICE_FAILED`).
+   * window and no surface — audio has nothing to draw, so it does not
+   * get one. V20 Phase C. See `NativeMpvPlayer.ts` for the full
+   * reject-code contract (`E_INVALID_URI`, `E_ENGINE_UNAVAILABLE`,
+   * `E_LOAD_FAILED`, `E_START_SERVICE_FAILED`).
+   *
+   * Video does not come through here at all. It loads into the
+   * consumer's already-mounted surface via `loadAndPlay`, because a
+   * `SurfaceView`'s Surface belongs to its window: a second window
+   * made an in-app video player impossible to build honestly, which is
+   * why the dedicated Activity is gone.
    */
   startAudioPlayback(options: {
     uri: string;
@@ -468,36 +467,6 @@ export interface MpvPlayerModuleBridge {
   setSurfaceVisible(visible: boolean): Promise<boolean>;
   /** Whether a video surface is currently mounted and usable. */
   isSurfaceMounted(): boolean;
-  /**
-   * One-shot accessor for the launch params the most recent
-   * `openPlayer` call handed to `PlayerActivity`. Returns `null`
-   * when called from MainActivity or after the first read has
-   * already consumed the value.
-   */
-  // V22.0.0 / 1.5.8 (D-035 fix #6): Kotlin declares this as a
-  // Promise-returning `@ReactMethod` (the legacy interface above
-  // lied about it being sync, which led to `setParams(<Promise>)`
-  // and the `loadFile(undefined)` RedBox). TurboModule codegen
-  // correctly emits `Promise<LaunchParams | null>`. We unwrap with
-  // `Promise.resolve(...)` in `useLaunchParams` so callers don't
-  // need to know about this.
-  getLaunchParams(): Promise<LaunchParams | null>;
-
-  // V22.0.0 / 1.5.7 (D-034): activity-aware launchParams guard.
-  //
-  // Synchronous boolean getter exposing the static
-  // `MpvBridgeModule.currentActivityIsPlayer` flag. PlayerActivity's
-  // `onCreate` sets this to `true` BEFORE React mounts; `onDestroy`
-  // resets it to `false`. `useLaunchParams` consults it via this
-  // method and short-circuits — returns `null` (without consuming
-  // the single-shot `lastLaunchParams` queue) when we are in
-  // MainActivity, a Share Sheet host, or no React host yet.
-  //
-  // Pre-1.5.7 consumers (where this method is absent) fall through
-  // to the legacy unconditional one-shot-queue read in
-  // `useLaunchParams`, which has the cold-start `<PlayerRoot />`
-  // regression this D-034 release fixes.
-  isCurrentActivityPlayer(): boolean;
 
   // ── Configuration (V12 Phase 21) ───────────────────────────────────────
   /**
@@ -711,20 +680,12 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
   getDuration: () => 0,
   getPlaybackState: () => 'idle',
 
-  // Activity launch
-  openPlayer: (_uri: string, _title: string | null, _type: 'video' | 'audio', _startPositionMs: number) => {
-    void _uri;
-    void _title;
-    void _type;
-    void _startPositionMs;
-    return Promise.resolve(false);
-  },
-  // Audio playback without an Activity (V20 Phase C).
+  // Playback launch
   //
-  // Resolves `false` for the same reason `openPlayer` does: the fallback
-  // bridge is what jest and web previews get, and it has no engine and
-  // no service. `false` is falsy and assertable; a throw would take down
-  // a screen that only wanted to know the launch did not happen.
+  // Resolves `false` because the fallback bridge is what jest and web
+  // previews get, and it has no engine and no service. `false` is falsy
+  // and assertable; a throw would take down a screen that only wanted to
+  // know the launch did not happen.
   startAudioPlayback: (_options: {
     uri: string;
     title?: string;
@@ -749,14 +710,6 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
   fillVideoBounds: () => Promise.resolve(false),
   setSurfaceVisible: () => Promise.resolve(false),
   isSurfaceMounted: () => false,
-  // V22.0.0 / 1.5.8 (D-035 fix #6): now matches the real
-  // Promise<LaunchParams | null> runtime return type.
-  getLaunchParams: () => Promise.resolve(null),
-
-  // V22.0.0 / 1.5.7 (D-034): no-op fallback always reports "not a
-  // player host" so jest tests + Storybook previews don't render
-  // PlayerRoot even when lastLaunchParams is somehow pre-populated.
-  isCurrentActivityPlayer: () => false,
 
   // Config
   setConfig: (_configJson: string) => {
@@ -941,10 +894,10 @@ export function getMpvPlayerModule(): MpvPlayerModuleBridge {
  *    to deriving one. It is warned about instead, because a silent
  *    failure here is a wrong title that nobody can explain.
  *
- * Shared by `commands.loadFile` and `useLaunchPlayback`, which are two
- * genuinely different entry points (`openPlayer` → activity → launch
- * params versus a direct programmatic load) and would otherwise each
- * re-implement the set-then-load ordering.
+ * Shared by `loadAndPlay` and `commands.loadFile`, which are two
+ * genuinely different entry points (a launch payload versus a direct
+ * programmatic load) and would otherwise each re-implement the
+ * set-then-load ordering.
  */
 export function applyForceMediaTitle(bridge: MpvPlayerModuleBridge, title?: string): void {
   const trimmed = title?.trim();
