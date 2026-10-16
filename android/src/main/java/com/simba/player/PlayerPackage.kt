@@ -5,7 +5,9 @@ import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.module.model.ReactModuleInfo
 import com.facebook.react.module.model.ReactModuleInfoProvider
+import com.facebook.react.uimanager.ViewManager
 import com.simba.player.mpv.MpvBridgeModule
+import com.simba.player.mpv.MpvRenderViewManager
 
 /**
  * React Native Package that registers the V12 player's native modules +
@@ -29,12 +31,13 @@ import com.simba.player.mpv.MpvBridgeModule
  * dependencies on `MPVLib` (also in the `mpv` subpackage). The new
  * `PlayerPackage` looks it up via its FQN.
  *
- * The `ViewManager` side is left empty — the module's `MpvRenderViewManager`
- * (which is V11-era and used only by the old `MainActivity` JS tree) is
- * kept in the `mpv` subpackage for backward compat until W8 (Phase 41+
- * deletes the V11 inline-mount path). PlayerActivity (Phase 6) mounts
- * `MpvRenderView` natively via `PlayerActivity.onCreate` so the JS-side
- * `<MpvRenderView />` component is no longer needed for V12 playback.
+ * Phase 6 note, superseded 2026-10-16: the ViewManager side is no longer
+ * empty. `MpvRenderViewManager` registers `SimbaVideoView`, so the mpv
+ * SurfaceView is an ordinary child of the React tree instead of being mounted
+ * by Kotlin at `android.R.id.content` index 0 as a sibling of the React root.
+ * That sibling arrangement is what let an opaque React root paint over every
+ * decoded frame. See `SimbaVideoViewManager` and
+ * `src/components/SimbaVideo.tsx`.
  */
 class PlayerPackage : TurboReactPackage() {
 
@@ -47,6 +50,18 @@ class PlayerPackage : TurboReactPackage() {
             else -> null
         }
     }
+
+    /**
+     * The video picture, as a real React Native view.
+     *
+     * Previously absent: the surface was mounted natively and `PlayerSurface`
+     * on the JS side was a no-op transparent `<View>` that only reserved layout
+     * space. A component with no native counterpart is what forced every screen
+     * to blank itself around the player.
+     */
+    override fun createViewManagers(
+        reactContext: ReactApplicationContext,
+    ): List<ViewManager<*, *>> = listOf(MpvRenderViewManager())
 
     override fun getReactModuleInfoProvider(): ReactModuleInfoProvider {
         return ReactModuleInfoProvider {

@@ -68,6 +68,33 @@ class MpvRenderView(context: Context) : SurfaceView(context),
     // transitions, so this is normally a no-op after first attach.
     private var attachedSurface: android.view.Surface? = null
 
+    // ── Props held until a handle exists ─────────────────────────────────
+    //
+    // React Native sets props as soon as the view is created, which can be
+    // before `MpvBridgeModule.initPlayer()` has produced a handle. Writing
+    // these straight into mpv at that moment would either throw or be dropped
+    // by an uninitialised instance, and the prop would then never take effect
+    // — a view that renders before the engine and silently ignores
+    // `paused`/`volume` afterwards.
+    //
+    // So props are recorded here unconditionally and pushed into mpv on the
+    // next line that has a handle: either `setNativePtr` or any setter
+    // arriving after the handle exists. Both paths re-apply the full set, so
+    // ordering between prop arrival and handle arrival stops mattering.
+    /** @see MpvRenderViewManager.setPaused */
+    var pendingPaused: Boolean = false
+
+    /** @see MpvRenderViewManager.setMuted */
+    var pendingMuted: Boolean = false
+
+    /** @see MpvRenderViewManager.setVolume */
+    var pendingVolume: Float = 100f
+
+    /** mpv `video-zoom`: `0` fit · `1` fill/crop · `2` fill ignoring aspect. */
+    private var pendingVideoZoom: String? = "0"
+
+    fun nativePtrHandle(): Long = nativePtr
+
     companion object {
         private const val TAG = "MpvRenderView"
     }
@@ -197,7 +224,80 @@ class MpvRenderView(context: Context) : SurfaceView(context),
         // New handle — any previously attached surface must be rebound
         // (mpv's wid still points at the previous handle's surface).
         attachedSurface = null
+        // Props that arrived before the handle existed were recorded, not
+        // applied. Push them now, or the view would render while silently
+        // ignoring `paused` / `volume` / `resizeMode`.
+        reapplyPendingProps()
         ensureSurfaceAttached("setNativePtr")
+    }
+
+    /**
+     * Re-push every recorded prop into the now-current mpv instance.
+     *
+     * Safe to call on each prop change once a handle exists: these are
+     * idempotent property writes, not one-shot commands.
+     */
+    private fun reapplyPendingProps() {
+        if (nativePtr == 0L) return
+        if (pendingPaused) MPVLib.nativePause(nativePtr) else MPVLib.nativePlay(nativePtr)
+        MPVLib.nativeSetMuted(nativePtr, pendingMuted)
+        MPVLib.nativeSetVolume(nativePtr, pendingVolume.toDouble().coerceIn(0.0, 100.0))
+        pendingVideoZoom?.let {
+            MPVLib.setPropertyString(nativePtr, "video-zoom", it)
+        }
+    }
+
+    /**
+     * Record and apply mpv's `video-zoom`.
+     *
+     * Routed through the pending field so a `resizeMode` prop that lands
+     * before the handle exists is not silently lost against an uninitialised
+     * instance.
+     */
+    fun applyVideoZoom(zoom: String?) {
+        pendingVideoZoom = zoom
+        if (nativePtr == 0L) return
+        MPVLib.setPropertyString(nativePtr, "video-zoom", zoom)
+    }
+
+    /**
+     * Release this view's surface binding without touching the engine.
+     *
+     * Called when React unmounts the view. The engine outlives the view by
+     * design — it belongs to `MpvBridgeModule` — so a React re-parent, theme
+     * change or memory-pressure remount must not interrupt playback. Only the
+     * surface↔mpv edge is released, and `ensureSurfaceAttached` re-establishes
+     * it on the next bind.
+     *
+     * Distinct from [cleanup], which additionally clears the handle and is
+     * reserved for the engine being destroyed.
+     */
+    fun detachSurfaceForViewDrop() {
+        detachSurfaceLocked()
+    }
+
+    /**
+     * React Native's layout pass can leave a `SurfaceView`'s Surface at a stale
+     * size, because Yoga and the Surface lifecycle are driven independently.
+     * `react-native-video` hits the same problem and fixes it the same way -
+     * see its `ExoPlayerView.requestLayout()`, which posts a second
+     * measure/layout so "the internal views receive the final size".
+     *
+     * Without this, `surfaceChanged` can report the previous geometry and mpv
+     * renders at the wrong size - or at 0x0 - which looks exactly like the
+     * black-video bug and produces no error anywhere.
+     */
+    private val layoutSync = Runnable {
+        measure(
+            MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY)
+        )
+        layout(left, top, right, bottom)
+    }
+
+    override fun requestLayout() {
+        super.requestLayout()
+        post(layoutSync)
     }
 
     /**

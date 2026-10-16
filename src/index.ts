@@ -26,6 +26,12 @@ export {
 
 export { PlayerRoot } from './components/PlayerRoot';
 
+export {
+  SimbaVideo,
+  type SimbaVideoProps,
+  type SimbaVideoResizeMode,
+} from './components/SimbaVideo';
+
 export { PlayerSurface, type PlayerSurfaceProps } from './components/PlayerSurface';
 
 export {
