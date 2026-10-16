@@ -38,6 +38,18 @@ jobs:
           # `npm ci` skip devDependencies (jest, typescript, @types/*, etc).
           # Force development so typecheck + tests have the toolchain they need.
           NODE_ENV: development
+          # The postinstall hook (scripts/download-native.js) resolves the
+          # release tag from package.json's version and fetches
+          # releases/download/<tag>/jniLibs.tar.gz. That is a chicken-and-egg:
+          # the release asset is created BY the tag push, so a CI run for the
+          # commit that bumps the version can only ever look for a release
+          # that does not exist yet. Every version bump would go red at
+          # "Install dependencies" no matter what the source says.
+          #
+          # These jobs run typecheck + unit tests and never link the .so
+          # files, so the download is pure cost here. The escape hatch is the
+          # one the script itself documents for exactly this case.
+          SKIP_DOWNLOAD_NATIVE: '1'
         run: npm ci
 
       - name: Typecheck
