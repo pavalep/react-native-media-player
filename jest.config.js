@@ -41,6 +41,13 @@ module.exports = {
     // QA test matrix for those coverage paths.
     '!src/components/PlayerRoot.tsx',
     '!src/components/PlayerSurface.tsx',
+    // The Fabric codegen spec is a type declaration plus one
+    // `codegenNativeComponent` call whose implementation only exists after
+    // codegen runs against a native toolchain. There is no runtime branch to
+    // cover, so counting it at 0% would only dilute the global figure -
+    // same reasoning as PlayerSurface above. The props it declares are
+    // pinned instead by src/components/__tests__/SimbaVideo.test.tsx.
+    '!src/specs/SimbaVideoViewNativeComponent.ts',
     // V16.0.4 (post-1.5.3 hardening): the top-level player entry
     // components are consumed via <PlayerProvider>/<SimbaPlayer>
     // mount points and require a full React tree + a mock
