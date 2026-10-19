@@ -201,6 +201,7 @@ const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
   'onVideoParamsChanged',
   'onError',
   'onBuffering',
+  'onCacheFill',
   'onCacheState',
   'onSeekable',
   'onSeeking',
@@ -238,51 +239,61 @@ const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
  *   | `seekable`             | `onSeekable`         | `seekable` = false      |
  *   | `seeking`              | `onSeeking`          | `isSeeking` = false     |
  *   | `paused-for-cache`     | `onBuffering`        | `isBuffering` = false   |
- *   | `cache-buffering-state`| `onBuffering`        | `isBuffering` = false   |
+ *   | `cache-buffering-state`| `onCacheFill`        | `cacheFill` = 0         |
  *   | `demuxer-cache-state`  | `onCacheState`       | `cacheRanges` = []      |
- *   | `time-pos`             | `onPositionChanged`  | (polled as a fallback)  |
- *   | `duration`             | `onDurationChanged`  | (polled as a fallback)  |
- *   | `volume`               | `onVolumeChanged`    | (polled as a fallback)  |
- *   | `speed`                | `onSpeedChanged`     | (polled as a fallback)  |
- *   | `pause`                | `onPlaybackStateChanged` | (polled as a fallback) |
- *   | `idle-active` / `eof-reached` | `onPlaybackStateChanged` | (polled as a fallback) |
+ *   | `time-pos`             | `onPositionChanged`  | `positionMs` = 0        |
+ *   | `duration`             | `onDurationChanged`  | `durationMs` = 0        |
+ *   | `volume`               | `onVolumeChanged`    | `volume` = 100          |
+ *   | `speed`                | `onSpeedChanged`     | `speed` = 1             |
+ *   | `pause`                | `onPlaybackStateChanged` | `isPlaying` = false  |
+ *   | `idle-active` / `eof-reached` | `onPlaybackStateChanged` | `isPlaying` = false |
  *
- * The difference between the two groups is the whole point: position,
- * duration, volume, speed and play state also arrive through the 1 Hz
- * poll in step 3, so they look fine. `seekable`, `isSeeking`,
- * `isBuffering` and `cacheRanges` have **no polling fallback**, so with
- * nothing observing them the scrub bar renders permanently disabled, the
- * buffering spinner never appears, and the buffered-range fill is never
- * painted — while every test in this repo still passes, because the
- * defaults are valid-looking values.
+ * Every property in that table is delivered by the event stream. There is
+ * no polling fallback for any of them, and there has not been one since
+ * v1.10.0. That is why the list is the load-bearing part: a property that
+ * is missing from it keeps its `DEFAULT_PROGRESS` value forever, and the
+ * default is a valid-looking value, so nothing fails and nothing looks
+ * broken. The scrub bar renders permanently disabled, the buffering
+ * spinner never appears, and the buffered-range fill is never painted.
  *
  * `demuxer-cache-state` is deliberately observed too: it is the only
  * source for the buffered ranges that the seek bar paints behind the
  * played fill.
  *
  * ---------------------------------------------------------------------------
- * OPEN NATIVE DEFECT (1.8.4) — registration is fixed, delivery is not
+ * MEASURED 2026-10-19 — the property path works
  * ---------------------------------------------------------------------------
- * This list is necessary but NOT sufficient. Measured on emulator-5554
- * (API 37) with the 1.8.3 code running and a file actively playing
- * (`time-pos` advancing, `pause=false`):
+ * An earlier version of this comment claimed the opposite, under the
+ * heading "OPEN NATIVE DEFECT (1.8.4)": that `MPV_EVENT_PROPERTY_CHANGE`
+ * was never delivered, so the scrub bar was permanently disabled and the
+ * buffering spinner never appeared.
  *
- *   - `mpv_observe_property(...)` returns `result=0` for all twelve —
- *     registration genuinely succeeds.
- *   - `onPlaybackRestart` arrives 7,418 times; `onFileLoaded` arrives.
- *     So the native event loop IS pumping and IS dispatching to JS.
- *   - `onSeekable` / `onPositionChanged` / `onDurationChanged` /
- *     `onCacheState` / `onPlaybackStateChanged` arrive **0 times**.
+ * That measurement was real, but it was taken against a build whose
+ * native event loop drained ONE event per blocking wait. The drain was
+ * fixed afterwards, and the claim was never re-measured — because the
+ * per-value property log was made a compile-time constant in v1.10.0
+ * (`TRACE_PROPERTY_EVENTS = false`), which left the whole property path
+ * UNOBSERVABLE in every build. A defect could sit here for a release
+ * cycle with nothing able to contradict it.
  *
- * `MPV_EVENT_PROPERTY_CHANGE` is therefore never delivered to this
- * handle even though the property is observed on it. The next release
- * must fix the native property-event path (observe handle vs. pumped
- * handle in `android/src/main/cpp/event.cpp` / `property.cpp`).
+ * The path works. Measured on emulator-5554 with a file actively playing:
  *
- * Until that lands, the observable symptom is unchanged: the scrub bar
- * still renders disabled ("Live stream — not seekable") because
- * `seekable` never leaves `DEFAULT_PROGRESS`. Do not read a green test
- * suite as evidence this works — the whole suite mocks the emitter.
+ *   - The consumer's elapsed time advanced 0:00 -> 2:28. Position can
+ *     only change if `time-pos` PROPERTY_CHANGE events arrive, because
+ *     the only other source is a one-shot hydration read at mount.
+ *   - `seekable` flipped to true once the stream was parsed — the
+ *     "Live stream — not seekable" -> "Playback position" change on the
+ *     seek bar. That arrives as `onSeekable`, which is a property event.
+ *   - The lib's own test notes record `onCacheState` arriving 827 times
+ *     over the same window.
+ *
+ * The native bridge now logs the FIRST arrival of each property, once
+ * per session, so "does this property ever arrive?" is answerable from a
+ * device log without a rebuild. Keep that log: it is what makes the next
+ * claim of this kind checkable.
+ *
+ * Do not read a green test suite as evidence the delivery path works —
+ * the whole suite mocks the emitter. The evidence is a device log.
  */
 const OBSERVED_PROPERTIES: readonly string[] = [
   'time-pos',

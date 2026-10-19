@@ -233,6 +233,21 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * Property observers requested by JS before native initialization completes.
      * Keep them until the handle exists instead of silently dropping them.
      */
+    /**
+     * Property names this module has already logged, so each one is
+     * announced exactly once per session.
+     *
+     * The per-value property log was made a compile-time constant in
+     * v1.10.0 (it fired 30-60x/second for `time-pos`). That made the
+     * whole property path UNOBSERVABLE: no build could answer "does this
+     * property ever arrive?", which is why a delivery defect could sit
+     * here for a release cycle with nothing to contradict it.
+     *
+     * One line per property per session answers that question at no
+     * ongoing cost, so this stays unconditional.
+     */
+    private val announcedProperties = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     private val pendingObservedProperties = linkedSetOf<String>()
 
     /**
@@ -292,6 +307,12 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             // to discard them) and performing a synchronous write to logd.
             // Gate it behind the same debug switch as the JS dlog(); the
             // property value is still delivered to JS regardless.
+            // First arrival of each property, once per session. This is the
+            // observable that was missing: with it, a device log answers
+            // "does this property ever arrive?" without a rebuild.
+            if (announcedProperties.add(name)) {
+                Log.i(TAG, "[PlaybackTrace][Bridge][property:first] name=$name")
+            }
             if (TRACE_PROPERTY_EVENTS) {
                 Log.d(TAG, "[PlaybackTrace][Bridge][listener:property] name=$name value=$jsonValue")
             }
@@ -331,25 +352,44 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             //   `percent > 0 && percent < 100` correctly drops the spinner.
             when (name) {
                 "cache-buffering-state" -> {
+                    // The cache FILL LEVEL. It is NOT a stall signal.
+                    //
+                    // mpv reports `cache-buffering-state` as the percentage
+                    // of the cache that is filled, and a partially-filled
+                    // cache is the NORMAL state during playback. The old
+                    // code read it as "isBuffering = percent < 100", which
+                    // is true for most of a stream's life — so the flag
+                    // flickered with every refill and the spinner could
+                    // latch on during perfectly healthy playback.
+                    //
+                    // The stall signal is `paused-for-cache`, which is a
+                    // different property with a different owner. One fact,
+                    // one owner: this one owns the fill, that one owns the
+                    // stall.
                     val percent = parseBufferingPercent(jsonValue)
                     try {
-                        val bufPayload = Arguments.createMap().apply {
+                        val fillPayload = Arguments.createMap().apply {
                             putDouble("percent", percent)
-                            putBoolean("isBuffering", percent < 100.0)
                         }
-                        eventEmitter.emit("onBuffering", bufPayload)
+                        eventEmitter.emit("onCacheFill", fillPayload)
                     } catch (e: Exception) {
-                        Log.w(TAG, "onBuffering emit failed: ${e.message}")
+                        Log.w(TAG, "onCacheFill emit failed: ${e.message}")
                     }
                 }
-                // `paused-for-cache` is the universal stall signal. Do not
-                // encode it as a fabricated fill percentage; the JS layer gets
-                // the explicit boolean and preserves the last honest cache fill.
+                // `paused-for-cache` is the universal stall signal: mpv sets
+                // it exactly while playback is paused because the cache
+                // underran. It is a BOOLEAN, and it is the only thing that
+                // may drive `isBuffering`.
+                //
+                // It carries no percentage. It does not know the fill, and
+                // the old code invented one (0 when stalled, 100 when not)
+                // which then overwrote the real fill with a fabricated
+                // number — the same "one fact, two owners" failure as
+                // above, in the other direction.
                 "paused-for-cache" -> {
                     val isBuffering = jsonValue.trim().equals("true", ignoreCase = true)
                     try {
                         val bufPayload = Arguments.createMap().apply {
-                            putDouble("percent", if (isBuffering) 0.0 else 100.0)
                             putBoolean("isBuffering", isBuffering)
                         }
                         eventEmitter.emit("onBuffering", bufPayload)
@@ -360,8 +400,17 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                 // `demuxer-cache-state` carries the buffered ranges — the
                 // grey overlay on the seek bar. Each range is
                 // `{start, end, flags}` in MPV; we extract `start`/`end`
-                // (in seconds, relative to the stream start) and forward
-                // them as a list so JS can paint the buffered region.
+                // and forward them as a list so JS can paint the buffered
+                // region.
+                //
+                // The ranges leave this bridge in MILLISECONDS. mpv reports
+                // `seekable-ranges` in seconds, and the bridge is the only
+                // place that knows which unit a payload carried — so the
+                // bridge is the only place that converts it. Every other
+                // time value on this API (positionMs, durationMs) is
+                // milliseconds, and a consumer that had to guess the unit
+                // of one field among them is a consumer that will get it
+                // wrong.
                 "demuxer-cache-state" -> {
                     try {
                         val parsed = parseCacheState(jsonValue)
@@ -375,7 +424,6 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                         }
                         val cachePayload = Arguments.createMap().apply {
                             putArray("ranges", rangesArray)
-                            putDouble("fill", parsed.fill)
                         }
                         eventEmitter.emit("onCacheState", cachePayload)
                     } catch (e: Exception) {
@@ -2439,50 +2487,76 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     /**
-     * Parse a `demuxer-cache-state` payload into buffered ranges + fill.
+     * Parse a `demuxer-cache-state` payload into buffered ranges.
      *
-          * MPV serialises this property as a node map whose documented fields
+     * MPV serialises this property as a node map whose documented fields
      * include `seekable-ranges`, `bof-cached`, `eof-cached`, `fw-bytes`,
      * `file-cache-bytes`, `cache-end`, `reader-pts`, and `cache-duration`.
      * The seekable ranges are the authoritative buffered timeline ranges.
      *
-     * We extract only those ranges here. Cache fill is intentionally not
-     * fabricated from byte counts: mpv exposes the user-facing fill percentage
-     * through the separate `cache-buffering-state` property, which is mapped
-     * to `onBuffering` and consumed by TransportContext.
-
+     * ## The unit
+     *
+     * `seekable-ranges` is in SECONDS, relative to the stream start. The
+     * ranges leave this bridge in MILLISECONDS, because the bridge is the
+     * only layer that knows which unit a payload carried.
+     *
+     * The legacy `ranges` field is BYTE OFFSETS, and a byte offset is not
+     * a time: there is no constant bytes-per-second to divide by, because
+     * the bitrate varies and a VBR stream has no single one. The old code
+     * read `ranges` as if it were `seekable-ranges` and forwarded it
+     * unlabelled, and the consumer read the numbers as milliseconds. So a
+     * 60-second range arrived as 60 ms, and a byte range was clamped to
+     * the duration and painted as a full-width "100% buffered" bar — a bar
+     * claiming that data is buffered when it is not.
+     *
+     * So the byte field is read, logged, and NOT forwarded as a time
+     * range. A seek bar that shows nothing is honest; a seek bar that
+     * shows a false 100% is not.
+     *
+     * Cache fill is intentionally not derived from byte counts: mpv
+     * exposes the user-facing fill percentage through the separate
+     * `cache-buffering-state` property, which is mapped to `onCacheFill`.
      */
     private data class CacheStatePayload(
+        /** Buffered ranges in MILLISECONDS, relative to the stream start. */
         val ranges: List<Pair<Double, Double>>,
-        val fill: Double,
     )
 
     private fun parseCacheState(jsonValue: String): CacheStatePayload {
         val trimmed = jsonValue.trim()
         if (trimmed.isEmpty() || trimmed == "null") {
-            return CacheStatePayload(emptyList(), 0.0)
+            return CacheStatePayload(emptyList())
         }
         return try {
             val obj = JSONObject(trimmed)
-            val rangesJson = obj.optJSONArray("seekable-ranges")
-                ?: obj.optJSONArray("ranges") // compatibility with older native payloads
+            val seekableJson = obj.optJSONArray("seekable-ranges")
+            val legacyByteJson = obj.optJSONArray("ranges")
 
             val ranges = mutableListOf<Pair<Double, Double>>()
-            if (rangesJson != null) {
-                for (i in 0 until rangesJson.length()) {
-                    val r = rangesJson.optJSONObject(i) ?: continue
+            if (seekableJson != null) {
+                for (i in 0 until seekableJson.length()) {
+                    val r = seekableJson.optJSONObject(i) ?: continue
                     val start = r.optDouble("start", Double.NaN)
                     val end = r.optDouble("end", Double.NaN)
                     if (!start.isNaN() && !end.isNaN() && end > start) {
-                        ranges.add(start to end)
+                        // seconds -> milliseconds
+                        ranges.add(start * 1000.0 to end * 1000.0)
                     }
                 }
+            } else if (legacyByteJson != null) {
+                Log.w(
+                    TAG,
+                    "parseCacheState: payload carries byte-offset 'ranges' and no " +
+                        "'seekable-ranges'. Byte offsets are not time positions, so no " +
+                        "buffered range is forwarded — painting them on a seek bar " +
+                        "would claim unbuffered data is buffered.",
+                )
             }
-                        CacheStatePayload(ranges, 0.0)
+            CacheStatePayload(ranges)
 
         } catch (e: Exception) {
             Log.w(TAG, "parseCacheState: bad json '$jsonValue': ${e.message}")
-            CacheStatePayload(emptyList(), 0.0)
+            CacheStatePayload(emptyList())
         }
     }
 

@@ -434,6 +434,7 @@ describe('usePlayer (inside PlayerProvider)', () => {
       'onVideoParamsChanged',
       'onError',
       'onBuffering',
+      'onCacheFill',
       'onCacheState',
       'onSeekable',
       'onSeeking',
@@ -471,6 +472,128 @@ describe('usePlayer (inside PlayerProvider)', () => {
       }
     });
     expect(result.current.state.isPlaying).toBe(true);
+  });
+
+  // ── The buffering contract: one fact, one owner ────────────────────────
+  //
+  // Three mpv properties, three facts, and they were tangled into two
+  // events with contradictory rules:
+  //
+  //   `paused-for-cache`      -> is the player STALLED?   (a boolean)
+  //   `cache-buffering-state` -> how full is the cache?    (a percentage)
+  //   `demuxer-cache-state`   -> what is the TIMELINE?    (ranges)
+  //
+  // `cache-buffering-state` used to write `isBuffering` as
+  // "percent < 100", which is true for most of a stream's life — a
+  // partially-filled cache is the NORMAL state during playback — so the
+  // spinner could latch on during perfectly healthy playback. And
+  // `paused-for-cache` invented a percentage (0 when stalled, 100 when
+  // not) that overwrote the real fill with a fabricated number.
+  //
+  // Each fact now has exactly one owner, and each event touches exactly
+  // one field. These tests are what keeps it that way.
+  describe('the buffering contract', () => {
+    let subs: ReturnType<typeof captureSubscribes>;
+
+    beforeEach(() => {
+      clearBridgeMocks();
+      subs = captureSubscribes();
+    });
+
+    afterEach(() => {
+      subs.restore();
+    });
+
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PlayerProvider>{children}</PlayerProvider>
+    );
+
+    async function fire(event: string, payload: Record<string, unknown>) {
+      const listeners = subs.handlers.get(event) ?? [];
+      expect(listeners.length).toBeGreaterThan(0);
+      await act(async () => {
+        for (const l of listeners) l(payload);
+      });
+    }
+
+    it('onBuffering sets the stall flag and nothing else', async () => {
+      const { result } = await renderHook(() => usePlayerProgress(), {
+        wrapper,
+      });
+
+      await fire('onBuffering', { isBuffering: true });
+
+      expect(result.current.isBuffering).toBe(true);
+      // The stall signal does not know the fill, so it must not invent
+      // one. It used to write 0/100, which destroyed the real fill.
+      expect(result.current.cacheFill).toBe(0);
+    });
+
+    it('onBuffering clears the stall flag when the stall ends', async () => {
+      const { result } = await renderHook(() => usePlayerProgress(), {
+        wrapper,
+      });
+
+      await fire('onBuffering', { isBuffering: true });
+      expect(result.current.isBuffering).toBe(true);
+
+      // The `false` case is the one that matters: `paused-for-cache` goes
+      // false the moment the cache recovers, and a consumer that cannot see
+      // that transition keeps a spinner on a player that is running.
+      await fire('onBuffering', { isBuffering: false });
+      expect(result.current.isBuffering).toBe(false);
+    });
+
+    it('onCacheFill sets the fill and never the stall flag', async () => {
+      const { result } = await renderHook(() => usePlayerProgress(), {
+        wrapper,
+      });
+
+      await fire('onCacheFill', { percent: 37 });
+
+      expect(result.current.cacheFill).toBe(37);
+      // A partially-filled cache is the NORMAL state during playback. It
+      // is not a stall, and reading it as one pinned the spinner on.
+      expect(result.current.isBuffering).toBe(false);
+    });
+
+    it('onCacheState sets the buffered ranges and never the fill', async () => {
+      const { result } = await renderHook(() => usePlayerProgress(), {
+        wrapper,
+      });
+
+      // The ranges arrive in MILLISECONDS: the native bridge converts,
+      // because it is the only layer that knows the payload's unit.
+      await fire('onCacheState', { ranges: [{ start: 0, end: 60000 }] });
+
+      expect(result.current.cacheRanges).toEqual([{ start: 0, end: 60000 }]);
+      expect(result.current.cacheFill).toBe(0);
+    });
+
+    it('onCacheState keeps the last known ranges when the payload carries none', async () => {
+      const { result } = await renderHook(() => usePlayerProgress(), {
+        wrapper,
+      });
+
+      await fire('onCacheState', { ranges: [{ start: 0, end: 60000 }] });
+      await fire('onCacheState', {});
+
+      expect(result.current.cacheRanges).toEqual([{ start: 0, end: 60000 }]);
+    });
+
+    it('onCacheState with an explicit empty array clears the ranges', async () => {
+      const { result } = await renderHook(() => usePlayerProgress(), {
+        wrapper,
+      });
+
+      await fire('onCacheState', { ranges: [{ start: 0, end: 60000 }] });
+      await fire('onCacheState', { ranges: [] });
+
+      // mpv saying "the cache is empty" is different from saying nothing,
+      // and the difference is the difference between an honest bar and a
+      // stale one.
+      expect(result.current.cacheRanges).toEqual([]);
+    });
   });
 
   // ── The mute flag arrives as a STRING ─────────────────────────────────

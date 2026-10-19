@@ -128,9 +128,20 @@ export interface PlayerProgress {
   isSeeking: boolean;
   /** True when the current file is seekable. */
   seekable: boolean;
-  /** Cached byte ranges. Empty for non-network sources. */
+  /**
+   * Buffered timeline ranges, in MILLISECONDS, relative to the stream start.
+   *
+   * The same unit as `positionMs` and `durationMs`, so a consumer never
+   * has to know that mpv's own `seekable-ranges` is in seconds — the
+   * native bridge converts, because it is the only layer that knows which
+   * unit a payload carried.
+   *
+   * Empty when the source exposes no time-space cache information. A byte
+   * offset is NOT a time and is never reported here: a range painted from
+   * byte offsets would claim that unbuffered data is buffered.
+   */
   cacheRanges: Array<{ start: number; end: number }>;
-  /** Cache fill percent (0..100). 0 for non-network sources. */
+  /** Cache fill percent (0..100), from mpv's `cache-buffering-state`. */
   cacheFill: number;
 }
 
@@ -1231,29 +1242,66 @@ export function applyPlayerEvent(
         progress,
       };
     case 'onBuffering': {
-      // `isBuffering` is the more useful consumer signal than `percent`;
-      // honor the explicit flag if present, otherwise treat any
-      // non-zero percent as buffering.
-      const isBuffering =
-        typeof p.isBuffering === 'boolean'
-          ? p.isBuffering
-          : ((p.percent as number) > 0 && (p.percent as number) < 100);
+      // The STALL signal, and the only thing that may set `isBuffering`.
+      //
+      // It comes from mpv's `paused-for-cache`, which is true exactly while
+      // playback is paused because the cache underran. The payload carries
+      // no percentage: the property does not know the fill, and the old
+      // code invented one (0 when stalled, 100 when not) which overwrote
+      // the real fill with a fabricated number.
+      //
+      // The percent-based inference is gone with the percent. A partially
+      // filled cache is the NORMAL state during playback, so
+      // "percent < 100" is true for most of a stream's life — reading it
+      // as "buffering" latched the spinner on during healthy playback.
+      const isBuffering = Boolean(p.isBuffering);
       return {
         state: { ...state, isBuffering },
         progress: { ...progress, isBuffering },
       };
     }
-    case 'onCacheState':
-      // Cache state is progress-only — no state field, just progress
-      // updates for consumers that render a cache indicator.
+    case 'onCacheFill': {
+      // The cache FILL LEVEL — a percentage, not a stall. It comes from
+      // mpv's `cache-buffering-state`, which changes continuously as the
+      // cache refills, so it is a level and nothing else.
+      //
+      // It owns `cacheFill` and nothing else. `isBuffering` belongs to
+      // `onBuffering`, and `cacheRanges` belongs to `onCacheState`. One
+      // fact, one owner — the old code had two properties writing one
+      // field with contradictory rules, and they disagreed.
+      const percent = Number(p.percent ?? 0);
       return {
         state,
         progress: {
           ...progress,
-          cacheRanges: (p.ranges as Array<{ start: number; end: number }>) ?? [],
-          cacheFill: Number(p.fill ?? 0),
+          cacheFill: Number.isFinite(percent) ? percent : 0,
         },
       };
+    }
+    case 'onCacheState': {
+      // The buffered TIMELINE ranges, in MILLISECONDS.
+      //
+      // They come from mpv's `demuxer-cache-state.seekable-ranges`, which is
+      // in seconds; the native bridge converts to milliseconds because it
+      // is the only layer that knows which unit the payload carried. The
+      // consumer receives one unit — the same one `positionMs` and
+      // `durationMs` use — and never has to guess.
+      //
+      // A payload that carries no `ranges` at all leaves the previous value
+      // alone. A payload that carries an EMPTY array is authoritative and
+      // clears: that is mpv saying the cache is empty, which is different
+      // from saying nothing.
+      const ranges = p.ranges as
+        | Array<{ start: number; end: number }>
+        | undefined;
+      return {
+        state,
+        progress: {
+          ...progress,
+          cacheRanges: Array.isArray(ranges) ? ranges : progress.cacheRanges,
+        },
+      };
+    }
     case 'onSeekable':
       return {
         state: { ...state, seekable: Boolean(p.seekable) },

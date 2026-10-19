@@ -122,6 +122,7 @@ export type PlayerEventName =
   | 'onVideoParamsChanged'
   | 'onError'
   | 'onBuffering'
+  | 'onCacheFill'
   | 'onCacheState'
   | 'onSeekable'
   | 'onSeeking'
@@ -154,8 +155,23 @@ export interface PlayerEventPayloads {
     message: string;
     requestId?: string;
   };
-  onBuffering: { percent: number; isBuffering?: boolean };
-  onCacheState: { ranges: Array<{ start: number; end: number }>; fill: number };
+  /**
+   * The STALL signal. True exactly while playback is paused because the
+   * cache underran. It carries no percentage: the property does not know
+   * the fill, and an invented one destroys the real fill.
+   */
+  onBuffering: { isBuffering: boolean };
+  /**
+   * The cache FILL LEVEL, 0..100. A level, not a stall — a partially
+   * filled cache is the normal state during playback.
+   */
+  onCacheFill: { percent: number };
+  /**
+   * The buffered timeline ranges, in MILLISECONDS, relative to the stream
+   * start. Byte offsets are never reported here: a byte offset is not a
+   * time.
+   */
+  onCacheState: { ranges: Array<{ start: number; end: number }> };
   onSeekable: { seekable: boolean };
   onSeeking: { seeking: boolean };
   onEndFile: { reason: number; error: number; requestId?: string };
@@ -968,6 +984,7 @@ const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
   'onVideoParamsChanged',
   'onError',
   'onBuffering',
+  'onCacheFill',
   'onCacheState',
   'onSeekable',
   'onSeeking',
