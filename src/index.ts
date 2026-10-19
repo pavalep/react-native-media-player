@@ -1,18 +1,30 @@
 /**
  * @simba/react-native-media-player — public API surface.
  *
- * Phase 24 entry point — replaces the Phase 23 minimal DefaultControls
- * stub with the full polished UI (top bar + scrubber + transport +
- * auto-hide). `usePlayer()` commands are now wired to the
- * `MpvPlayerModule` bridge (so play / pause / seek actually drive
- * mpv); `usePlayerProgress()` is a separate hook for position /
- * duration that Phase 25 wires to a 1Hz bridge poll.
+ * The surface is three things:
  *
- * Phase 25 will add the loading / error / buffer indicator in the
- * center area, swap App.tsx to wrap with `<PlayerProvider>`, and
- * wire `usePlayerProgress()` to native. Phase 30 (Wave 6) wires
- * the TypeScript build pipeline so this file is the actual
- * `package.json` `main` entry.
+ *  - `usePlayer()` — the player's live state plus the command set
+ *    (play / pause / seek / volume / speed / tracks / PiP and the
+ *    rest). The commands are wired to the `MpvPlayerModule` bridge,
+ *    so they act on the real mpv instance rather than on a stub.
+ *  - `usePlayerProgress()` — position, duration and the buffer /
+ *    cache fields, split out from `usePlayer()` so a scrubber does
+ *    not re-render on every volume or track change. The values come
+ *    from the native mpv event stream (4 Hz after native
+ *    coalescing) plus a one-shot hydration read at mount — there is
+ *    no JS-side timer polling the bridge.
+ *  - `<SimbaVideo>` — the video picture. It is an ordinary view in
+ *    the consumer's own React tree, so React Native owns the
+ *    layout, the z-order and the lifecycle. Playback and
+ *    Picture-in-Picture are properties of the engine, not of the
+ *    view, so they work from any component via
+ *    `usePlayer().commands`.
+ *
+ * `<SimbaPlayer>` is the one-import, one-wrapper integration point:
+ * it mounts `<PlayerProvider>` (state + commands) and the resume
+ * lookup for you. A consumer that drives the player itself wraps its
+ * tree in `<PlayerProvider>` once and renders `<SimbaVideo>` for the
+ * picture.
  */
 
 export {

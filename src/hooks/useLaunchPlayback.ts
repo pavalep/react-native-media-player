@@ -16,15 +16,24 @@ import { loadAndPlay } from '../bridge/loadAndPlay';
  *
  * The previous implementation called `bridge.loadFile(uri)` in the
  * render body of `<PlayerRoot>`. `<PlayerProvider>` re-renders the
- * whole tree roughly once a second (the 1 Hz position poll drives
- * `state` updates), so every one of those re-renders fired another
- * `loadFile` — wasteful, and on some Android builds it races with
- * mpv's internal state and knocks the surface back to black for a
- * frame (D-035 #3).
+ * whole tree as the native event stream drives `state` updates, so
+ * every one of those re-renders fired another `loadFile` —
+ * wasteful, and on some Android builds it races with mpv's internal
+ * state and knocks the surface back to black for a frame (D-035 #3).
  *
- * Keying the effect on `${uri}|${startPositionSec}` means it fires once
- * when a real payload appears, then never again until the URI actually
- * changes — i.e. a subsequent `openPlayer(...)` for different media.
+ * Keying the effect on a launch-identity string means it fires once
+ * when a real payload appears, then never again for the same launch.
+ *
+ * The key is `${requestId ?? ''}|${uri}|${startPositionSec}`. The
+ * `requestId` prefix is load-bearing, not decoration: without it the
+ * key was `uri|position`, which is not unique across launches. That
+ * was only ever sound because each launch used to start a fresh
+ * Activity (fresh React root → fresh mount → the effect always
+ * fired). A consumer that loads into an already-open window keeps
+ * this hook mounted, so re-launching the same file at the same
+ * position would produce the same key, skip the load, and the user
+ * would press play and see nothing. The inline comment above the
+ * key carries the same rationale next to the code.
  *
  * `startPositionMs` is converted to seconds because mpv's
  * `seekAbsolute` is in seconds, while the launch payload is authored

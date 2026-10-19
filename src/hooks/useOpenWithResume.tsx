@@ -33,15 +33,15 @@ const PlayerResumeContext = createContext<PlayerResumeLookup | null>(null);
 
 /**
  * Wrap the consumer app (or any subtree) with a resume lookup.
- * Place this ABOVE every call site of `useOpenWithResume()`. In
- * practice, wrap the same subtree as `<PlayerProvider>` (Phase 54
- * will compose them in PlayerActivity, but for now the consumer
- * can wrap at App.tsx).
+ * Place this ABOVE every call site of `useOpenWithResume()` — the
+ * hook reads the lookup from a React context, so a provider that
+ * sits BELOW a call site is invisible to it.
  *
- * The actual JSX component lives in `PlayerResumeProvider.tsx` (a
- * `.tsx` file) so the legacy JSX transform doesn't reject the
- * `React.ReactElement` return type. This module re-exports it
- * through the index.
+ * `<SimbaPlayer>` mounts this provider for you (it wraps its
+ * children in `<PlayerResumeProvider>`), so the normal case is to
+ * mount nothing at all. The provider is exported from the package
+ * index for the case where a consumer needs the lookup on its own —
+ * outside `<SimbaPlayer>`, or in a subtree that is not under it.
  *
  * @example
  * ```tsx

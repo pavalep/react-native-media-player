@@ -22,7 +22,8 @@ import { loadAndPlay } from '../bridge/loadAndPlay';
  *  - `artist`       — `onPropertyChanged('metadata')` (parsed), hydration
  *  - `album`        — `onPropertyChanged('metadata')` (parsed), hydration
  *  - `isPlaying`    — `onPlaybackStateChanged`, `onEndFile`, `onPlaybackRestart`
- *  - `positionMs`   — 1Hz `bridge.getPosition()` poll + `onPositionChanged`
+ *  - `positionMs`   — `onPositionChanged` + hydration (the native event
+ *                     stream is authoritative; there is no position poll)
  *  - `durationMs`   — `onDurationChanged` + `onFileLoaded.file.duration` + hydration
  *  - `isBuffering`  — `onBuffering`
  *  - `isSeeking`    — `onSeeking`
@@ -111,8 +112,11 @@ export interface PlaylistEntry {
  * `usePlayerProgress()` is separate from `usePlayer()` so consumers
  * that only need position/duration don't re-render on every
  * `onPropertyChanged('volume')` etc. The provider updates the
- * progress context ONLY on 1Hz ticks + the dedicated event updates
- * (`isBuffering`, `isSeeking`, `seekable`, `cacheRanges`, `cacheFill`).
+ * progress context from the native mpv event stream — position and
+ * duration arrive on the property events (4 Hz after native
+ * coalescing), and `isBuffering` / `isSeeking` / `seekable` /
+ * `cacheRanges` / `cacheFill` each have their own dedicated event —
+ * plus a one-shot hydration read at mount.
  */
 export interface PlayerProgress {
   // ── V12 surface (preserved) ───────────────────────────────────────────
@@ -141,7 +145,16 @@ export interface PlayerProgress {
    * byte offsets would claim that unbuffered data is buffered.
    */
   cacheRanges: Array<{ start: number; end: number }>;
-  /** Cache fill percent (0..100), from mpv's `cache-buffering-state`. */
+  /**
+   * Cache fill percent (0..100). From the dedicated `onCacheFill`
+   * event, which the native bridge feeds from mpv's
+   * `cache-buffering-state`.
+   *
+   * It is a LEVEL, not a stall: a partially filled cache is the
+   * normal state during playback. `isBuffering` is owned by
+   * `onBuffering` (mpv's `paused-for-cache`), so the two can never
+   * contradict each other.
+   */
   cacheFill: number;
 }
 
@@ -152,9 +165,9 @@ export interface PlayerProgress {
  * brightness, openPlayer, etc.).
  *
  * All methods resolve the bridge lazily at call time, so a stable
- * command object is built once at module load. The 1Hz-poll progress
- * context and the heavy event-subscription state context are
- * separate from the commands.
+ * command object is built once at module load. The event-driven
+ * progress context and the heavy event-subscription state context
+ * are separate from the commands.
  */
 export interface PlayerCommands {
   // ── V12 surface (preserved) ───────────────────────────────────────────
@@ -782,8 +795,8 @@ const BUILT_COMMANDS: PlayerCommands = buildCommands();
  * V13 Phase 51: hook returning the player's current state + commands.
  *
  * When called inside a `<PlayerProvider>`, the `state` object is
- * driven by mpv events (via `subscribePlayerEvent`) and the 1Hz
- * position/duration poll. Outside a provider, `state` is
+ * driven by mpv events (via `subscribePlayerEvent`) plus a one-shot
+ * hydration read at mount. Outside a provider, `state` is
  * `DEFAULT_STATE` (no throw — see Phase 24 design notes: this
  * hook is non-throwing so DefaultControls can render in any
  * environment, including web previews and tests).
@@ -822,9 +835,10 @@ export function usePlayer(): UsePlayerResult {
  * volume / track / chapter change.
  *
  * The provider updates the progress context only on:
- *  - 1Hz `bridge.getPosition()` / `getDuration()` ticks
- *  - `onBuffering` / `onSeeking` / `onSeekable` / `onCacheState`
- *    events
+ *  - the native mpv event stream (position, duration, volume, …)
+ *  - `onBuffering` / `onSeeking` / `onSeekable` / `onCacheState` /
+ *    `onCacheFill` events
+ *  - a one-shot hydration read at mount
  *
  * Outside a provider, returns `DEFAULT_PROGRESS` (`0/0` + falsy
  * progress fields).
@@ -1046,7 +1060,7 @@ export function parseMetadata(
  * and return the next pair. Pure function — no React, no bridge calls.
  *
  * `state` carries the "static-ish" player state (title, isPlaying,
- * volume, tracks, etc.) and `progress` carries the "1Hz-pollable"
+ * volume, tracks, etc.) and `progress` carries the fast-moving
  * fields (position, duration, isBuffering, isSeeking, seekable,
  * cacheRanges, cacheFill). The two are kept separate so consumers
  * that only render a scrubber (using `usePlayerProgress`) don't

@@ -398,10 +398,25 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                     }
                 }
                 // `demuxer-cache-state` carries the buffered ranges — the
-                // grey overlay on the seek bar. Each range is
-                // `{start, end, flags}` in MPV; we extract `start`/`end`
-                // and forward them as a list so JS can paint the buffered
-                // region.
+                // grey overlay on the seek bar.
+                //
+                // MEASURED against mpv's own source (2026-10-19). Each entry
+                // of `seekable-ranges` is `{start, end}` and NOTHING else:
+                // mpv's `mp_property_demuxer_cache_state` adds exactly those
+                // two doubles per range (mpv's `player/command.c`). There
+                // are no `flags`.
+                //
+                // And they are NOT the file's seekable extent. mpv derives
+                // them in `update_seek_ranges()` (mpv's `demux/demux.c`)
+                // from the demux queue's PACKET extent, so they are the time
+                // spans of the data mpv currently HOLDS — the buffer islands
+                // a seek bar has to draw. (A range's `is_bof`, which mpv
+                // does not put in the node, is what says whether that span
+                // still starts at the beginning of the file.)
+                //
+                // So a consumer that paints these as "buffered" is painting
+                // the truth, and one that reads them as "how long the file
+                // is" is not.
                 //
                 // The ranges leave this bridge in MILLISECONDS. mpv reports
                 // `seekable-ranges` in seconds, and the bridge is the only

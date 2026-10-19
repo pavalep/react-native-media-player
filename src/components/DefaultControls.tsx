@@ -20,12 +20,12 @@ import { useTheme } from './PlayerProvider';
 import { usePlayer, usePlayerProgress } from '../types/player';
 
 /**
- * Phase 24: full polished default controls component.
+ * The default controls component.
  *
  * Layout (top → bottom):
  *  1. **Top bar**: close (✕) + title + spacer for future more-menu.
- *  2. **Center**: empty placeholder (Phase 25 adds loading spinner /
- *     error state / buffer indicator here).
+ *  2. **Center**: empty — reserved for the loading spinner / error
+ *     state / buffer indicator.
  *  3. **Bottom bar**: time-current / scrubber / time-total + skip
  *     back / play-pause / skip forward.
  *
@@ -41,9 +41,10 @@ import { usePlayer, usePlayerProgress } from '../types/player';
  * is `theme.background` with reduced opacity, so it harmonises with
  * the consumer's theme in dark / light / brand-color modes.
  *
- * Phase 24 wires the commands to the `MpvPlayerModule` bridge (Phase
- * 23's `usePlayer()` stub is now real). Phase 25 wires
- * `usePlayerProgress()` to the 1Hz position poll + mpv events.
+ * The commands are wired to the `MpvPlayerModule` bridge, so play /
+ * pause / seek actually drive mpv. Progress comes from
+ * `usePlayerProgress()`, which is fed by the native mpv event
+ * stream — there is no JS-side position poll.
  */
 
 const AUTO_HIDE_TIMEOUT_MS = 3000;
@@ -70,9 +71,9 @@ export interface DefaultControlsProps {
   onPause?: () => void;
   /**
    * V22.0.0 / 1.5.8 (D-035 fix #4): handler for the close ✕ button
-   * (top-left). PlayerRoot wires this to `bridge.exitPipAndFinish()`
-   * which dismisses the PlayerActivity. When omitted, the ✕ falls
-   * back to `onPause` (matches the V21 behaviour that had no
+   * (top-left). PlayerRoot wires this to `bridge.exitPipAndFinish()`,
+   * which dismisses the player UI and leaves PiP. When omitted, the
+   * ✕ falls back to `onPause` (matches the V21 behaviour that had no
    * dedicated close).
    */
   onClose?: () => void;
@@ -300,13 +301,13 @@ export function DefaultControls(props: DefaultControlsProps = {}): React.ReactEl
               </Text>
             ) : null}
           </View>
-          {/* Spacer to keep the title centred; Phase 25 will add a
-              real more-menu icon here. */}
+          {/* Spacer to keep the title centred; reserved for a
+              more-menu icon. */}
           <View style={styles.iconButton} />
         </View>
 
-        {/* Center: placeholder (loading / error / buffer land here in
-            Phase 25 — the empty View keeps the top + bottom bars
+        {/* Center: reserved for the loading / error / buffer
+            indicator (the empty View keeps the top + bottom bars
             pinned to the edges via flex layout.) */}
         <View style={styles.center} />
 
