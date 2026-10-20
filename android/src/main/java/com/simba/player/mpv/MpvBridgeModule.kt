@@ -31,7 +31,8 @@ import org.json.JSONObject
  */
 @ReactModule(name = MpvBridgeModule.NAME)
 class MpvBridgeModule(reactContext: ReactApplicationContext) :
-    NativeMpvPlayerSpec(reactContext) {
+    NativeMpvPlayerSpec(reactContext),
+    android.content.ComponentCallbacks2 {
 
     companion object {
         const val NAME = "MpvPlayerModule"
@@ -1105,6 +1106,12 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     @Override
     override fun loadFile(path: String) {
         ensurePtr()
+        // A new file gets the FULL prefetch window. A previous
+        // memory-pressure trim reduced it, and without this the
+        // reduction would persist for the rest of the process, leaving
+        // every later playback with a 10 s buffer — and therefore an
+        // invisible buffered band.
+        applyCacheWindow(baseCacheWindowSecs, "new load")
         val resolvedPath = normalizeMpvInput(resolveContentUri(path))
         Log.i(TAG, "[PlaybackTrace][Bridge][loadFile] requested=$path resolved=$resolvedPath ptr=$nativePtr")
         emitLoadRequested(path)
@@ -1121,6 +1128,9 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     @Override
     override fun loadFileWithRequestId(path: String, requestId: String) {
         ensurePtr()
+        // Same reasoning as `loadFile`: a new file restores the full
+        // prefetch window after any memory-pressure trim.
+        applyCacheWindow(baseCacheWindowSecs, "new load")
         if (requestId.isBlank()) {
             loadFile(path)
             return
@@ -1748,23 +1758,87 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     /**
-     * Phase 39 + Phase 38.7: react to system memory pressure by reducing
-     * mpv's cache. Registered as a ComponentCallbacks2 listener in
-     * PlayerActivity.onCreate; called by the system when the process
-     * is at a trim level.
+     * The prefetch / cache window, in seconds, used when the system is
+     * NOT under memory pressure.
+     *
+     * MUST match `cache-secs` and `demuxer-readahead-secs` in
+     * `android/src/main/cpp/main.cpp` — the two places that set the
+     * same policy, kept in step deliberately.
+     *
+     * 300 s is chosen so the buffered band a seek bar paints is
+     * WIDER than the scrub thumb that sits on top of it. A 14 dp
+     * thumb covers 3.04 % of a 230 dp rail; 300 s is 6.1 % of a
+     * feature-length film and 120 s was only 2.44 %, so at 120 s the
+     * thumb covered the entire visible band and the buffered
+     * indicator could not be seen at all (measured on device
+     * 2026-10-20: track 690 px, band 16 px, thumb half-width 21 px).
+     */
+    private val baseCacheWindowSecs = 300
+
+    /**
+     * Apply a cache / prefetch window to BOTH mpv options that govern it.
+     *
+     * mpv computes the demuxer's read-ahead target as the MAXIMUM of
+     * the two options, not as one overriding the other:
+     *
+     *   mpv `demux/demux.c`, `update_opts()`:
+     *       in->min_secs = opts->min_secs;            // demuxer-readahead-secs
+     *       if (use_cache)
+     *           in->min_secs = MPMAX(in->min_secs, opts->min_secs_cache);
+     *                                                       // cache-secs
+     *
+     * `update_opts()` re-runs on EVERY config change, so trimming only
+     * `cache-secs` would leave `in->min_secs` pinned at the readahead
+     * value and the trim would have NO effect at all. Both options
+     * therefore always move together. That is a property of mpv, not a
+     * style choice.
+     */
+    private fun applyCacheWindow(seconds: Int, reason: String) {
+        if (nativePtr == 0L) return
+        try {
+            MPVLib.setPropertyString(nativePtr, "cache-secs", seconds.toString())
+            MPVLib.setPropertyString(nativePtr, "demuxer-readahead-secs", seconds.toString())
+            Log.w(
+                TAG,
+                "[PlaybackTrace][Bridge][cacheWindow] $reason → cache-secs=$seconds " +
+                    "demuxer-readahead-secs=$seconds",
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "[PlaybackTrace][Bridge][cacheWindow] $reason failed: ${e.message}", e)
+        }
+    }
+
+    /**
+     * System memory pressure: shrink the prefetch window.
+     *
+     * This module implements `ComponentCallbacks2` and is registered
+     * with the application context in `initialize()` (and unregistered
+     * in `onCatalystInstanceDestroy()`), so the system actually
+     * reaches this. An earlier version of this file documented a
+     * `PlayerActivity.onCreate` registration that did not exist, so the
+     * handler was DEAD: the buffer was never reduced, and the
+     * documented policy was fiction.
      *
      * Levels:
-     *  - TRIM_MEMORY_RUNNING_MODERATE (5)  → cache-secs=10
-     *  - TRIM_MEMORY_RUNNING_LOW (10)      → cache-secs=5
-     *  - TRIM_MEMORY_RUNNING_CRITICAL (15) → cache-secs=2
-     *  - TRIM_MEMORY_BACKGROUND (40)       → cache-secs=10
-     *  - TRIM_MEMORY_COMPLETE (80)         → cache-secs=0
+     *  - TRIM_MEMORY_RUNNING_MODERATE (5)  → 10 s
+     *  - TRIM_MEMORY_RUNNING_LOW (10)      → 5 s
+     *  - TRIM_MEMORY_RUNNING_CRITICAL (15) → 2 s
+     *  - TRIM_MEMORY_BACKGROUND (40)       → 10 s
+     *  - TRIM_MEMORY_COMPLETE (80)         → 0 s
      *
-     * Public so PlayerActivity can register the listener (it has the
-     * Application context for ComponentCallbacks2 registration).
+     * A trim is a REACTION to pressure, not a new setting: loading a
+     * file restores the base window, so the reduction is not a
+     * permanent ratchet that leaves every later playback with a 10 s
+     * buffer — and therefore an invisible buffered band.
      */
-    fun onTrimMemory(level: Int) {
-        if (nativePtr == 0L) return
+    // `ComponentCallbacks2.onTrimMemory(int)` and the `TRIM_MEMORY_*`
+    // constants carry `@Deprecated` from API 35, but this 1-arg method
+    // is the ONLY trim callback the platform exposes — checked against
+    // the installed android-34 / 35 / 36 / 36.1 jars, none of them has a
+    // 2-arg overload. Implementing it is therefore the only way a
+    // memory-pressure policy can run at all.
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    override fun onTrimMemory(level: Int) {
         val cacheSecs: Int = when (level) {
             android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> 10
             android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> 5
@@ -1773,12 +1847,25 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> 0
             else -> return  // unknown level — no change
         }
-        try {
-            MPVLib.setPropertyString(nativePtr, "cache-secs", cacheSecs.toString())
-            Log.w(TAG, "[PlaybackTrace][Bridge][onTrimMemory] level=$level → cache-secs=$cacheSecs")
-        } catch (e: Exception) {
-            Log.w(TAG, "[PlaybackTrace][Bridge][onTrimMemory] setPropertyString failed: ${e.message}", e)
-        }
+        applyCacheWindow(cacheSecs, "trim level=$level")
+    }
+
+    /**
+     * `ComponentCallbacks2` also requires `onLowMemory` — the
+     * platform's "you are about to be killed" signal. The window goes
+     * to zero.
+     */
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    override fun onLowMemory() {
+        applyCacheWindow(0, "low memory")
+    }
+
+    /**
+     * Required by `ComponentCallbacks2`. The cache window does not
+     * depend on the configuration, so there is nothing to do.
+     */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        // no-op by design
     }
 
     @ReactMethod
@@ -1796,6 +1883,9 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     override fun initialize() {
         super.initialize()
         MPVLib.addListener(mpvListener)
+        // Register the memory-pressure callback so `onTrimMemory` /
+        // `onLowMemory` are actually reached by the platform.
+        reactApplicationContext.registerComponentCallbacks(this)
         // Phase 39: native module init logging. Logs the key
         // properties of the bridge on init so dev tools can confirm
         // the module is wired + report version/build info. Use
@@ -1811,6 +1901,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     override fun onCatalystInstanceDestroy() {
         destroy()
         MPVLib.removeListener(mpvListener)
+        reactApplicationContext.unregisterComponentCallbacks(this)
         // Phase 36: clear the static ReactApplicationContext reference so the
         // bridge context can be reclaimed. Companion-level static fields hold
         // the only strong reference to the React context across reloads;

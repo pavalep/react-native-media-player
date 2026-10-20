@@ -241,28 +241,76 @@ Java_com_simba_player_mpv_MPVLib_nativeCreate(JNIEnv *env, jclass, jstring caFil
     //
     //   • cache=yes              : enable a RAM cache even for non-network
     //                              sources (so seek-back is instant).
-    //   • cache-secs=120         : keep ~2 minutes of stream ahead of the
+    //   • cache-secs=300         : keep ~5 minutes of stream ahead of the
     //                              playhead in RAM. Big enough to absorb a
     //                              brief re-buffer without a spinner, small
     //                              enough to stay under mobile RAM limits.
+    //
+    //                              This was 120 s, and 120 s is not enough to
+    //                              SEE. The buffered range a consumer draws
+    //                              is the span between the playhead and the
+    //                              end of the buffer, and the seek bar's thumb
+    //                              covers 3.04 % of the track (a 14 dp thumb on
+    //                              a 230 dp rail). On a feature-length film
+    //                              120 s is 2.44 % of the file — LESS than
+    //                              the thumb — so the thumb covered the whole
+    //                              visible band and the buffered indicator
+    //                              could not be seen at all. Measured on
+    //                              device (2026-10-20): track 690 px, band
+    //                              16 px, thumb half-width 21 px. 300 s is
+    //                              6.1 % of the same film, so the band
+    //                              clears the thumb.
     //   • demuxer-max-bytes      : hard upper bound on the cache size in
     //                              bytes (≈150 MB). Prevents OOM on large
     //                              VOD files over HTTP.
+    //
+    //                              This is the SECOND bound on how far
+    //                              the buffered band can reach: 300 s of
+    //                              video only fits in 150 MB at ≤4 Mbit/s,
+    //                              so above that bitrate the byte cap
+    //                              binds first and the band is shorter
+    //                              than 300 s. The band was measured on
+    //                              device rather than assumed.
     //   • demuxer-max-back-bytes : how far backwards the cache retains
     //                              data (~75 MB). This is what makes
     //                              "seek back 30 s" instantaneous.
     //   • demuxer-readahead-secs : how many seconds of stream to prefetch
     //                              ahead of the playhead.
+    //
+    //                              It is NOT independent of `cache-secs`.
+    //                              mpv computes the demuxer's read-ahead
+    //                              target as the MAXIMUM of the two —
+    //                              mpv `demux/demux.c`, `update_opts()`:
+    //
+    //                                  in->min_secs = opts->min_secs;   // readahead
+    //                                  if (use_cache)
+    //                                      in->min_secs = MPMAX(in->min_secs,
+    //                                                          opts->min_secs_cache);
+    //                                                                 // cache-secs
+    //
+    //                              `update_opts()` re-runs on EVERY config
+    //                              change, so the two must be raised AND
+    //                              lowered together. That is why the runtime
+    //                              memory-pressure trim in
+    //                              `MpvBridgeModule.onTrimMemory` writes
+    //                              BOTH — trimming only `cache-secs` would
+    //                              leave the read-ahead pinned and the trim
+    //                              would have no effect at all.
+    //
+    //                              The span between the playhead and the end
+    //                              of the buffer is exactly what a consumer
+    //                              paints as its buffered range, so this
+    //                              value is what makes that span visible.
     //   • demuxer-termination-timeout : if a network read stalls, fail
     //                              the demuxer so the player can recover
     //                              instead of hanging forever.
     //   • prefetch-playlist=yes  : proactively fetch the next playlist
     //                              entry (HLS / DASH) to enable gapless.
     mpv_set_option_string(mpv, "cache", "yes");
-    mpv_set_option_string(mpv, "cache-secs", "120");
+    mpv_set_option_string(mpv, "cache-secs", "300");
     mpv_set_option_string(mpv, "demuxer-max-bytes", "150MiB");
     mpv_set_option_string(mpv, "demuxer-max-back-bytes", "75MiB");
-    mpv_set_option_string(mpv, "demuxer-readahead-secs", "120");
+    mpv_set_option_string(mpv, "demuxer-readahead-secs", "300");
     mpv_set_option_string(mpv, "demuxer-termination-timeout", "10");
     mpv_set_option_string(mpv, "prefetch-playlist", "yes");
 

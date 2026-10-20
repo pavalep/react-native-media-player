@@ -1,4 +1,50 @@
 
+## [1.19.0] - 2026-10-20
+
+### Fixed
+
+- **The buffered range was drawn, but a consumer could never SEE it — because the cache was smaller than the seek bar's thumb.**
+
+  The lib's `cache-secs` was 120 s, and 120 s is not enough for the buffered indicator to be legible on a feature-length film.
+
+  The buffered range a consumer draws is the span between the playhead and the end of the buffer. The seek bar's thumb covers 3.04 % of the track (a 14 dp thumb on a 230 dp rail), so the band is only visible between the playhead and the end of the buffer — and the band's width is `cache-secs` as a fraction of the file.
+
+  Measured on device (2026-10-20, emulator-5554, a 1:21:58 film):
+
+  | quantity | measured |
+  |---|---|
+  | track width | 690 px (230 dp) |
+  | thumb | 14 dp = 42 px, so its **half** is 21 px (3.04 %) |
+  | buffered band | 120 s = 2.44 % = **16 px** |
+
+  16 px of band under a 21 px thumb-half: the indicator was painted and the thumb covered **all** of it. The band could only be seen if the buffer were larger than the thumb.
+
+  `cache-secs` and `demuxer-readahead-secs` are now **300 s**, which is 6.1 % of the same film — a 42 px band, which clears the thumb. `demuxer-readahead-secs` has to move with it: the prefetch distance is what decides how far the buffer can extend ahead of the playhead, and that span is exactly what the consumer paints.
+
+  Memory is still bounded by the two guards that were already in place: `demuxer-max-bytes` (150 MiB) is the hard cap on the cache, and the memory-pressure trim drops the window to 10 / 5 / 2 / 0 s when the system is short on memory. A 5-minute cushion is also simply a better streaming buffer than a 2-minute one.
+
+  The 150 MiB byte cap is the **second** bound on the band, and it binds before the 300 s does above roughly 4 Mbit/s — so on a high-bitrate source the band is shorter than 300 s. That is measured on device, not assumed.
+
+  The buffered range was additionally invisible for a second, independent reason until **1.18.0**: the progress context was losing `durationMs`, which emptied the window the band is drawn in.
+
+- **The memory-pressure trim was dead code, and it moved only one of the two options mpv actually reads.**
+
+  `MpvBridgeModule.onTrimMemory` documented itself as *"Registered as a ComponentCallbacks2 listener in `PlayerActivity.onCreate`"*. No such registration existed anywhere in the lib, so the handler was never called and the buffer was never reduced — the documented policy was fiction.
+
+  The module now implements `ComponentCallbacks2` and registers itself with the application context in `initialize()` (unregistering in `onCatalystInstanceDestroy()`), so the platform actually reaches it.
+
+  It also moves **both** `cache-secs` and `demuxer-readahead-secs` now, and that is not a style choice. mpv computes the demuxer's read-ahead target as the **maximum** of the two (`demux/demux.c`, `update_opts()`):
+
+  ```c
+  in->min_secs = opts->min_secs;                             // demuxer-readahead-secs
+  if (use_cache)
+      in->min_secs = MPMAX(in->min_secs, opts->min_secs_cache);   // cache-secs
+  ```
+
+  `update_opts()` re-runs on every config change, so trimming only `cache-secs` would leave `in->min_secs` pinned at the readahead value and the trim would have had **no effect at all** — which the 300 s read-ahead above would have exposed.
+
+  A trim is a *reaction* to pressure, not a new setting: loading a file restores the base window, so the reduction is not a permanent ratchet that leaves every later playback with a 10 s buffer — and therefore an invisible buffered band.
+
 ## [1.18.0] - 2026-10-20
 
 ### Fixed
