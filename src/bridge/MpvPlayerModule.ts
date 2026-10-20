@@ -110,9 +110,10 @@ export interface LaunchParams {
   readonly requestId?: string;
 }
 
-/** All 22 events emitted by the Kotlin bridge. */
+/** All 23 events emitted by the Kotlin bridge. */
 export type PlayerEventName =
   | 'onFileLoaded'
+  | 'onLoadRequested'
   | 'onPlaybackStateChanged'
   | 'onPositionChanged'
   | 'onDurationChanged'
@@ -141,6 +142,16 @@ export type PlayerEventName =
 /** Typed payload map for each event. */
 export interface PlayerEventPayloads {
   onFileLoaded: { requestId?: string; resolvedPath?: string; file?: MpvFileInfo };
+  /**
+   * A load has been REQUESTED and the engine has not reported the file
+   * yet. v1.17.0.
+   *
+   * This is the "the file is opening" signal, and it cannot be derived
+   * by a consumer: mpv's core state is "playing" from the moment
+   * `loadfile` is called until the file has been parsed, so a phase
+   * derived from `isPlaying` can never tell "opening" from "playing".
+   */
+  onLoadRequested: { uri?: string; requestId?: string };
   onPlaybackStateChanged: { state: MpvPlaybackState };
   onPositionChanged: { position: number };
   onDurationChanged: { duration: number };
@@ -972,9 +983,10 @@ export function removeAllListeners(event?: PlayerEventName): void {
   }
 }
 
-/** All 22 player event names — used by `removeAllListeners()` to iterate when no event is specified. */
+/** All 23 player event names — used by `removeAllListeners()` to iterate when no event is specified. */
 const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
   'onFileLoaded',
+  'onLoadRequested',
   'onPlaybackStateChanged',
   'onPositionChanged',
   'onDurationChanged',

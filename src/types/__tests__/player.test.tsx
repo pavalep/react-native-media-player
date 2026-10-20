@@ -783,9 +783,10 @@ describe('usePlayerProgress', () => {
 // ── PlayerState default integrity ───────────────────────────────────────────
 
 describe('PlayerState default integrity', () => {
-  it('PlayerState has 21 fields in DEFAULT_STATE', async () => {
+  it('PlayerState has 22 fields in DEFAULT_STATE', async () => {
     // Sanity check: V13 expanded the V12 4-field state to 20 fields.
     // V22.0.0 / 1.6.0 added `shuffle`, bringing it to 21.
+    // v1.17.0 added `isLoading` — the "a load is in flight" fact — 22.
     // If a future refactor accidentally drops a field (e.g. by
     // using `Partial<PlayerState>` somewhere), this catches it.
     const keys = Object.keys(DEFAULT_STATE).sort();
@@ -798,6 +799,7 @@ describe('PlayerState default integrity', () => {
       'durationMs',
       'error',
       'isBuffering',
+      'isLoading',
       'isMuted',
       'isPlaying',
       'isSeeking',

@@ -1,4 +1,36 @@
 
+## [1.17.0] - 2026-10-20
+
+### Added
+
+- **`PlayerState.isLoading` — "a load is in flight".** The lib could not tell a consumer that a file was *opening*, and no consumer could derive it either.
+
+  mpv's core state is `"playing"` from the moment `loadfile` is called until the file has been parsed, and the playlist is not populated until the file arrives. So during a load the only two phases a consumer could compute were `"playing"` (the engine had been told to play) and `"idle"` (no playlist entry yet) — and neither is the truth.
+
+  Measured on device (Android 37, archive.org over a throttled link): `loadFile` at 15:36:51, `fileLoaded` at 15:37:00 — **a 9-second window with no loading indicator at all**, because the app had nothing true to render.
+
+  `onLoadRequested` is now emitted by the native bridge the moment a load is requested (before the native call, so the consumer sees "opening" for the whole load), and `PlayerState.isLoading` is true from that event until `onFileLoaded` (the file arrived) or `onEndFile` (the file ended, or failed). The window is the lib's to own: it is the only layer that knows a load was asked for.
+
+### Fixed
+
+- **Every playback failure was reported as `E_RENDERER_GONE`, and the error code reached the app as `NaN`.**
+
+  Two defects, both visible in one device log line:
+
+  ```
+  [listener:error] code=-1 recoverable=false message=AudioTrack Init failed
+  [error] code=E_RENDERER_GONE numeric=0 message=AudioTrack Init failed
+  ```
+
+  - The native bridge emitted `onError` **twice**: once with a numeric `code` + `codeName`, and then again with `putString("code", mappedCode)` — a **string**, where the contract declares `code: number`. The second emission overwrote the first, so the app read `Number("E_RENDERER_GONE")` → `NaN`, and the structured code was `0` for every failure. The error is now emitted **once**, with a numeric `code`, a `codeName`, the raw `nativeCode`, `recoverable` and `message`.
+  - The mapping collapsed every terminal failure into `E_RENDERER_GONE` ("the video output died"), including a plain load failure. mpv's numeric code is now the primary signal — `mpv/include/mpv/client.h`'s `mpv_error`: `-13` `LOADING_FAILED` → `E_LOAD_FAILED`, `-14` → `E_AUDIO_INIT_FAILED`, `-15` → `E_VIDEO_INIT_FAILED`, `-16` → `E_NOTHING_TO_PLAY`, `-17` → `E_UNKNOWN_FORMAT`, `-18` → `E_UNSUPPORTED_CODEC`, `-20` → `E_GENERIC`, plus the API-level codes. The message heuristics remain as the fallback for codes that say nothing themselves. The `3xxx` numeric range is now in use for playback failures.
+
+- **A fatal mpv *log line* could end playback's error state while the video kept playing.**
+
+  The native bridge promoted any `fatal`-level mpv log line to a playback failure, with a fabricated `-1` as the code — `-1` is `MPV_ERROR_EVENT_QUEUE_FULL`, so the sentinel collided with a real mpv code. The same file already documented the opposite rule ("terminal failures are reported through `MPV_EVENT_END_FILE`").
+
+  On the emulator (no audio device) mpv logged `AudioTrack Init failed` at fatal level while the video played on, and the app covered the working picture with a terminal error card. A fatal log line is now reported with the honest code (`MPV_ERROR_GENERIC`) and marked `recoverable: true`, which means **"playback continued"**. `recoverable: false` remains the terminal case (mpv's `END_FILE` — the file failed).
+
 ## [1.9.0] - 2026-10-02
 
 ### Fixed

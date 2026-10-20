@@ -182,7 +182,7 @@ function PlayerStateProvider({
 }
 
 /**
- * All 22 player event names. Must match `PlayerEventName` in
+ * All 23 player event names. Must match `PlayerEventName` in
  * `MpvPlayerModule.ts` (and the Kotlin `MpvBridgeModule.kt`
  * `RCTDeviceEventEmitter` strings).
  *
@@ -192,6 +192,7 @@ function PlayerStateProvider({
  */
 const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
   'onFileLoaded',
+  'onLoadRequested',
   'onPlaybackStateChanged',
   'onPositionChanged',
   'onDurationChanged',

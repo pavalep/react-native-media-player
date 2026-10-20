@@ -137,13 +137,28 @@ describe('Phase 38 — error code constants (consumer contract)', () => {
     'E_OUT_OF_MEMORY',
     'E_AUDIO_FOCUS_LOST',
     'E_SURFACE_LOST',
+    // v1.17.0 — the mpv error codes, mapped from `mpv_error` in mpv's
+    // `include/mpv/client.h`. These replaced the "every terminal
+    // failure is E_RENDERER_GONE" catch-all, which made a load failure
+    // indistinguishable from a dead video output.
+    'E_LOAD_FAILED',
+    'E_AUDIO_INIT_FAILED',
+    'E_VIDEO_INIT_FAILED',
+    'E_NOTHING_TO_PLAY',
+    'E_UNKNOWN_FORMAT',
+    'E_GENERIC',
+    'E_NOT_IMPLEMENTED',
+    'E_INVALID_PARAMETER',
+    'E_OPTION_NOT_FOUND',
+    'E_PROPERTY_NOT_FOUND',
+    'E_COMMAND_FAILED',
   ];
 
-  it('exposes the 15 documented error codes as a frozen contract', () => {
+  it('exposes the 26 documented error codes as a frozen contract', () => {
     // The list itself is not exported from the module — it's
     // documented in ERROR_CONTRACT.md. This test pins the list so
     // a drift between docs and code fails CI.
-    expect(DOCUMENTED_ERROR_CODES).toHaveLength(15);
+    expect(DOCUMENTED_ERROR_CODES).toHaveLength(26);
   });
 
   it('error codes follow the E_UPPER_SNAKE_CASE convention', () => {

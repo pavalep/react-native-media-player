@@ -51,6 +51,22 @@ export interface PlayerState {
   // ── V12 surface (preserved) ───────────────────────────────────────────
   /** True when mpv is actively playing (not paused, not stopped). */
   isPlaying: boolean;
+  /**
+   * True while a load is IN FLIGHT: the engine has been asked for a file
+   * and has not reported it yet. v1.17.0.
+   *
+   * This is the "the file is opening" fact, and it belongs to the lib
+   * because no consumer can derive it. mpv's core state is "playing"
+   * from the moment `loadfile` is called until the file has been
+   * parsed, so a phase derived from `isPlaying` can never tell
+   * "opening" from "playing" — and the playlist is not populated yet
+   * either, so "idle" is just as wrong.
+   *
+   * Device evidence (2026-10-20): a 9-second load over a throttled link
+   * showed NO loading indicator at all, because neither of the two
+   * available phases was the truth.
+   */
+  isLoading: boolean;
   /** Track title (from mpv `media-title` → launch title → "Simba Player"). */
   title: string;
   /** Track artist (from mpv `metadata/by-key/artist`). Empty when untagged. */
@@ -89,7 +105,19 @@ export interface PlayerState {
   currentChapter: MpvChapter | null;
   /** Video stream params (resolution, fps, codec). null for audio-only files. */
   videoParams: MpvVideoParams | null;
-  /** Last error reported by mpv. Cleared on the next `onFileLoaded`. */
+  /**
+   * Last error reported by mpv. Cleared on the next `onFileLoaded`.
+   *
+   * `code` is the lib's stable NUMERIC code. It is never a string: the
+   * native payload used to carry one, so `Number("E_RENDERER_GONE")`
+   * was NaN and every failure reached the app with `code: NaN`.
+   * `codeName` is the readable string (`E_LOAD_FAILED`, …).
+   *
+   * `recoverable` means "PLAYBACK CONTINUED". false = the failure ended
+   * playback (mpv's END_FILE — the file failed). true = the engine
+   * complained but kept playing, so it is a degradation, not a failure.
+   * v1.17.0.
+   */
   error: { code: number; codeName?: string; recoverable: boolean; message: string } | null;
 
   /** Whether playlist shuffle is currently enabled. mpv `playlist-shuffle`. */
@@ -415,6 +443,7 @@ export const PlayerProgressContext = createContext<PlayerProgress | null>(null);
 export const DEFAULT_STATE: PlayerState = {
   // V12
   isPlaying: false,
+  isLoading: false,
   title: 'Simba Player',
   artist: '',
   album: '',
@@ -1111,6 +1140,13 @@ export function applyPlayerEvent(
   const p = (payload ?? {}) as Record<string, unknown>;
 
   switch (event) {
+    case 'onLoadRequested': {
+      // The engine has been asked for a file and has not reported it
+      // yet: the file is OPENING. This is the window a loading
+      // indicator belongs to, and it is the reason `isLoading` exists —
+      // see `PlayerState.isLoading`.
+      return { state: { ...state, isLoading: true }, progress };
+    }
     case 'onFileLoaded': {
       const file = (p.file ?? undefined) as MpvFileInfo | undefined;
       return {
@@ -1121,6 +1157,8 @@ export function applyPlayerEvent(
             ? Math.round(file.duration * 1000)
             : state.durationMs,
           isPlaying: true,
+          // The file has arrived, so the load is no longer in flight.
+          isLoading: false,
           positionMs: 0,
           error: null, // clear any prior error
         },
@@ -1242,19 +1280,42 @@ export function applyPlayerEvent(
       return { state: { ...state, currentChapter: (p.chapter as MpvChapter | null) ?? null }, progress };
     case 'onVideoParamsChanged':
       return { state: { ...state, videoParams: (p.params as MpvVideoParams) ?? null }, progress };
-    case 'onError':
+    case 'onError': {
+      // The native payload carries a NUMERIC `code` (the lib's stable
+      // integer contract) and a string `codeName`.
+      //
+      // It used to carry a STRING `code`, so `Number("E_RENDERER_GONE")`
+      // was NaN and every failure reached the app with `code: NaN` and
+      // `numeric=0`. A non-finite value now degrades to 0 rather than
+      // poisoning the contract.
+      const rawCode = Number(p.code);
+      const code = Number.isFinite(rawCode) ? rawCode : 0;
+      const recoverable = Boolean(p.recoverable ?? false);
+      const error = {
+        code,
+        codeName: p.codeName != null ? String(p.codeName) : undefined,
+        recoverable,
+        message: String(p.message ?? ''),
+      };
+      // A NON-terminal failure must not mask a terminal one.
+      //
+      // mpv can report a fatal-level LOG line (a subsystem complaint,
+      // playback continued) AFTER the file has already failed, and the
+      // last error to arrive is not necessarily the one that ended
+      // playback. A terminal error stays until the next `onFileLoaded`
+      // clears it — except for a newer TERMINAL error, which wins, so a
+      // retry that fails again reports the new failure and not the
+      // previous one.
+      const keepTerminal =
+        recoverable && state.error != null && !state.error.recoverable;
       return {
         state: {
           ...state,
-          error: {
-            code: Number(p.code ?? 0),
-            codeName: p.codeName != null ? String(p.codeName) : undefined,
-            recoverable: Boolean(p.recoverable ?? false),
-            message: String(p.message ?? ''),
-          },
+          error: keepTerminal ? state.error : error,
         },
         progress,
       };
+    }
     case 'onBuffering': {
       // The STALL signal, and the only thing that may set `isBuffering`.
       //
@@ -1327,7 +1388,8 @@ export function applyPlayerEvent(
         progress: { ...progress, isSeeking: Boolean(p.seeking) },
       };
     case 'onEndFile':
-      return { state: { ...state, isPlaying: false }, progress };
+      // The file is over (ended, or failed). No load is in flight.
+      return { state: { ...state, isPlaying: false, isLoading: false }, progress };
     case 'onPlaybackRestart':
       return {
         state: { ...state, isPlaying: true, positionMs: 0 },

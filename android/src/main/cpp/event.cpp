@@ -500,7 +500,24 @@ void eventLoop() {
                     // error. Fatal decoder/IO failures are not retryable
                     // without a different source, so we mark them
                     // non-recoverable.
-                    callJavaError(-1, log->text ? log->text : "mpv fatal error", requestId.c_str(), /*recoverable=*/false);
+                // A fatal mpv LOG LINE is not proof that playback stopped.
+                //
+                // mpv's authoritative signal for "the file failed" is
+                // MPV_EVENT_END_FILE with a non-zero error code, and that
+                // path is handled above. A log line can be a SUBSYSTEM
+                // complaint while the picture keeps playing: on the
+                // emulator (no audio device) mpv logged "AudioTrack Init
+                // failed" at fatal level while the video played on, and
+                // the app covered the working video with a terminal error
+                // card. That is the same class of bug this file already
+                // guards against for `error`-level lines.
+                //
+                // So it is reported with an HONEST code and marked
+                // non-terminal: `recoverable=true` means "playback
+                // continued", which is the fact. The previous `-1` was a
+                // fabricated sentinel that collided with
+                // MPV_ERROR_EVENT_QUEUE_FULL and read as a real code.
+                callJavaError(MPV_ERROR_GENERIC, log->text ? log->text : "mpv fatal error", requestId.c_str(), /*recoverable=*/true);
                 }
                 break;
             }

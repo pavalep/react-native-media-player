@@ -488,35 +488,79 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
 
         override fun onMpvError(code: Int, recoverable: Boolean, message: String, requestId: String?) {
             Log.e(TAG, "[PlaybackTrace][Bridge][listener:error] code=$code recoverable=$recoverable requestId=${requestId ?: "none"} message=$message")
-            // Phase 38: map the libmpv int code to a structured Phase 38
-            // string code so consumers can switch on a stable contract.
-            // The mapping is best-effort — codes outside our known set
-            // get the generic E_DECODE_FAILED.
-            val mappedCode = when {
-                !recoverable -> "E_RENDERER_GONE"
-                message.contains("network", ignoreCase = true) ||
-                message.contains("Connection refused", ignoreCase = true) ||
-                message.contains("Connection timed out", ignoreCase = true) -> "E_NETWORK_FAILURE"
-                message.contains("codec", ignoreCase = true) ||
-                message.contains("format", ignoreCase = true) ||
-                message.contains("unsupported", ignoreCase = true) -> "E_UNSUPPORTED_CODEC"
-                message.contains("No such file", ignoreCase = true) ||
-                message.contains("not found", ignoreCase = true) -> "E_FILE_NOT_FOUND"
-                else -> "E_DECODE_FAILED"
-            }
-            // Phase 38.6 (deferred → Phase 39): for non-recoverable errors
-            // (the renderer process died), emit the structured event
-            // with recoverable=false so consumers know to call
-            // initPlayer() + loadFile() to recover.
-            emitErrorEvent(mappedCode, message, null)
+            // Map the libmpv error code to the lib's stable string
+            // contract.
+            //
+            // It used to be `!recoverable -> "E_RENDERER_GONE"` FIRST,
+            // so EVERY terminal failure claimed the renderer process had
+            // died — including a plain load failure (-13) and a generic
+            // failure (-20). The app's classifier had nothing to switch
+            // on, and every failure rendered the same "Something went
+            // wrong" card.
+            //
+            // mpv's numeric code is the primary signal (mpv
+            // `include/mpv/client.h`, `mpv_error`). The message
+            // heuristics stay as the FALLBACK for the codes that carry
+            // no information of their own.
+            val mappedCode = mapMpvErrorCode(code, message)
+            // Emit ONCE.
+            //
+            // This used to emit `onError` TWICE: once through
+            // `emitErrorEvent` (numeric `code` + `codeName`) and
+            // then again with `putString("code", mappedCode)` — a
+            // STRING, where the TS contract declares `code: number`.
+            // The second emission overwrote the first, so the app read
+            // `Number("E_RENDERER_GONE")` => NaN, and the device log
+            // showed `numeric=0` for a real failure.
+            //
+            // `recoverable` means "playback continued". mpv's END_FILE
+            // path (the file failed) reports it as false; a fatal-level
+            // mpv LOG line reports true, because a log line is not proof
+            // that playback ended.
+            val numeric = codeToNumeric(mappedCode)
+            Log.w(TAG, "[PlaybackTrace][Bridge][error] code=$mappedCode numeric=$numeric nativeCode=$code recoverable=$recoverable message=$message")
             val payload = Arguments.createMap().apply {
-                putString("code", mappedCode)
+                putInt("code", numeric)
+                putString("codeName", mappedCode)
                 putInt("nativeCode", code)
                 putBoolean("recoverable", recoverable)
                 putString("message", message)
                 if (!requestId.isNullOrBlank()) putString("requestId", requestId)
             }
             eventEmitter.emit("onError", payload)
+        }
+    }
+
+    /**
+     * Announce that a load has been REQUESTED.
+     *
+     * This is the "the file is opening" signal, and it has to come from
+     * here because no consumer can derive it: mpv's core state is
+     * "playing" from the moment `loadfile` is called until the file has
+     * been parsed, so a consumer deriving a phase from `isPlaying` can
+     * never tell "opening" from "playing".
+     *
+     * Device evidence (2026-10-20): a 9-second load over a throttled
+     * link showed NO loading indicator at all — the file was still
+     * opening, and the only two phases available were "playing" (the
+     * engine had been told to play) and "idle" (the playlist had not
+     * been populated yet). Neither of them is the truth.
+     *
+     * `onFileLoaded` (mpv's EVENT_FILE_LOADED) is the other end of the
+     * window. Between the two, the file is opening, and that is exactly
+     * when a loading indicator belongs on screen.
+     *
+     * Emitted BEFORE the native call, so the consumer sees "opening" for
+     * the whole of the load rather than after it.
+     */
+    private fun emitLoadRequested(uri: String) {
+        try {
+            val payload = Arguments.createMap().apply {
+                putString("uri", uri)
+            }
+            eventEmitter.emit("onLoadRequested", payload)
+        } catch (e: Exception) {
+            Log.w(TAG, "onLoadRequested emit failed: ${e.message}")
         }
     }
 
@@ -1063,6 +1107,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         ensurePtr()
         val resolvedPath = normalizeMpvInput(resolveContentUri(path))
         Log.i(TAG, "[PlaybackTrace][Bridge][loadFile] requested=$path resolved=$resolvedPath ptr=$nativePtr")
+        emitLoadRequested(path)
         try {
             MPVLib.nativeLoadFile(nativePtr, resolvedPath)
             Log.i(TAG, "[PlaybackTrace][Bridge][loadFile] nativeLoadFile returned")
@@ -1082,6 +1127,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         }
         val resolvedPath = normalizeMpvInput(resolveContentUri(path))
         Log.i(TAG, "[PlaybackTrace][Bridge][loadFileWithRequestId] requested=$path resolved=$resolvedPath requestId=$requestId ptr=$nativePtr")
+        emitLoadRequested(path)
         try {
             MPVLib.nativeLoadFileWithRequestId(nativePtr, resolvedPath, requestId)
             Log.i(TAG, "[PlaybackTrace][Bridge][loadFileWithRequestId] nativeLoadFileWithRequestId returned requestId=$requestId")
@@ -2576,6 +2622,53 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     /**
+     * Map an mpv error code to the lib's stable string contract.
+     *
+     * mpv's numeric codes are authoritative (`include/mpv/client.h`,
+     * `mpv_error`): -13 LOADING_FAILED, -14 AO_INIT_FAILED, -15
+     * VO_INIT_FAILED, -16 NOTHING_TO_PLAY, -17 UNKNOWN_FORMAT, -18
+     * UNSUPPORTED, -20 GENERIC, plus the API-level codes -1..-12.
+     *
+     * The message heuristics are the FALLBACK, for the codes that carry
+     * no information of their own.
+     *
+     * `E_RENDERER_GONE` is deliberately NOT the catch-all any more: it
+     * means "the video output died", and a load failure is not that.
+     */
+    private fun mapMpvErrorCode(code: Int, message: String): String = when (code) {
+        -13 -> "E_LOAD_FAILED"
+        -14 -> "E_AUDIO_INIT_FAILED"
+        -15 -> "E_VIDEO_INIT_FAILED"
+        -16 -> "E_NOTHING_TO_PLAY"
+        -17 -> "E_UNKNOWN_FORMAT"
+        -18 -> "E_UNSUPPORTED_CODEC"
+        -19 -> "E_NOT_IMPLEMENTED"
+        -2 -> "E_OUT_OF_MEMORY"
+        -3 -> "E_NOT_INITIALIZED"
+        -4 -> "E_INVALID_PARAMETER"
+        -5 -> "E_OPTION_NOT_FOUND"
+        -8 -> "E_PROPERTY_NOT_FOUND"
+        -12 -> "E_COMMAND_FAILED"
+        else -> messageFallbackCode(message)
+    }
+
+    /**
+     * The message-based fallback, for an mpv code that says nothing about
+     * what went wrong.
+     */
+    private fun messageFallbackCode(message: String): String = when {
+        message.contains("network", ignoreCase = true) ||
+        message.contains("Connection refused", ignoreCase = true) ||
+        message.contains("Connection timed out", ignoreCase = true) -> "E_NETWORK_FAILURE"
+        message.contains("codec", ignoreCase = true) ||
+        message.contains("format", ignoreCase = true) ||
+        message.contains("unsupported", ignoreCase = true) -> "E_UNSUPPORTED_CODEC"
+        message.contains("No such file", ignoreCase = true) ||
+        message.contains("not found", ignoreCase = true) -> "E_FILE_NOT_FOUND"
+        else -> "E_GENERIC"
+    }
+
+    /**
      * T28.03: stable integer mapping for the structured error codes emitted
      * by [emitErrorEvent]. The TS `onError` interface declares `code: number`
      * - this helper provides the integer so programmatic handlers can switch
@@ -2585,8 +2678,9 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      *   1xxx - Initialization lifecycle (mount order, warm-up, ensurePtr)
      *   2xxx - Activity / Intent / launch failures (PlayerActivity missing,
      *          SecurityException, manifest mismatches)
-     *   3xxx - Playback control errors (loadFile failures, command queue
-     *          overflow, seek out-of-range) - reserved for future use
+     *   3xxx - Playback failures (load failed, audio/video output init
+     *          failed, unknown format, unsupported, network, file not
+     *          found) - in use since v1.17.0
      *   4xxx - Configuration / IPC errors (setConfig parse failures,
      *          bridge serialisation mismatches)
      *
@@ -2600,6 +2694,25 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         "E_ACTIVITY_NOT_FOUND" -> 2001
         "E_SECURITY" -> 2002
         "E_OPEN_PLAYER_FAILED" -> 2003
+        // 3xxx - Playback failures. These ship in v1.17.0; the numbers
+        // are PERMANENT (do not reuse one for a different meaning).
+        "E_LOAD_FAILED" -> 3001
+        "E_AUDIO_INIT_FAILED" -> 3002
+        "E_VIDEO_INIT_FAILED" -> 3003
+        "E_NOTHING_TO_PLAY" -> 3004
+        "E_UNKNOWN_FORMAT" -> 3005
+        "E_UNSUPPORTED_CODEC" -> 3006
+        "E_NETWORK_FAILURE" -> 3007
+        "E_FILE_NOT_FOUND" -> 3008
+        "E_DECODE_FAILED" -> 3009
+        "E_RENDERER_GONE" -> 3010
+        "E_GENERIC" -> 3011
+        "E_OUT_OF_MEMORY" -> 3012
+        "E_INVALID_PARAMETER" -> 3013
+        "E_OPTION_NOT_FOUND" -> 3014
+        "E_PROPERTY_NOT_FOUND" -> 3015
+        "E_COMMAND_FAILED" -> 3016
+        "E_NOT_IMPLEMENTED" -> 3017
         // 4xxx - Configuration
         "E_CONFIG_PARSE_FAILED" -> 4001
         else -> 0
