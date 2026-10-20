@@ -682,9 +682,33 @@ export function PlayerProvider({
             setState(nextState);
           }
           // Progress: apply the patch via the functional setState
-          // form so we can compare against the previous value (the
-          // ref may have been updated by another event handler in
-          // the same batch).
+          // form so we can compare against the COMMITTED value and
+          // skip the update when no field changed.
+          //
+          // The ref MUST be written HERE, synchronously, for the same
+          // reason `stateRef.current` is written above: `applyPlayerEvent`
+          // reads the CURRENT progress to compute the next one, and React
+          // DEFERS the updater function to the render phase. A ref written
+          // only inside the updater is therefore out of step with the state
+          // ref by one flush, and any event arriving before that flush
+          // computes its nextProgress from a STALE progress — silently
+          // dropping fields an earlier event had already delivered.
+          //
+          // MEASURED on device (2026-10-20, lib 1.17.0): mpv delivered
+          // `duration` and `time-pos` inside one batch. The duration event
+          // wrote `state.durationMs = 7673792` correctly, but the PROGRESS
+          // context kept `durationMs = 0`, because the position event —
+          // computed from the stale progress — replaced it with 0.
+          //
+          // The visible effect was a seek bar with no played fill, NO
+          // buffered range at all (the consumer gates the buffered window
+          // on `durationMs > 0`), and "--:--" for the remaining time — on a
+          // video that was demonstrably playing.
+          //
+          // Writing the ref here also makes the updater PURE: it used to
+          // write `progressRef.current` from inside the updater, which is a
+          // side effect in a function React may invoke more than once.
+          progressRef.current = nextProgress;
           setProgress((prev) => {
             // Cheap reference + field equality check.
             if (
@@ -698,7 +722,6 @@ export function PlayerProvider({
             ) {
               return prev;
             }
-            progressRef.current = nextProgress;
             return nextProgress;
           });
 

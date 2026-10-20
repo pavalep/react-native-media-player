@@ -1,4 +1,32 @@
 
+## [1.18.0] - 2026-10-20
+
+### Fixed
+
+- **The PROGRESS context silently lost the duration of the file, so a consumer could not draw a buffered range at all.**
+
+  Found on device (Android 37, archive.org) while checking the buffer indicator in the seek bar: the seek bar showed no played fill, no buffered range, and `--:--` for the remaining time — on a video that was demonstrably playing.
+
+  Two contexts carry the same playback facts, and they disagreed:
+
+  ```
+  state.durationMs    = 7673792   (correct)
+  progress.durationMs = 0         (wrong)
+  ```
+
+  The provider handled each native event with `applyPlayerEvent(stateRef.current, progressRef.current, ...)` and then wrote the two refs:
+
+  - `stateRef.current` was written **synchronously**, in the event handler.
+  - `progressRef.current` was written **inside the `setProgress` updater**, which React defers to the render phase.
+
+  The progress ref was therefore one flush behind the state ref. mpv delivers `duration` and `time-pos` inside one batch — measured on device: `fileLoaded` 19:29:59.615, `time-pos` 19:29:59.616, `duration` 19:29:59.619 — so the second event of the batch computed its next progress from a **stale** progress that did not yet contain the duration, and overwrote it with `0`.
+
+  `progressRef.current` is now written synchronously, in the event handler, in lockstep with `stateRef.current`. This also makes the `setProgress` updater pure: it used to write the ref from inside a function React may invoke more than once.
+
+  Why this broke the buffered range: the buffered ranges are a *window* into the file, so a consumer has to normalise them against the duration — and the duration was zero, so the window was empty and the buffered indicator was not drawn at all. The seek bar now shows the buffered extent, the played fill, and the real remaining time.
+
+  The unit contract was verified end to end while fixing this, and is unchanged: mpv's `demuxer-cache-state` reports `seekable-ranges` in **seconds** (mpv's `struct demux_seek_range` is `double start, end` in the demux time base), the native bridge converts them to **milliseconds** on the way out, and `PlayerProgress.cacheRanges` is in milliseconds.
+
 ## [1.17.0] - 2026-10-20
 
 ### Added
