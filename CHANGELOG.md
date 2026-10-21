@@ -1,4 +1,63 @@
 
+## [1.22.0] - 2026-10-21
+
+### Fixed
+
+- **A RESUME never resumed: the start position was issued as a `seek` that mpv silently refused.**
+
+  A launching resume used to do `loadFile(uri)` and then
+  `seekAbsolute(seconds)`. mpv **refuses** a seek until the file has
+  actually opened — `cmd_seek` bails out with `cmd->success = false`
+  while `!mpctx->playback_initialized` (mpv `player/command.c`), and
+  `playback_initialized` is only set once the file is open (mpv
+  `player/loadfile.c`, immediately before `MPV_EVENT_FILE_LOADED`).
+
+  The native side discarded mpv's return code, so the refusal was
+  **completely silent**: the file played from 0:00, the transport bar
+  truthfully showed 0:00, and the resume simply did not happen. Measured
+  on device: `seekAbsolute position=1060.727` was logged and mpv never
+  emitted a `seek` event — while a manual scrub (a seek issued *after*
+  the file was open) landed exactly where it was aimed.
+
+  The start position is now written to mpv's own `start` option
+  **before** the load, through the documented `options/start` property
+  path. mpv reads that option while the file opens and queues the seek
+  there, so the start position becomes **part of the load**: no race, no
+  dropped command, and the first frame is already the resumed frame.
+
+  | case | old behaviour | now |
+  |---|---|---|
+  | resume | `loadfile` + `seek` in the same tick — the seek was refused, silently | `options/start` written before the load |
+  | plain load | the option was never written, so the last resume position could leak into the NEXT file | `options/start` is **always** written, `0` included |
+  | the option write is rejected | — | the file still loads and plays; the rejection is warned about, never silent |
+
+- **`onPlaybackRestart` no longer zeroes the position.**
+
+  mpv fires `playback-restart` when playback (re)starts — including
+  right after a seek. The handler reset `positionMs` to `0`, so the
+  transport bar's clock restarted at 0:00 while the video sat at the
+  position the user had just seeked to (or resumed to). The position
+  belongs to `time-pos` and to nothing else; a new file resets it in the
+  `onFileLoaded` branch.
+
+- **`loadAndPlay` no longer issues a post-load `seek`,** and
+  `PlayerCommands.loadFile` writes `options/start = 0` so a resume
+  position can never leak into a later file.
+
+### Added
+
+- `applyStartPosition(bridge, startPositionSec)` in
+  `src/bridge/MpvPlayerModule.ts` — the one place that writes mpv's
+  start position, with the reasoning and the mpv sources it rests on.
+
+### Tests
+
+- `src/bridge/__tests__/loadAndPlay.startPosition.test.tsx` (6 tests) —
+  the resume contract: the position is written in seconds before the
+  load, no `seek` is issued at load time, the value is written on every
+  load, a rejected write still loads the file, and `onPlaybackRestart`
+  keeps the position. Mutation-checked 4/4.
+
 ## [1.21.0] - 2026-10-21
 
 ### Fixed

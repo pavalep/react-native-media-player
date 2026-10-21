@@ -35,9 +35,11 @@ import { loadAndPlay } from '../bridge/loadAndPlay';
  * would press play and see nothing. The inline comment above the
  * key carries the same rationale next to the code.
  *
- * `startPositionMs` is converted to seconds because mpv's
- * `seekAbsolute` is in seconds, while the launch payload is authored
- * in milliseconds.
+ * `startPositionMs` is converted to seconds because mpv's `start` option
+ * is in seconds, while the launch payload is authored in milliseconds.
+ * The position is written as that option BEFORE the load, so it is part
+ * of the load — a `seek` issued after the load is refused by mpv, and
+ * that refusal is silent. See `loadAndPlay` for the full reasoning.
  *
  * ## Contract
  *

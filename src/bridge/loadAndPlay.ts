@@ -1,5 +1,6 @@
 import {
   applyForceMediaTitle,
+  applyStartPosition,
   type MpvPlayerModuleBridge,
 } from './MpvPlayerModule';
 
@@ -19,8 +20,13 @@ import {
  * 1. `force-media-title` is read by mpv **at load time**. Set after
  *    `loadFile`, it applies to the next file instead of this one, and the
  *    header shows a signed CDN token or a filename.
- * 2. `loadFile` must precede `seekAbsolute`, or the seek is applied to
- *    the previous file.
+ * 2. The start position is written to mpv's `start` option **before** the
+ *    load, and it is therefore part of the load — not a `seek` command
+ *    issued after it. mpv refuses a seek until the file has opened (it
+ *    accepts seeks only once playback is initialised), so `loadfile` +
+ *    `seek` in the same tick dropped the seek on the floor and the resume
+ *    silently played from 0:00. See `applyStartPosition` for the full
+ *    reasoning and the mpv sources behind it.
  * 3. `play` last. A launch means "play this" — the way to ask for
  *    something paused is `pause()` afterwards, never a launch that
  *    silently loads and sits there.
@@ -39,11 +45,11 @@ import {
  * rather than here.
  *
  * `startPositionMs` is authored in milliseconds because that is what
- * every launch payload carries; `seekAbsolute` speaks seconds, mpv's own
- * unit. The conversion happens here so no caller can get it wrong.
+ * every launch payload carries; mpv's `start` option speaks seconds, mpv's
+ * own unit. The conversion happens here so no caller can get it wrong.
  *
  * Synchronous by design: the underlying bridge methods are fire-and-forget
- * (`loadFile`, `seekAbsolute`, `play` all return `void`). A load failure
+ * (`setProperty`, `loadFile`, `play` all return `void`). A load failure
  * is not observable at this layer at all — it surfaces through mpv's own
  * `file-loaded` / `end-file` events, which the consumer's state layer
  * already observes. Returning a Promise here would promise a resolution
@@ -57,9 +63,7 @@ export function loadAndPlay(
   const startPositionSec = startPositionMs > 0 ? startPositionMs / 1000 : 0;
 
   applyForceMediaTitle(bridge, title);
+  applyStartPosition(bridge, startPositionSec);
   bridge.loadFile(uri);
-  if (startPositionSec > 0) {
-    bridge.seekAbsolute(startPositionSec);
-  }
   bridge.play();
 }

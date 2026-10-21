@@ -11,9 +11,9 @@
  * ## What these pin
  *
  *  - The payload is loaded EXACTLY ONCE per launch identity.
- *  - `startPositionMs` is authored in ms; mpv's `seekAbsolute` is in
- *    seconds. A silent unit error here seeks to the wrong place with no
- *    error anywhere.
+ *  - `startPositionMs` is authored in ms; mpv's `start` option is in
+ *    seconds. A silent unit error here starts the file at the wrong place
+ *    with no error anywhere.
  *  - A `null` payload is a no-op, not a `loadFile(null)`.
  *  - The title is applied BEFORE the load, because mpv reads
  *    `force-media-title` at load time.
@@ -129,13 +129,16 @@ describe('useLaunchPlayback', () => {
     await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
   });
 
-  it('converts startPositionMs from milliseconds to seconds', async () => {
+  it('converts startPositionMs from milliseconds to seconds for mpv\'s start option', async () => {
     render(<Harness params={{...PARAMS, startPositionMs: 90_000}} />);
     await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
-    expect(bridge().seekAbsolute).toHaveBeenCalledWith(90);
+    expect(bridge().setProperty).toHaveBeenCalledWith('options/start', '90.000');
   });
 
-  it('does not seek when the start position is 0', async () => {
+  it('never seeks at load time — mpv refuses a seek before the file is open', async () => {
+    // The defect this pins: `loadFile` + `seekAbsolute` in the same tick.
+    // mpv refuses the seek (playback is not initialised yet) and the
+    // refusal is silent, so the resume played from 0:00.
     render(<Harness params={PARAMS} />);
     await waitFor(() => expect(bridge().play).toHaveBeenCalledTimes(1));
     expect(bridge().seekAbsolute).not.toHaveBeenCalled();
@@ -176,8 +179,8 @@ describe('useLaunchPlayback', () => {
 
   it('sets the title BEFORE the load — mpv reads the option at load time', async () => {
     const order: string[] = [];
-    bridge().setProperty.mockImplementation(() => {
-      order.push('setProperty');
+    bridge().setProperty.mockImplementation((name: string) => {
+      order.push(`setProperty:${name}`);
     });
     bridge().loadFile.mockImplementation(() => {
       order.push('loadFile');
@@ -185,7 +188,11 @@ describe('useLaunchPlayback', () => {
 
     render(<Harness params={{...PARAMS, title: 'Overrun!'}} />);
     await waitFor(() => expect(bridge().loadFile).toHaveBeenCalledTimes(1));
-    expect(order).toEqual(['setProperty', 'loadFile']);
+    expect(order).toEqual([
+      'setProperty:force-media-title',
+      'setProperty:options/start',
+      'loadFile',
+    ]);
   });
 
   it('trims the launch title', async () => {

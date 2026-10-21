@@ -9,6 +9,7 @@ import {
   MpvPlaybackState,
   MpvFileInfo,
   applyForceMediaTitle,
+  applyStartPosition,
 } from '../bridge/MpvPlayerModule';
 import { loadAndPlay } from '../bridge/loadAndPlay';
 
@@ -251,6 +252,12 @@ export interface PlayerCommands {
    * load, so `media-title` — and therefore `PlayerState.title` — carries
    * the real name of the media rather than a URL fragment. Omit it and
    * mpv derives its own title as before.
+   *
+   * The file starts at the beginning. mpv's `start` option is persistent,
+   * so this entry point writes `0` before the load — otherwise the last
+   * resume position would be carried into whatever file is loaded next.
+   * To start at a position, use the launch path (`useLaunchPlayback`),
+   * which owns the resume position.
    */
   loadFile(uri: string, title?: string): void;
   /** Load a playlist of media files, starting at `startIndex` (default 0). */
@@ -673,6 +680,11 @@ function buildCommands(): PlayerCommands {
       // `force-media-title` is mpv's own option for exactly this. The
       // set-then-load ordering is the contract — see the helper.
       applyForceMediaTitle(getMpvPlayerModule(), title);
+      // This entry point has no start position, so the file starts at the
+      // beginning — and mpv's `start` option is persistent, so it MUST be
+      // written here too. Leaving it would carry the last resume position
+      // into whatever file is loaded next.
+      applyStartPosition(getMpvPlayerModule(), 0);
       dlog('commands.loadFile(', uri, ')');
       getMpvPlayerModule().loadFile(uri);
     },
@@ -1428,9 +1440,14 @@ export function applyPlayerEvent(
       // The file is over (ended, or failed). No load is in flight.
       return { state: { ...state, isPlaying: false, isLoading: false }, progress };
     case 'onPlaybackRestart':
+      // mpv fires this when playback (re)starts — including right after a
+      // seek. The POSITION belongs to `time-pos` and to nothing else: a new
+      // file resets it in the `onFileLoaded` branch above. Zeroing it here
+      // restarted the transport bar's clock at 0:00 while the video sat at
+      // the position the user had just seeked to (or resumed to).
       return {
-        state: { ...state, isPlaying: true, positionMs: 0 },
-        progress: { ...progress, positionMs: 0 },
+        state: { ...state, isPlaying: true },
+        progress,
       };
     case 'onEndReached':
       return { state: { ...state, isPlaying: false }, progress };

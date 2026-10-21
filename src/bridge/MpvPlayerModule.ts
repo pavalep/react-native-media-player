@@ -949,6 +949,58 @@ export function applyForceMediaTitle(bridge: MpvPlayerModuleBridge, title?: stri
 }
 
 /**
+ * Tell mpv where the next file must START, BEFORE the file is loaded.
+ *
+ * ## Why an option and not a `seek` command
+ *
+ * A `seek` issued right after `loadFile` is **refused by mpv**: `cmd_seek`
+ * bails out with `cmd->success = false` while `!mpctx->playback_initialized`
+ * (mpv `player/command.c`), and `playback_initialized` is only set once the
+ * file has actually opened (mpv `player/loadfile.c`, immediately before
+ * `MPV_EVENT_FILE_LOADED`). So `loadfile` + `seek` in the same tick meant
+ * the seek never happened — and because the native side discarded mpv's
+ * return code, **nothing at all happened**: a resume silently played the
+ * file from 0:00 and the transport bar showed a truthful 0:00 for a video
+ * the user had asked to resume 20 minutes in.
+ *
+ * `start` is mpv's own option for "begin this file at this position", and
+ * mpv applies it while the file opens (mpv `player/loadfile.c` reads
+ * `opts->play_start` and queues the seek there). Writing it before the load
+ * makes the start position part of the load: no race, no dropped command,
+ * and the first frame is already the resumed frame.
+ *
+ * `options/start` is mpv's documented property path for an option by name
+ * (`mp_property_options` → `access_option_list` → `m_config_set_option_raw`).
+ *
+ * ## The value is ALWAYS written
+ *
+ * `start` is a persistent option. Writing it only when there is a resume
+ * would leak the last resume position into the NEXT file, so a plain load
+ * writes `0` and a resumed load writes the position. There is no "leave it
+ * alone" case.
+ *
+ * ## Not throwing
+ *
+ * A rejected option write must never abort the load — the video matters more
+ * than where it starts, and mpv would play the file from the beginning. It
+ * is warned about instead, because a silent failure here is a resume that
+ * quietly did not happen.
+ */
+export function applyStartPosition(
+  bridge: MpvPlayerModuleBridge,
+  startPositionSec: number,
+): void {
+  const seconds =
+    Number.isFinite(startPositionSec) && startPositionSec > 0 ? startPositionSec : 0;
+  try {
+    bridge.setProperty('options/start', seconds.toFixed(3));
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[simba-player] options/start rejected:', e);
+  }
+}
+
+/**
  * V13 Phase 50c: subscribe to a native event. Returns an
  * unsubscribe function that callers should invoke from
  * `useEffect` cleanup. When the bridge is absent (jest, web

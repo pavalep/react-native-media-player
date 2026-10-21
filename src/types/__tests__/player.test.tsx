@@ -292,16 +292,26 @@ describe('usePlayer (no provider)', () => {
       startPositionMs: 5000,
     });
     expect(ok).toBe(true);
-    // Ordering is the contract: force-media-title is read at load time,
-    // and seek must follow load or it applies to the previous file.
+    // Ordering is the contract: force-media-title AND the start position
+    // are both read when the file is opened, so they must both be written
+    // before the load.
+    //
+    // The start position is NOT a `seek` issued after the load: mpv
+    // refuses a seek until the file is open, and that refusal is silent
+    // (the native side discarded mpv's return code), so the resume
+    // quietly played from 0:00.
     expect(NativeModules.MpvPlayerModule.setProperty).toHaveBeenCalledWith(
       'force-media-title',
       'Film',
     );
+    expect(NativeModules.MpvPlayerModule.setProperty).toHaveBeenCalledWith(
+      'options/start',
+      '5.000',
+    );
     expect(NativeModules.MpvPlayerModule.loadFile).toHaveBeenCalledWith(
       'file:///film.mp4',
     );
-    expect(NativeModules.MpvPlayerModule.seekAbsolute).toHaveBeenCalledWith(5);
+    expect(NativeModules.MpvPlayerModule.seekAbsolute).not.toHaveBeenCalled();
     expect(NativeModules.MpvPlayerModule.play).toHaveBeenCalled();
   });
 
@@ -1090,6 +1100,10 @@ describe('commands.loadFile applies the launch title (v1.9.3)', () => {
     // is read when the file is loaded, so setting it afterwards would
     // leave the already-loaded file with mpv's derived title — which
     // for a signed CDN URL is an opaque token, not a movie name.
+    //
+    // `options/start` is written in the same breath, and for the same
+    // reason: mpv reads it when the file OPENS, and it must be 0 here
+    // so the last resume position cannot leak into this load.
     const { result } = await renderHook(() => usePlayer());
     await result.current.commands.loadFile('file:///a.mp4', 'Overrun!');
 
@@ -1097,15 +1111,19 @@ describe('commands.loadFile applies the launch title (v1.9.3)', () => {
     const setProperty = NativeModules
       .MpvPlayerModule.setProperty as jest.Mock;
     const loadFile = NativeModules.MpvPlayerModule.loadFile as jest.Mock;
-    setProperty.mockImplementation(() => {
-      order.push('setProperty');
+    setProperty.mockImplementation((name: string) => {
+      order.push(`setProperty:${name}`);
     });
     loadFile.mockImplementation(() => {
       order.push('loadFile');
     });
 
     await result.current.commands.loadFile('file:///b.mp4', 'Second');
-    expect(order).toEqual(['setProperty', 'loadFile']);
+    expect(order).toEqual([
+      'setProperty:force-media-title',
+      'setProperty:options/start',
+      'loadFile',
+    ]);
   });
 
   it('trims the title — a blank or padded value would render as whitespace', async () => {
