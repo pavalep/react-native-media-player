@@ -504,7 +504,7 @@ export interface MpvPlayerModuleBridge {
 
   // ── Picture-in-Picture ─────────────────────────────────────────────────
   /** Enter PiP mode; optional chapter title + progress percent for notification. */
-  enterPip(chapterTitle?: string, progressPct?: string): void;
+  enterPip(chapterTitle?: string | null, progressPct?: string | null): void;
   /** Exit PiP by bringing the activity to the front. */
   exitPip(): void;
   /** Exit PiP and finish the activity. */

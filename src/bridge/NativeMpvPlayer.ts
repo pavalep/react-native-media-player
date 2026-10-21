@@ -313,7 +313,14 @@ export interface Spec extends TurboModule {
   // Two declarations of one method, disagreeing, is the same class of
   // defect as the MediaKind/MediaLane confusion: the real bug is that
   // there are two sources of truth, not that either value was wrong.
-  enterPip(chapterTitle?: string, progressPct?: string): void;
+  //
+  // They are declared REQUIRED and nullable here, because that is what
+  // the TurboModule boundary actually is: the method has arity 2 and
+  // TurboModule checks the argument count on every call. Writing `?`
+  // here said "you may call this with no arguments", which is exactly
+  // the licence the zero-argument call site took — and the crash it
+  // produced was an "expected argument count: 2" rejection.
+  enterPip(chapterTitle: string | null, progressPct: string | null): void;
   exitPip(): void;
   exitPipAndFinish(): void;
 

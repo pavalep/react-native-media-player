@@ -1,4 +1,39 @@
 
+## [1.20.0] - 2026-10-21
+
+### Fixed
+
+- **`commands.enterPip()` threw instead of entering Picture-in-Picture.**
+
+  The PiP button died with:
+
+  ```
+  Exception in HostFunction: TurboModule method "enterPip"
+  called with 0 arguments (expected argument count: 2)
+  ```
+
+  The native TurboModule method has **arity 2** and TurboModule checks the
+  argument count on every call, so the zero-argument call was rejected
+  before it ever reached the native body. The native side had already
+  been made nullable in v1.9.3 and the codegen spec had already been
+  given two parameters — but the **call site** in `src/types/player.ts`
+  still passed none, and nothing tested the call site's arity.
+
+  The call now always passes two arguments, using `null` for a value that
+  was not supplied (the native's own fallbacks are `"Simba Player"` and
+  `"0 %"`).
+
+  `PlayerCommands.enterPip` now takes the chapter title and the progress
+  percentage the native side wants for the PiP notification, and
+  `NativeMpvPlayer`'s spec declares them **required and nullable** rather
+  than optional — `?` in that file said "you may call this with no
+  arguments", which is exactly the licence the broken call site took.
+
+  New test: `src/types/__tests__/player.pipArity.test.tsx` asserts the
+  **arity** of the native call, not just that it was called — a test that
+  only checked "enterPip was called" would have passed with the broken
+  zero-argument call.
+
 ## [1.19.0] - 2026-10-20
 
 ### Fixed

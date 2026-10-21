@@ -279,8 +279,16 @@ export interface PlayerCommands {
   setTrack(type: 'video' | 'audio' | 'sub', trackId: number): void;
 
   // PiP
-  /** Enter Picture-in-Picture mode. */
-  enterPip(): void;
+  /**
+   * Enter Picture-in-Picture mode.
+   *
+   * `chapterTitle` and `progressPct` are shown in the PiP notification.
+   * They are optional HERE, but the native TurboModule method takes two
+   * arguments and TurboModule enforces its arity — so the bridge call
+   * always passes two, never zero. See `enterPip` in the command
+   * implementation below.
+   */
+  enterPip(chapterTitle?: string | null, progressPct?: string | null): void;
   /** Exit PiP by bringing the activity to the front. */
   exitPip(): void;
   /** Exit PiP and finish the activity. */
@@ -685,9 +693,18 @@ function buildCommands(): PlayerCommands {
       getMpvPlayerModule().setTrack(type, trackId);
     },
 
-    enterPip: () => {
-      dlog('commands.enterPip()');
-      getMpvPlayerModule().enterPip();
+    enterPip: (chapterTitle, progressPct) => {
+      dlog('commands.enterPip(', chapterTitle, ',', progressPct, ')');
+      // The native method has arity 2 and TurboModule ENFORCES it, so
+      // this call must always pass two arguments. Passing zero threw:
+      //
+      //   Exception in HostFunction: TurboModule method "enterPip"
+      //   called with 0 arguments (expected argument count: 2)
+      //
+      // The Kotlin side is nullable, so `null` is the right "not
+      // supplied" value — the native falls back to a title and a
+      // progress string of its own.
+      getMpvPlayerModule().enterPip(chapterTitle ?? null, progressPct ?? null);
     },
     exitPip: () => {
       dlog('commands.exitPip()');
