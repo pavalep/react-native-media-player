@@ -2260,12 +2260,23 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      *
      * @param chapterTitle  Optional — current chapter title shown in PiP notification.
      * @param progressPct   Optional — progress percentage string like "45 %".
+     * @return true when the OS accepted the Picture-in-Picture request,
+     *         false when it refused it (no activity, SDK too old, PiP not
+     *         permitted, or the call threw). The caller MUST NOT assume
+     *         PiP is up just because it asked for it.
      */
     @ReactMethod
     @Override
-    override fun enterPip(chapterTitle: String?, progressPct: String?) {
+    override fun enterPip(chapterTitle: String?, progressPct: String?): Boolean {
         val activity = getCurrentActivity()
-        if (activity == null || android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) return
+        // The two refusals below are ANSWERED, not swallowed. The caller
+        // hides its fullscreen chrome when PiP is up, so a request that
+        // quietly did nothing left the app in "PiP" mode with no chrome
+        // and no way back. `false` tells it to keep the chrome.
+        if (activity == null || android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) {
+            Log.w(TAG, "[PlaybackTrace][Bridge][enterPip] refused: no activity or SDK < N")
+            return false
+        }
         // v1.9.3 — SPEC invariant I7 (a TS signature must agree with the
         // native reality it forwards to).
         //
@@ -2317,7 +2328,14 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         // animate from. That degrades to the no-hint behaviour, which costs a
         // black transition but never a distorted one.
         val sourceRect = PlayerSurface.boundsInWindow()
-        try {
+        // `return try`, not a bare `try`. A `try`/`catch` in STATEMENT
+        // position is not this function's return value in Kotlin — not
+        // even as the last statement of a function with a non-`Unit`
+        // return type. The compiler says "Missing return statement",
+        // which is precisely what it said the first time round. Only an
+        // EXPRESSION `try` produces a value, and the branches inside it
+        // are the ones that carry the OS's answer.
+        return try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 val pipParams = com.simba.player.PipManager.buildPipParams(
                     context = activity,
@@ -2326,19 +2344,36 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                     chapterTitle = title,
                     progressPercentage = pct,
                 )
+                // `enterPictureInPictureMode` ANSWERS whether the OS
+                // accepted the request, and the answer was being
+                // discarded. It is the only authority on this: the app
+                // hides its chrome when PiP is up, so "we think it worked"
+                // is not good enough.
                 activity.enterPictureInPictureMode(pipParams)
             } else {
                 // API 24–25 support PiP but not PictureInPictureParams.
+                // The no-arg overload returns Unit, so those versions
+                // have no answer to relay; the PiP mode-change event is
+                // the only confirmation available there.
                 activity.enterPictureInPictureMode()
+                true
             }
         } catch (throwable: Throwable) {
             // P1: the previous `catch (_: IllegalStateException)` was
             // too narrow. `enterPictureInPictureMode` can also throw
             // `IllegalArgumentException` (bad params), `RuntimeException`
             // (OEM customisations), or `SecurityException` (PiP not
-            // permitted). We log the actual cause and let the JS-side
-            // 5 s recovery timer in `VideoPipAdapter` take over.
+            // permitted). We log the actual cause, and the `false` below
+            // tells the JS side that PiP did NOT happen.
+            //
+            // (This block used to say a "5 s recovery timer in
+            // `VideoPipAdapter`" would take over. There is no
+            // `VideoPipAdapter` in this repository — it was removed with
+            // the V12 single-activity architecture — so nothing was
+            // taking over, and a refused request simply stranded the app
+            // with no chrome. The `false` return is the recovery.)
             Log.w(TAG, "[PlaybackTrace][Bridge][enterPip:threw]", throwable)
+            false
         }
     }
 

@@ -143,7 +143,11 @@ nativeModulesMock.default.MpvPlayerModule = {
   setConfig: fn(() => Promise.resolve(0)),
 
   // PiP
-  enterPip: fn(() => Promise.resolve()),
+  // `enterPip` returns the OS's own answer to "did PiP happen?". The
+  // mock answers `true` — a successful entry — because that is the case
+  // most of the tests exercise. Tests that care about a REFUSED entry
+  // override this mock's return value explicitly.
+  enterPip: fn(() => true),
   exitPip: fn(() => Promise.resolve()),
   exitPipAndFinish: fn(() => Promise.resolve()),
 

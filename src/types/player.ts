@@ -287,8 +287,18 @@ export interface PlayerCommands {
    * arguments and TurboModule enforces its arity — so the bridge call
    * always passes two, never zero. See `enterPip` in the command
    * implementation below.
+   *
+   * Returns whether the OS ACCEPTED the request. This is not a nicety: the
+   * caller suppresses its fullscreen chrome when PiP is up, so a request
+   * that was refused — no activity, PiP not permitted, a bad `PictureInPictureParams`
+   * — and went unreported left the app in "PiP" mode with no chrome and no
+   * way back. The native `enterPictureInPictureMode` knows the answer, so
+   * it is relayed instead of guessed.
+   *
+   * `false` means PiP did NOT happen. It does not mean the app is in a bad
+   * state: the caller keeps its chrome, exactly as before the request.
    */
-  enterPip(chapterTitle?: string | null, progressPct?: string | null): void;
+  enterPip(chapterTitle?: string | null, progressPct?: string | null): boolean;
   /** Exit PiP by bringing the activity to the front. */
   exitPip(): void;
   /** Exit PiP and finish the activity. */
@@ -704,7 +714,17 @@ function buildCommands(): PlayerCommands {
       // The Kotlin side is nullable, so `null` is the right "not
       // supplied" value — the native falls back to a title and a
       // progress string of its own.
-      getMpvPlayerModule().enterPip(chapterTitle ?? null, progressPct ?? null);
+      //
+      // The result is the OS's own answer to "did PiP happen?". It used
+      // to be dropped, which meant a REFUSED request (no activity, PiP
+      // not permitted, a bad PictureInPictureParams) was indistinguishable
+      // from a successful one — and a caller that suppresses its chrome
+      // on the strength of a successful request was then stuck with no
+      // chrome and no way back. Relaying the answer is the whole fix.
+      return getMpvPlayerModule().enterPip(
+        chapterTitle ?? null,
+        progressPct ?? null,
+      );
     },
     exitPip: () => {
       dlog('commands.exitPip()');

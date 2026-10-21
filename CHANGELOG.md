@@ -1,4 +1,63 @@
 
+## [1.21.0] - 2026-10-21
+
+### Fixed
+
+- **`enterPip` swallowed every failure, so a REFUSED Picture-in-Picture request was indistinguishable from a successful one.**
+
+  The native `enterPip` returned `Unit` and dropped the answer on the floor
+  in four different ways:
+
+  | case | old behaviour | now |
+  |---|---|---|
+  | no current activity | silent `return` | `false` |
+  | SDK < N | silent `return` | `false` |
+  | `enterPictureInPictureMode` returned `false` | the boolean was **discarded** | `false`, relayed |
+  | it threw (`IllegalArgumentException`, `RuntimeException`, `SecurityException`) | caught, logged, swallowed | `false`, relayed |
+
+  `Activity.enterPictureInPictureMode(PictureInPictureParams)` returns the
+  OS's own answer to "did PiP happen?", and that answer now survives all
+  the way to JS.
+
+  **Why it mattered.** A caller that hides its own chrome when PiP is up
+  was acting on a guess. When the request was refused, the app hid its
+  chrome for a PiP window that would never exist — and the only thing that
+  brings the chrome back is the PiP-**exit** event, which for a request
+  that never happened never comes. The user got a fullscreen player with no
+  transport bar, no top bar, and no way out.
+
+  The old code even named the recovery it expected: *"let the JS-side 5 s
+  recovery timer in `VideoPipAdapter` take over"*. There is no
+  `VideoPipAdapter` in this repository — it was removed with the V12
+  single-activity architecture — so **nothing** was taking over, and the
+  comment was simply wrong. It is now the `false` return.
+
+- **`PlayerCommands.enterPip` now returns `boolean`** — `true` when the OS
+  accepted the request, `false` when it refused it. `false` means PiP did
+  NOT happen; it is not an error state, and the caller simply keeps its
+  chrome.
+
+  The change runs through the whole boundary: the codegen spec
+  (`src/bridge/NativeMpvPlayer.ts`), the facade
+  (`src/bridge/MpvPlayerModule.ts`) and the command implementation
+  (`src/types/player.ts`). The `NOOP_BRIDGE` stub answers `false`, because
+  a stub that does nothing did not enter PiP.
+
+  The arity contract from 1.20.0 is unchanged: the call still always passes
+  two arguments.
+
+### Added
+
+- New test: `src/types/__tests__/player.pipAnswer.test.tsx` asserts the
+  **result** of `commands.enterPip()` — `true` on acceptance, `false` on
+  refusal, and explicitly *not* `undefined`. A test that only checked
+  "enterPip was called" would have passed with the old `void` contract and
+  the defect would have survived.
+
+  Mutation-checked: dropping the `return` from the command implementation
+  (which is exactly what the old contract did) kills 3 of the 4 tests; the
+  fourth is the arity assertion and is not a discriminator by design.
+
 ## [1.20.0] - 2026-10-21
 
 ### Fixed

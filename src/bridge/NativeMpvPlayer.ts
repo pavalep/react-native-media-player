@@ -320,7 +320,16 @@ export interface Spec extends TurboModule {
   // here said "you may call this with no arguments", which is exactly
   // the licence the zero-argument call site took — and the crash it
   // produced was an "expected argument count: 2" rejection.
-  enterPip(chapterTitle: string | null, progressPct: string | null): void;
+  //
+  // The return type is `boolean`, and it is the OS's own answer to
+  // "did PiP happen?". `Activity.enterPictureInPictureMode` returns
+  // exactly that, and the previous `void` threw the answer away: a
+  // REFUSED request (no activity, PiP not permitted, bad params) then
+  // looked identical to a successful one, so a caller that hides its
+  // chrome on the strength of a successful request was left with no
+  // chrome and no way back. Declaring the answer here is what lets it
+  // survive codegen.
+  enterPip(chapterTitle: string | null, progressPct: string | null): boolean;
   exitPip(): void;
   exitPipAndFinish(): void;
 

@@ -503,8 +503,15 @@ export interface MpvPlayerModuleBridge {
   setConfig(configJson: string): Promise<number>;
 
   // ── Picture-in-Picture ─────────────────────────────────────────────────
-  /** Enter PiP mode; optional chapter title + progress percent for notification. */
-  enterPip(chapterTitle?: string | null, progressPct?: string | null): void;
+  /**
+   * Enter PiP mode; optional chapter title + progress percent for notification.
+   *
+   * Returns whether the OS accepted the request. `false` means PiP did NOT
+   * happen — the native side has the answer (`enterPictureInPictureMode`
+   * returns it) and the caller needs it, because a caller that hides its
+   * chrome on a refused request has no way to bring it back.
+   */
+  enterPip(chapterTitle?: string | null, progressPct?: string | null): boolean;
   /** Exit PiP by bringing the activity to the front. */
   exitPip(): void;
   /** Exit PiP and finish the activity. */
@@ -745,9 +752,13 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
   },
 
   // PiP
-  enterPip: (_chapterTitle?: string, _progressPct?: string) => {
+  enterPip: (_chapterTitle?: string | null, _progressPct?: string | null) => {
     void _chapterTitle;
     void _progressPct;
+    // This stub does nothing, so the honest answer is `false` — PiP did
+    // not happen. Returning `true` here would tell a caller to hide its
+    // chrome for a PiP window that will never exist.
+    return false;
   },
   exitPip: () => {},
   exitPipAndFinish: () => {},
