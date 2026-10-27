@@ -351,6 +351,25 @@ export interface Spec extends TurboModule {
   // ── Debug (V12 Phase 39) ───────────────────────────────────────────────
   setDebugLogging(enabled: boolean): void;
   dumpObservedProperties(): number;
+
+  // ── Event emitter plumbing (React Native's NativeEventEmitter) ─────────
+  //
+  // React Native's `NativeEventEmitter` REQUIRES the native module to
+  // expose `addListener` / `removeListeners`. TurboModule codegen only
+  // exposes spec-declared methods, so while these two were missing from
+  // this spec the interop proxy had no `addListener` at all — and RN
+  // 0.86's `NativeEventEmitter` warns twice and never attaches the
+  // native module.
+  //
+  // The Kotlin side already declares the pair (`MpvBridgeModule
+  // .addListener` / `removeListeners`), so this is the spec catching up
+  // with the implementation, not a new API.
+  //
+  // Types: Kotlin `String` ↔ TS `string`; Kotlin `Double` ↔ TS `number`
+  // (codegen maps a TS `number` onto `double` in the generated Java
+  // spec).
+  addListener(eventName: string): void;
+  removeListeners(count: number): void;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('MpvPlayerModule');

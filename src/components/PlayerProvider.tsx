@@ -516,6 +516,50 @@ export function PlayerProvider({
     [JSON.stringify(config ?? {})],
   );
 
+  // ── Engine initialisation (B-010) ─────────────────────────────────────
+  //
+  // `initPlayer()` runs HERE, in the render phase, and NOT in the mount
+  // effect. React commits passive effects CHILD-FIRST, so an effect here
+  // would run AFTER every descendant's effect — and after a
+  // descendant's RENDER, which is earlier still.
+  //
+  // The bridge's `play / pause / loadFile / seek*` methods all hit
+  // `ensurePtr()` first, which throws
+  // `IllegalStateException("MpvPlayerModule not initialized. Call
+  // initPlayer() first.")` while `nativePtr == 0`. `<SimbaVideo>` reads
+  // the handle during ITS render, so an effect-based init left the
+  // surface bound to a null handle for the life of that mount.
+  //
+  // A parent's render function completes before any child's render
+  // begins, so initialising here means the handle exists before ANY
+  // descendant renders.
+  //
+  // TRADE-OFF: this is a side effect in the render phase, which React
+  // does not recommend. It is safe ONLY because `initPlayer()` is
+  // idempotent: the Kotlin side short-circuits with `return true` when
+  // `nativePtr != 0` (`MpvBridgeModule.initPlayer()`), so a second call
+  // — a StrictMode double render, a second provider — is a no-op and
+  // never a second engine.
+  const bridge = getMpvPlayerModule();
+  const engineInitialisedRef = useRef(false);
+  if (!engineInitialisedRef.current) {
+    engineInitialisedRef.current = true;
+    try {
+      const ok = bridge.initPlayer();
+      if (!ok) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[simba-player] initPlayer returned false on provider mount - ' +
+            'the native mpv instance did not allocate. Check MpvBridgeModule logs.',
+        );
+      }
+    } catch (e) {
+      // Silent HERE on purpose: the bridge is absent in jest / web, so
+      // there is no native engine to initialise and nothing to report.
+      // The provider still serves the config to TS consumers.
+    }
+  }
+
   useEffect(() => {
     const native = getNativeModule();
     if (native === null) {
@@ -551,32 +595,12 @@ export function PlayerProvider({
   // desync during the gap between hydration and subscription mount.)
   // The 1Hz position poll this effect used to also start was removed in
   // v1.10.0 — the event stream is authoritative for position and duration.
+  //
+  // The engine is NOT initialised here. `initPlayer()` runs in the render
+  // phase above (see the B-010 note there), so the native handle already
+  // exists by the time this effect runs — and, more importantly, before
+  // any descendant renders.
   useEffect(() => {
-    const bridge = getMpvPlayerModule();
-
-    // V22.0.0 / 1.5.7 (B-010 final / D-035): ensure the native mpv
-    // instance is created BEFORE the user can tap any playback
-    // control. The bridge's `play / pause / loadFile / seek*`
-    // methods all hit `ensurePtr()` first, which throws
-    // `IllegalStateException("MpvPlayerModule not initialized. Call
-    // initPlayer() first.")` when `nativePtr == 0`. Calling
-    // `initPlayer()` here in the provider's mount effect is
-    // idempotent (`nativePtr != 0` on the Kotlin side short-circuits
-    // with `return true`) so this is safe even if a future caller
-    // also initialises. Runs once per PlayerProvider mount.
-    try {
-      const ok = bridge.initPlayer();
-      if (!ok) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          '[simba-player] initPlayer returned false on provider mount - ' +
-            'the native mpv instance did not allocate. Check MpvBridgeModule logs.',
-        );
-      }
-    } catch (e) {
-      // The bridge is missing (jest / web) - fall through silently.
-    }
-
     // ── 1. Initial hydration from sync bridge getters ───────────────────
     try {
       const initial = hydratePlayerState(bridge);
@@ -740,9 +764,11 @@ export function PlayerProvider({
     // ── 2b. Observe the mpv properties those events are derived from ───
     // Step 2 subscribes to the JS event names, but mpv only *emits*
     // them for properties JS registered with `mpv_observe_property`.
-    // Registration must happen after `initPlayer()` (step 0) so the
-    // native handle exists; the Kotlin side also queues any name that
-    // arrives early, so ordering is safe either way.
+    // Registration must happen after `initPlayer()` so the native handle
+    // exists. `initPlayer()` runs in the render phase above, so by the
+    // time this effect runs the handle is already there; the Kotlin side
+    // also queues any name that arrives early, so ordering is safe
+    // either way.
     //
     // A failure here must not abort the subscription above or the poll
     // below — this list is additive.

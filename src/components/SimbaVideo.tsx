@@ -61,20 +61,30 @@ export function SimbaVideo(props: SimbaVideoProps): React.ReactElement {
   const { nativePtr, resizeMode = 'contain', paused, muted, volume, style, ...rest } = props;
 
   /**
-   * `PlayerProvider` calls `initPlayer()` on mount, and the native side
-   * short-circuits when a handle already exists, so inside a provider the
-   * handle is always available before any child renders. Resolving it during
-   * render rather than in an effect is deliberate: an effect would mount the
-   * surface unbound first and leave `MpvRenderView` waiting for a
-   * `setNativePtr` that only arrives on a later commit.
+   * The native handle this surface is bound to.
+   *
+   * `PlayerProvider` initialises the engine during ITS OWN render, not
+   * in an effect, and the native side short-circuits when a handle
+   * already exists — so inside a provider the handle is available before
+   * any child renders (a parent's render completes before any child's
+   * render begins).
+   *
+   * The handle is read during render rather than in an effect on
+   * purpose: an effect would mount the surface unbound first and leave
+   * `MpvRenderView` waiting for a `setNativePtr` that only arrives on a
+   * later commit.
+   *
+   * The bridge read is deliberately NOT memoised. `getNativePtr()` does
+   * not throw when the engine does not exist yet — it answers 0 — so a
+   * memoised read could latch that 0 and keep the surface bound to
+   * nothing for the life of the mount. mpv's handle is stable for the
+   * life of the engine, so re-reading it per render is one cheap sync
+   * call and can never be stale.
    *
    * Outside a provider, or when an app manages more than one engine, pass
    * `nativePtr` explicitly.
    */
-  const resolvedPtr = useMemo(
-    () => nativePtr ?? getMpvPlayerModule().getNativePtr(),
-    [nativePtr],
-  );
+  const resolvedPtr = nativePtr ?? getMpvPlayerModule().getNativePtr();
 
   const videoZoom = useMemo(() => {
     switch (resizeMode) {

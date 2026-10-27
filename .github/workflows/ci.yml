@@ -72,3 +72,102 @@ jobs:
           name: coverage-node-${{ matrix.node }}
           path: coverage/
           retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # native-download
+  #
+  # Proves the CONSUMER's install path actually delivers the native binaries.
+  #
+  # The published npm tarball contains NO .so files: `android/src/main/jniLibs/`
+  # is gitignored and excluded from `files`. The binaries reach a consumer
+  # ONLY through the `postinstall` hook, which downloads `jniLibs.tar.gz`
+  # from the GitHub Release, verifies its SHA-256 and extracts it.
+  #
+  # Until now every CI job set SKIP_DOWNLOAD_NATIVE=1, so the download path
+  # was never exercised: a missing release asset, a broken SHA-256 or a
+  # tarball without an ABI stayed green until a consumer hit it on
+  # `npm install`.
+  #
+  # This job runs the postinstall for real - no skip flag - and asserts that
+  # all 4 ABIs land with a `libmpv.so`.
+  #
+  # It runs against the LATEST PUBLISHED RELEASE, not the working tree's
+  # package.json version. The release asset is created BY the tag push
+  # (release.yml), so a version that has just been bumped has no release yet -
+  # the same chicken-and-egg the typecheck job documents above. The published
+  # version is also exactly what a consumer installs.
+  #
+  # Node only: the script downloads from the release asset and extracts it
+  # with `tar`. No Android SDK, no Gradle, no NDK. It runs in parallel with
+  # the typecheck job, so it adds no wall-clock time to the pipeline.
+  # ---------------------------------------------------------------------------
+  native-download:
+    name: Native download (published release asset)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history + tags: this job checks out the published release
+          # tag to run THAT release's postinstall.
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Resolve the latest published release
+        id: release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! curl -fsSL \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -o release.json \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/latest"; then
+            echo "::error::Could not read the latest published release from the GitHub API."
+            exit 1
+          fi
+          TAG="$(node -p "JSON.parse(require('fs').readFileSync('release.json', 'utf8')).tag_name")"
+          if [ -z "${TAG}" ]; then
+            echo "::error::No published GitHub release found - nothing to test the consumer install path against."
+            exit 1
+          fi
+          echo "Testing the postinstall of ${TAG}"
+          git checkout "${TAG}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies (runs the postinstall download for real)
+        env:
+          # GitHub-hosted runners default NODE_ENV=production, which makes
+          # `npm ci` skip devDependencies. Force development, same as the
+          # typecheck job.
+          NODE_ENV: development
+          # The script skips the download ONLY on exactly '1'. '0' is
+          # explicit "do download" - and the download is the point of this
+          # job, so it must not be skipped here.
+          SKIP_DOWNLOAD_NATIVE: '0'
+        run: npm ci
+
+      - name: Assert every ABI has a libmpv.so
+        shell: bash
+        run: |
+          set -euo pipefail
+          MISSING=0
+          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
+            SO="android/src/main/jniLibs/${ABI}/libmpv.so"
+            if [ ! -f "${SO}" ]; then
+              echo "::error::Missing ${SO} - the published release asset does not carry the ${ABI} ABI."
+              MISSING=1
+            else
+              echo "OK: ${SO} ($(stat -c%s "${SO}") bytes)"
+            fi
+          done
+          exit "${MISSING}"

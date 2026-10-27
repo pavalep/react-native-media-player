@@ -1868,14 +1868,26 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         // no-op by design
     }
 
+    /**
+     * `override` because the TurboModule spec declares the pair: the
+     * generated `NativeMpvPlayerSpec` declares `addListener` /
+     * `removeListeners`, so this class has to implement them. Without
+     * them in the spec, the new-architecture interop proxy exposed no
+     * `addListener` and RN's `NativeEventEmitter` never attached the
+     * native module (see `src/bridge/NativeMpvPlayer.ts`).
+     */
     @ReactMethod
-    fun addListener(eventName: String) {
+    override fun addListener(eventName: String) {
         // Required by NativeEventEmitter. MPVLib listener registration is
         // owned by initialize()/onCatalystInstanceDestroy(), not JS callers.
     }
 
+    /**
+     * `override` for the same reason as `addListener` above: the pair is
+     * declared in the TurboModule spec.
+     */
     @ReactMethod
-    fun removeListeners(count: Double) {
+    override fun removeListeners(count: Double) {
         // Required by NativeEventEmitter. Keep the native listener attached
         // for the lifetime of this module instance.
     }
@@ -2437,13 +2449,23 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     /**
      * Exit PiP mode and finish the activity (close player session).
      * Called from JS when user taps "Close" in PiP RemoteActions.
+     *
+     * `finish()`, NOT `finishAndRemoveTask()`.
+     *
+     * The consumer app has ONE Activity, so `getCurrentActivity()` IS
+     * that Activity. `finishAndRemoveTask()` removes the whole TASK
+     * from Recents — not just the PiP window — so closing the player
+     * made the entire app disappear from the Recents list.
+     * `finish()` closes the PiP window and leaves the task (and the
+     * app's Recents entry) in place, which is what "close the player"
+     * means.
      */
     @ReactMethod
     @Override
     override fun exitPipAndFinish() {
         val activity = getCurrentActivity()
         if (activity == null) return
-        activity.finishAndRemoveTask()
+        activity.finish()
     }
 
     // ── Media Notification Service ─────────────────────────────────────────
