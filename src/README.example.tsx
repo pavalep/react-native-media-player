@@ -12,7 +12,6 @@ import React from 'react';
 import { NativeModules, Pressable, Text, View } from 'react-native';
 import {
   DEFAULT_PLAYER_CONFIG,
-  DefaultControls,
   PlayerProvider,
   PlayerRoot,
   PlayerSurface,
@@ -238,15 +237,3 @@ export const _typeChecks = {
   progress: {} as PlayerProgress,
   config: {} as PlayerConfig,
 };
-
-// ── DefaultControlsProps check (Phase 30 export) ──────────────────────────
-export function DefaultControlsWithPropsExample(): React.ReactElement {
-  return (
-    <DefaultControls
-      title="My Title"
-      subtitle="My Subtitle"
-      onPlay={() => {}}
-      onPause={() => {}}
-    />
-  );
-}

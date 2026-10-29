@@ -47,7 +47,7 @@ const PlayerConfigContext = createContext<ResolvedPlayerConfig | null>(null);
  * Function signature for the `renderControls` slot. Takes no args —
  * the consumer's controls component reads what it needs from
  * `usePlayer()` (state + commands) and `useTheme()` (colors) itself.
- * Returns the React tree to render in place of `DefaultControls`.
+ * Returns the React tree to render as the player's chrome.
  *
  * Why a function (not a component): the parent decides WHEN to call
  * it (typically inside a `PlayerRoot` component), which lets us
@@ -60,7 +60,7 @@ export type RenderControlsFn = () => React.ReactNode;
  * Context carrying the `renderControls` slot. Separate from the
  * config context so consumers that only read the config don't
  * re-render when the controls prop changes, and vice versa. `null`
- * means "no custom controls — fall back to `DefaultControls`".
+ * means "no controls" — the library draws none of its own.
  */
 const PlayerRenderControlsContext = createContext<RenderControlsFn | null>(null);
 
@@ -107,20 +107,22 @@ export function useTheme(): PlayerTheme {
 
 /**
  * Phase 23 hook: read the `renderControls` slot from the nearest
- * `<PlayerProvider>`. Returns `null` when no custom controls were
- * passed — the caller (typically `<PlayerRoot>`) should fall back to
- * `<DefaultControls>` in that case.
+ * `<PlayerProvider>`. Returns `null` when no controls were passed.
+ *
+ * **v2.0.0:** `null` means "no chrome", not "fall back to the
+ * library's controls" — the library no longer ships any. A consumer
+ * that wants controls renders them and passes them here.
  *
  * Returns `null` (not throws) when used outside a provider, because
- * `<PlayerRoot>` needs to gracefully render the fallback in that
- * case. The other hooks (`usePlayerConfig` / `useTheme`) throw
- * because they have no useful fallback value.
+ * `<PlayerRoot>` needs to render without chrome in that case. The
+ * other hooks (`usePlayerConfig` / `useTheme`) throw because they
+ * have no useful fallback value.
  *
  * @example
  * ```tsx
- * function PlayerRoot() {
+ * function MyPlayer() {
  *   const renderControls = useRenderControls();
- *   return renderControls != null ? renderControls() : <DefaultControls />;
+ *   return renderControls != null ? renderControls() : null;
  * }
  * ```
  */
@@ -436,7 +438,7 @@ export interface PlayerProviderProps {
   config?: PlayerConfig;
   /**
    * Phase 23 slot: optional function that returns the React tree to
-   * render in place of `<DefaultControls>`. The function takes no
+   * render as the player's chrome. The function takes no
    * arguments — consumers that need theme / state / commands read
    * them from `useTheme()` / `usePlayer()` inside their custom
    * component.
@@ -450,10 +452,11 @@ export interface PlayerProviderProps {
    * </PlayerProvider>
    * ```
    *
-   * When omitted, `<PlayerRoot>` (Phase 23) falls back to rendering
-   * `<DefaultControls>` — so consumers can adopt the player
-   * incrementally: ship with the defaults, then swap in a custom
-   * implementation later without touching `<PlayerProvider>`.
+   * **v2.0.0 — optional, and omitted means "no chrome".** The library
+   * draws no controls of its own, so a consumer that omits this slot
+   * gets a picture and nothing else. It stays optional on purpose:
+   * the common case is a consumer that drives the player itself and
+   * never renders a full-screen control bar at all.
    */
   renderControls?: RenderControlsFn;
   /**

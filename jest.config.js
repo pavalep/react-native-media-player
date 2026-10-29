@@ -34,13 +34,18 @@ module.exports = {
     '!src/**/*.d.ts',
     '!src/index.ts',
     '!src/README.example.tsx',
-    // PlayerRoot.tsx and PlayerSurface.tsx wrap the native view
-    // manager (MpvPlayerView), which doesn't have a unit-test mock
-    // (it requires an Android UI hierarchy). They are exercised in
-    // instrumented tests (Robolectric / Espresso) — see the V12
-    // QA test matrix for those coverage paths.
-    '!src/components/PlayerRoot.tsx',
-    '!src/components/PlayerSurface.tsx',
+    // v2.0.0: PlayerRoot.tsx and PlayerSurface.tsx are back in the
+    // covered set. The exclusion they carried was sized for a
+    // component that wrapped the native view manager `MpvPlayerView`
+    // — that manager does not exist any more (the picture is the
+    // Fabric component `SimbaVideoView`), and neither component
+    // touches a native view any more: `PlayerSurface` is a plain
+    // transparent View, and `PlayerRoot` is a plain View tree plus
+    // the consumer's own controls. They are unit-tested in
+    // src/components/__tests__/PlayerRoot.test.tsx.
+    // (A deleted UI kit leaves its GEOMETRY behind — an exclusion is
+    // geometry too, and it was sized for a component that no longer
+    // looks like this one.)
     // The Fabric codegen spec is a type declaration plus one
     // `codegenNativeComponent` call whose implementation only exists after
     // codegen runs against a native toolchain. There is no runtime branch to
@@ -105,11 +110,19 @@ module.exports = {
     // regression. As the test surface grows (more bridge
     // delegation tests, integration tests for the platform-bound
     // hooks), bump these up.
+    //
+    // v2.0.0: the achievement is now 69.57% statements / 76.22%
+    // branches / 47.44% functions / 69.35% lines (measured, with
+    // `jest --coverage`). The old figures in this comment (~52 / ~51
+    // / ~38 / ~52) went stale the moment the `PlayerRoot.tsx` and
+    // `PlayerSurface.tsx` exclusions were removed — the two files
+    // came back into the covered set at 100%. The thresholds are
+    // raised accordingly, with headroom left below the measurement.
     global: {
-      statements: 50,
-      branches: 45,
-      functions: 35,
-      lines: 50,
+      statements: 60,
+      branches: 65,
+      functions: 40,
+      lines: 60,
     },
   },
   coverageReporters: ['text', 'lcov', 'json-summary'],

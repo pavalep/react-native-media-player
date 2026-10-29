@@ -821,7 +821,7 @@ let _emitter: NativeEventEmitter | null = null;
  * V13 Phase 50: the bridge-presence check now also requires
  * `loadFile` (the cheapest method that doesn't depend on
  * `initPlayer()` having been called) — older V12 stubs only had
- * the 9 methods DefaultControls needed.
+ * the 9 methods the control bundle needed.
  */
 function resolveBridge(): MpvPlayerModuleBridge | null {
   const mod = (NativeModules as Record<string, unknown>).MpvPlayerModule;
@@ -901,9 +901,8 @@ export { dlog };
 /**
  * V13 Phase 50: live bridge (or no-op fallback). Consumers should
  * always import this getter rather than reach into `NativeModules`
- * directly — the no-op fallback is what keeps `DefaultControls`
- * and consumer code renderable in jest tests + Storybook + web
- * previews.
+ * directly — the no-op fallback is what keeps consumer code
+ * renderable in jest tests + Storybook + web previews.
  */
 export function getMpvPlayerModule(): MpvPlayerModuleBridge {
   const live = resolveBridge();

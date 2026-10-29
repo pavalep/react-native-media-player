@@ -25,6 +25,25 @@
  * lookup for you. A consumer that drives the player itself wraps its
  * tree in `<PlayerProvider>` once and renders `<SimbaVideo>` for the
  * picture.
+ *
+ * ## v2.0.0 — the library draws no chrome
+ *
+ * `DefaultControls` and `DefaultControlsProps` are **removed**. The
+ * library shipped a 564-line default control bundle and wired it as
+ * `<PlayerRoot>`'s fallback whenever a consumer did not pass
+ * `renderControls` — which meant the library always had a chrome
+ * implementation that a consumer could end up using by accident, and
+ * that the library had to keep working.
+ *
+ * The contract now says what it means: **the library draws no chrome.**
+ * A consumer that wants controls renders them, through the
+ * `renderControls` slot on `<PlayerProvider>`. `<PlayerRoot>` renders
+ * the surface and the consumer's controls, and **nothing else** when
+ * `renderControls` is absent.
+ *
+ * This is a **breaking** change, hence the major version. `<PlayerRoot>`
+ * without `renderControls` renders no controls after 2.0.0, where it
+ * rendered `DefaultControls` before.
  */
 
 export {
@@ -45,11 +64,6 @@ export {
 } from './components/SimbaVideo';
 
 export { PlayerSurface, type PlayerSurfaceProps } from './components/PlayerSurface';
-
-export {
-  DefaultControls,
-  type DefaultControlsProps,
-} from './components/DefaultControls';
 
 export {
   type AudioConfig,

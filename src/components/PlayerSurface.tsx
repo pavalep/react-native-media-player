@@ -3,51 +3,41 @@ import { StyleSheet, View } from 'react-native';
 
 export interface PlayerSurfaceProps {
   /**
-   * Background color for the placeholder. Defaults to
-   * `'transparent'` so the native SurfaceView (which sits at the
-   * activity root, beneath the React tree) shows through to the
-   * user. V11 used `#000000` here because the placeholder WAS the
-   * SurfaceView in that architecture — V12+ moved the SurfaceView
-   * out of the React tree and pinned it to `android.R.id.content`,
-   * so a black placeholder now covers every decoded frame.
-   * Consumers that want a colored backdrop (e.g. for branded
-   * splash screens while mpv initializes) can pass a non-transparent
-   * value — the actual video frames paint over it once mpv's
-   * first frame is decoded.
+   * Background color for the placeholder. Defaults to `'transparent'`,
+   * so whatever is behind it shows through to the user.
+   *
+   * **v2.0.0:** the native SurfaceView this placeholder used to stand
+   * in for is gone — the picture is `<SimbaVideo />`, in the React
+   * tree. A non-transparent value therefore paints a backdrop *over*
+   * the picture wherever the placeholder sits in front of it.
    */
   backgroundColor?: string;
 }
 
 /**
- * Phase 25: no-op JS placeholder for the natively-rendered
- * SurfaceView. The actual SurfaceView that mpv draws into lives on
- * the Kotlin side of PlayerActivity (`MpvRenderView` in the module
- * + `PlayerActivity.onCreate`'s `setContentView`). This JS
- * component exists only to reserve layout space in the React tree
- * so the controls overlay knows where to anchor.
+ * A transparent, full-size **layout placeholder**.
  *
- * Why a placeholder rather than a real view:
- *  - The native SurfaceView is attached to the activity's
- *    `android.R.id.content` FrameLayout directly (see Phase 4). It
- *    is NOT a child of the React root view, so it doesn't need a
- *    JS counterpart.
- *  - The placeholder fills the same screen rectangle as the native
- *    SurfaceView because PlayerActivity pins the React root to the
- *    same insets the SurfaceView occupies (Phase 15 — full-screen
- *    with status / nav bar handling).
- *  - Adding `position: 'absolute'` here would force the controls
- *    sibling to also be absolutely positioned. Using `flex: 1`
- *    keeps the React tree in normal flow; the controls are placed
- *    as a sibling with absolute positioning by `PlayerRoot`.
+ * ## v2.0.0 — what this is, and is not
  *
- * Consumers don't usually render this directly — `PlayerRoot`
- * (Phase 23) renders it automatically. The export is exposed so
- * consumers who pass a fully custom `renderControls` to
- * `<PlayerProvider>` can still include `<PlayerSurface />` in their
- * tree when they want the placeholder visible (e.g. for theming
- * tests).
+ * This component used to stand in for the native SurfaceView that mpv
+ * drew into. Back then the surface was a **sibling** of the React
+ * root — pinned to `android.R.id.content` by the library's own
+ * `PlayerActivity` — and this box reserved the screen rectangle the
+ * controls overlay was positioned against.
  *
- * Surface is rendered natively by PlayerActivity.
+ * **That arrangement is gone.** The picture is now `<SimbaVideo />`:
+ * a Fabric component (`SimbaVideoView`) inside the React tree, with
+ * React Native owning its layout, its z-order and its lifecycle.
+ * Neither the library nor a host app mounts a surface at the activity
+ * root any more — a host app's Activity says so in as many words.
+ *
+ * What is left is a transparent `flex: 1` box: a full-size rectangle
+ * for a controls overlay to anchor to. `<PlayerRoot>` renders it.
+ *
+ * Whether this component and `<PlayerRoot>` should exist at all is an
+ * open question — see `B-035` in the app's master plan. Until that is
+ * decided they stay: a published package cannot quietly drop a public
+ * export.
  */
 export function PlayerSurface({
   backgroundColor = 'transparent',

@@ -133,7 +133,7 @@ describe('resolvePlayerConfig', () => {
 describe('DEFAULT_THEME', () => {
   it('exposes the documented dark theme', () => {
     // Lock the values so consumers can rely on them (and so the
-    // DefaultControls visual baseline doesn't drift accidentally).
+    // a consumer's visual baseline doesn't drift accidentally).
     // `icon` is intentionally absent — it's an optional override in
     // PlayerTheme (see types/config.ts).
     expect(DEFAULT_THEME).toEqual({

@@ -5,7 +5,7 @@
  * tests pin the documented baseline (via `EXPECTED_DEFAULT_STATE`)
  * and verify the contract that matters for consumers:
  *  - `usePlayer()` outside a provider returns the default state
- *    (no throw — DefaultControls must be able to render anywhere)
+ *    (no throw — a consumer's controls must be able to render anywhere)
  *  - `usePlayer()` inside a provider returns the live state
  *  - `usePlayer()` returns stable command references across renders
  *  - `commands.<method>` delegates to the native bridge
@@ -98,7 +98,7 @@ describe('usePlayer (no provider)', () => {
 
   it('returns the documented default state', async () => {
     // Outside a <PlayerProvider>, usePlayer must NOT throw — it
-    // returns DEFAULT_STATE so DefaultControls can render in any
+    // returns DEFAULT_STATE so a consumer's controls can render in any
     // environment (jest, web preview, Storybook).
     const { result } = await renderHook(() => usePlayer());
     expect(result.current.state).toEqual(DEFAULT_STATE);
@@ -107,7 +107,7 @@ describe('usePlayer (no provider)', () => {
   it('returns the expected V12 fields at their baseline', async () => {
     // Pin the V12 contract: isPlaying=false, title='Simba Player',
     // artist='', album=''. A refactor that changes the baseline
-    // would silently break DefaultControls.
+    // would silently break every consumer's controls.
     const { result } = await renderHook(() => usePlayer());
     const s = result.current.state;
     expect(s.isPlaying).toBe(false);
@@ -144,7 +144,7 @@ describe('usePlayer (no provider)', () => {
 
   it('exposes the V12 commands object', async () => {
     // The five V12 methods remain on the new commands object —
-    // DefaultControls depends on them.
+    // Consumer controls depend on them.
     const { result } = await renderHook(() => usePlayer());
     expect(typeof result.current.commands.play).toBe('function');
     expect(typeof result.current.commands.pause).toBe('function');
@@ -376,8 +376,8 @@ describe('usePlayer (no provider)', () => {
   });
 
   it('returns stable command references across renders', async () => {
-    // Spec §Phase 34.5: stable command references let DefaultControls
-    // memo its handlers. The V13 commands object is a module-scope
+    // Spec §Phase 34.5: stable command references let a consumer's
+    // controls memo their handlers. The V13 commands object is a module-scope
     // singleton, so the reference is identical for every render.
     const { result, rerender } = await renderHook(() => usePlayer());
     const firstCommands = result.current.commands;

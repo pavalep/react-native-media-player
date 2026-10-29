@@ -876,7 +876,7 @@ const BUILT_COMMANDS: PlayerCommands = buildCommands();
  * driven by mpv events (via `subscribePlayerEvent`) plus a one-shot
  * hydration read at mount. Outside a provider, `state` is
  * `DEFAULT_STATE` (no throw — see Phase 24 design notes: this
- * hook is non-throwing so DefaultControls can render in any
+ * hook is non-throwing so a consumer's own controls can render in any
  * environment, including web previews and tests).
  *
  * The `commands` object is a module-singleton: the same reference
@@ -1485,7 +1485,7 @@ export function applyPlayerEvent(
  * `<PlayerStateProvider>` component (in `PlayerProvider.tsx`)
  * can import them. The component itself is a JSX component, so
  * it has to live in a `.tsx` file — we keep the contexts in
- * this `.ts` file so non-JSX consumers (DefaultControls,
- * `usePlayer`, etc.) can import them without forcing the JSX
+ * this `.ts` file so non-JSX consumers (`usePlayer`, etc.) can
+ * import them without forcing the JSX
  * transform on the whole module.
  */

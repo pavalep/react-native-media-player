@@ -13,7 +13,7 @@
  *  - useRenderControls returns null when no renderControls prop is
  *    provided, the provided function otherwise
  *  - useRenderControls does NOT throw outside provider (falls back to
- *    null so DefaultControls can render)
+ *    null so a consumer's controls can render)
  *  - Provider passes resolved config to native bridge via setConfig
  *    on mount and when the config prop changes
  *  - Provider does NOT call setConfig when config prop is reference-
@@ -157,9 +157,9 @@ describe('useRenderControls', () => {
 
   it('returns null when called outside a provider (does NOT throw)', async () => {
     // Important behavioural difference from usePlayerConfig/useTheme:
-    // useRenderControls is non-throwing so DefaultControls can render
-    // unconditionally. (If a consumer uses DefaultControls directly
-    // without a Provider, they get the default UI, not a crash.)
+    // useRenderControls is non-throwing so a consumer's controls can render
+    // unconditionally. (If a consumer renders their own controls
+    // without a Provider, they get no chrome, not a crash.)
     const { result } = await renderHook(() => useRenderControls());
     expect(result.current).toBeNull();
   });
