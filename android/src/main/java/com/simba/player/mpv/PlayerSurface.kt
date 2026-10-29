@@ -10,7 +10,42 @@ import android.widget.FrameLayout
 import java.lang.ref.WeakReference
 
 /**
- * V21 — process-wide registry of the single [MpvRenderView].
+ * The **V11 path's** process-wide registry of the single [MpvRenderView].
+ *
+ * ## Deprecated as of the V22 architecture (2026-10-29)
+ *
+ * This object was the registry of "the one surface mpv draws into". It was
+ * written by [mount], which put a `MpvRenderView` at index 0 of the host
+ * Activity's `android.R.id.content` — **beneath the React tree**, so that
+ * no screen had to blank itself around the player.
+ *
+ * The picture is no longer there. It is now a child of the React tree
+ * (`<SimbaVideo />` → `SimbaVideoView` → [MpvRenderView]), created by
+ * [MpvRenderViewManager] and destroyed by React Native. No host Activity
+ * mounts a surface any more, so **nothing calls [mount] and nothing calls
+ * [attach]** — [viewRef] is never written and [current] always answers
+ * `null`.
+ *
+ * The live answer lives in [MpvRenderViewRegistry], which the ViewManager
+ * writes. `isSurfaceMounted()` reads that registry, not this one.
+ *
+ * ## Why this object still exists
+ *
+ * The mutators below — [setBounds], [fillBounds], [setVisible] — place a
+ * surface by mutating its `LayoutParams` from Kotlin. `react-native-video`
+ * documents that as a hazard: React Native's layout pass can be deferred
+ * for a surface view, so a surface placed outside Yoga can be measured
+ * against a stale rect. The picture is laid out by Yoga now, and it must
+ * stay that way. So these mutators are kept — deprecated, not removed — but
+ * they are left with no writer, and reviving one would put the hazard back
+ * in reach.
+ *
+ * [boundsInWindow] is the PiP source-rect hint. It reads [viewRef] too, so
+ * it answers `null` and PiP entry has no rect to animate from. Fixing that
+ * is a separate piece of work: the old rect was sized by [setBounds] /
+ * [fillBounds], so it matched the video's own shape by construction, and the
+ * Yoga-sized picture does not carry that guarantee. See the app's master
+ * plan, bug `B-036`.
  *
  * ## Why this file exists
  *
@@ -148,6 +183,11 @@ object PlayerSurface {
 
     /**
      * Publish the process's surface. Called by [mount].
+     *
+     * **Nothing calls this any more.** [mount] is the V11 path's only
+     * caller and the V22 architecture does not call it, so [viewRef] is
+     * never written. The live picture is published by
+     * [MpvRenderViewRegistry] instead.
      */
     fun attach(view: MpvRenderView) {
         viewRef = WeakReference(view)

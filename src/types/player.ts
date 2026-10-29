@@ -394,7 +394,13 @@ export interface PlayerCommands {
    * audio-only playback — mpv keeps running with no render target.
    */
   setSurfaceVisible(visible: boolean): Promise<boolean>;
-  /** Whether a video surface is mounted and usable right now. */
+  /**
+   * Whether a video picture view is mounted in the React tree right now.
+   *
+   * The picture is a Fabric view (`SimbaVideoView`) that React Native's
+   * ViewManager creates, so this answers "is there somewhere to put a
+   * video?" — and it is false until a consumer mounts `<SimbaVideo />`.
+   */
   isSurfaceMounted(): boolean;
 
   /**

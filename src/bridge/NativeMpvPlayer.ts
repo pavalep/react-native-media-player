@@ -288,11 +288,11 @@ export interface Spec extends TurboModule {
   setSurfaceVisible(visible: boolean): Promise<boolean>;
 
   /**
-   * Whether a video surface is currently mounted and usable.
+   * Whether a video picture view is mounted in the React tree right now.
    *
    * Lets a control decide its own affordance instead of assuming a surface
-   * exists because the user happens to be on a video screen. Synchronous: it
-   * reads a `WeakReference`.
+   * exists because the user happens to be on a video screen. Synchronous:
+   * it reads a registry of weak references.
    */
   isSurfaceMounted(): boolean;
   // ── Configuration (V12 Phase 21) ───────────────────────────────────────

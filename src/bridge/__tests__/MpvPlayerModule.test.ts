@@ -107,4 +107,57 @@ describe('getMpvPlayerModule', () => {
       123.456,
     );
   });
+
+  // ── The mock must not invent a surface ──────────────────────────────────
+  //
+  // This mock stands in for the NATIVE module. In jest there is never a
+  // picture view — a picture view is a native View that only React
+  // Native's ViewManager can create — so the honest answer to "is a surface
+  // mounted?" is `false`, and every surface mutator must refuse.
+  //
+  // The mock used to answer `true` for all four. The native implementation
+  // could only ever answer `false`, so the suite was green exactly where
+  // the product was broken, and the defect it hid was real: a deep-linked
+  // video never played, because `commands.openPlayer(...)` refused it.
+  //
+  // A mock that returns the happy answer for a method that can only fail
+  // does not test the method — it erases the defect.
+  describe('the installed native mock does not invent a surface', () => {
+    it('answers false to isSurfaceMounted', () => {
+      const bridge = getMpvPlayerModule() as MpvPlayerModuleBridge;
+      expect(bridge.isSurfaceMounted()).toBe(false);
+    });
+
+    it('has every surface mutator refuse', async () => {
+      const bridge = getMpvPlayerModule() as MpvPlayerModuleBridge;
+      await expect(bridge.setVideoBounds(0, 0, 10, 10)).resolves.toBe(false);
+      await expect(bridge.fillVideoBounds()).resolves.toBe(false);
+      await expect(bridge.setSurfaceVisible(true)).resolves.toBe(false);
+    });
+
+    it('agrees with the module own NOOP fallback on every surface call', async () => {
+      // The NOOP fallback is the module's own answer for "there is no
+      // native module at all" — and it is the same environment jest
+      // simulates. The installed mock must not disagree with it: a mock
+      // that says `true` where the fallback says `false` is the same
+      // defect wearing a different hat.
+      //
+      // The fallback is reached by removing the native module, exactly as
+      // `player.test.tsx` does; it is put back afterwards so the shared
+      // global mock is intact for the next test.
+      const native = NativeModules.MpvPlayerModule;
+      (NativeModules as {MpvPlayerModule?: unknown}).MpvPlayerModule =
+        undefined;
+      try {
+        const noop = getMpvPlayerModule();
+        expect(noop.isSurfaceMounted()).toBe(false);
+        await expect(noop.setVideoBounds(0, 0, 10, 10)).resolves.toBe(false);
+        await expect(noop.fillVideoBounds()).resolves.toBe(false);
+        await expect(noop.setSurfaceVisible(true)).resolves.toBe(false);
+      } finally {
+        (NativeModules as {MpvPlayerModule?: unknown}).MpvPlayerModule =
+          native;
+      }
+    });
+  });
 });

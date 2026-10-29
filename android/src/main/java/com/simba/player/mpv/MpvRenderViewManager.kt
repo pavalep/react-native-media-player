@@ -42,7 +42,13 @@ class MpvRenderViewManager : SimpleViewManager<MpvRenderView>() {
   override fun getName(): String = REACT_CLASS
 
   override fun createViewInstance(reactContext: ThemedReactContext): MpvRenderView {
-    return MpvRenderView(reactContext)
+    val view = MpvRenderView(reactContext)
+    // The picture is now a child of the React tree, so this manager is the
+    // only thing that knows when one exists. It publishes the view to
+    // [MpvRenderViewRegistry], which is what `isSurfaceMounted()` asks —
+    // the answer is true by construction instead of by a call nobody makes.
+    MpvRenderViewRegistry.register(view)
+    return view
   }
 
   /**
@@ -123,5 +129,9 @@ class MpvRenderViewManager : SimpleViewManager<MpvRenderView>() {
     super.onDropViewInstance(view)
     Log.i(TAG, "onDropViewInstance: releasing surface binding, engine untouched")
     view.detachSurfaceForViewDrop()
+    // The view is going away, so there is nowhere left to put a video.
+    // `isSurfaceMounted()` must go back to answering false — otherwise a
+    // control would keep offering "play video" for a picture that is gone.
+    MpvRenderViewRegistry.unregister(view)
   }
 }

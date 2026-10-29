@@ -492,7 +492,13 @@ export interface MpvPlayerModuleBridge {
   fillVideoBounds(): Promise<boolean>;
   /** Show or hide the video surface. Hidden is correct for audio-only playback. */
   setSurfaceVisible(visible: boolean): Promise<boolean>;
-  /** Whether a video surface is currently mounted and usable. */
+  /**
+   * Whether a video picture view is mounted in the React tree right now.
+   *
+   * The picture is a Fabric view (`SimbaVideoView`) that React Native's
+   * ViewManager creates, so this answers "is there somewhere to put a
+   * video?" — and it is false until a consumer mounts `<SimbaVideo />`.
+   */
   isSurfaceMounted(): boolean;
 
   // ── Configuration (V12 Phase 21) ───────────────────────────────────────

@@ -2171,14 +2171,22 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     /**
-     * Whether a video surface is currently mounted and usable.
+     * Whether a video picture view is currently mounted.
      *
      * Lets a control decide its own affordance instead of assuming a surface
      * exists because the user is on a video screen.
+     *
+     * The answer comes from [MpvRenderViewRegistry], which
+     * [MpvRenderViewManager] writes when React Native creates a picture
+     * view. It used to come from `PlayerSurface.current()`, whose only
+     * writer — `PlayerSurface.mount()` — the V22 architecture never calls,
+     * so the answer was `false` forever and `commands.openPlayer(...)`
+     * refused **every** video, including the ones a consumer had a picture
+     * mounted for.
      */
     @ReactMethod(isBlockingSynchronousMethod = true)
     @Override
-    override fun isSurfaceMounted(): Boolean = PlayerSurface.current() != null
+    override fun isSurfaceMounted(): Boolean = MpvRenderViewRegistry.hasLiveView()
 
     /**
      * `ReadableMap` reads that tolerate absent keys.

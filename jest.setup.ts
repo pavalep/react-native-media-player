@@ -163,14 +163,28 @@ nativeModulesMock.default.MpvPlayerModule = {
   getScreenBrightness: fn(() => 1.0),
 
   // V21 single-Activity surface control.
-  // Defaults report success so a component under test is not forced to
-  // gate its mini-player chrome on a surface it cannot create in jest.
-  // The NOOP-fallback test asserts the opposite contract where no native
-  // module exists at all.
-  setVideoBounds: fn(() => Promise.resolve(true)),
-  fillVideoBounds: fn(() => Promise.resolve(true)),
-  setSurfaceVisible: fn(() => Promise.resolve(true)),
-  isSurfaceMounted: fn(() => true),
+  //
+  // This mock stands in for the NATIVE module, so it must answer the way a
+  // real native module answers **with no picture view mounted** — and in
+  // jest there is never one, because a picture view is a native View that
+  // only React Native's ViewManager can create. So:
+  //
+  //  - `isSurfaceMounted()` answers FALSE. The native implementation could
+  //    only ever answer false until 2026-10-29, when it was repointed at
+  //    the live Fabric view; mocking it `true` made the suite green
+  //    exactly where the product was broken, and a deep-linked video
+  //    silently never played. A test that needs it true says so
+  //    explicitly.
+  //  - the three mutators refuse, for the same reason: there is no surface
+  //    to place, so there is nothing for them to report having done. This
+  //    is also exactly what the module's own NOOP fallback does.
+  //
+  // A mock that returns the happy answer for a method that can only fail
+  // does not test the method — it erases the defect.
+  setVideoBounds: fn(() => Promise.resolve(false)),
+  fillVideoBounds: fn(() => Promise.resolve(false)),
+  setSurfaceVisible: fn(() => Promise.resolve(false)),
+  isSurfaceMounted: fn(() => false),
 
   // Notification
   requestNotificationPermission: fn(() => Promise.resolve()),
