@@ -3,6 +3,10 @@
 # Anything not in `files` that npm tries to include via the
 # implicit `**/*` default is filtered out here.
 
+# Native binaries fetched by the postinstall hook at consumer install time
+# (would bloat the tarball by ~68MB — the .so files are downloaded, not shipped)
+android/src/main/jniLibs/
+
 # Gradle build outputs (would bloat the tarball by ~400MB)
 android/.cxx/
 android/.gradle/

@@ -16,6 +16,7 @@
     "!android/.cxx/",
     "!android/.gradle/",
     "!android/build/",
+    "!android/src/main/jniLibs/",
     "assets/",
     "LICENSE",
     "README.md",
