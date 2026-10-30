@@ -68,6 +68,7 @@ object PipManager {
         sourceRectHint: Rect? = null,
         chapterTitle: String? = null,
         progressPercentage: String? = null,
+        autoEnter: Boolean = false,
     ): PictureInPictureParams {
         val actions = mutableListOf<RemoteAction>()
 
@@ -130,6 +131,18 @@ object PipManager {
         // entered, so it carries no behavioural risk.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builder.setSeamlessResizeEnabled(true)
+        }
+
+        // Auto-enter PiP when the user leaves the app (Android 12+).
+        //
+        // This is the platform's OWN switch: with it set, the system
+        // transitions the activity into PiP when the user swipes home,
+        // instead of the app having to request it. Below API 31 the
+        // platform has no equivalent - an app would have to override
+        // `onUserLeaveHint()` in its own Activity, and this library ships
+        // no Activity - so PiP entry stays manual there.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setAutoEnterEnabled(autoEnter)
         }
 
         // Source rect hint for smooth entry animation (Android 12+)

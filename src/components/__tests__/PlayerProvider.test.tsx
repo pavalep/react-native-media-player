@@ -228,6 +228,36 @@ describe('PlayerProvider → native bridge', () => {
     expect(parsed.pip.enabled).toBe(true);
   });
 
+  it('sends pip.autoEnterOnLeave to the native side', async () => {
+    // B-038: the flag was declared in the public config type, documented
+    // in the README as "auto-enter on home / recents / app-switcher", and
+    // it reached the native side inside THIS VERY payload - where nothing
+    // read it. The native layer now reads it, but the wire between the
+    // resolved config and the Kotlin side has to stay intact, or the flag
+    // goes missing again and nobody would notice.
+    await render(
+      <PlayerProvider>
+        <Text>child</Text>
+      </PlayerProvider>,
+    );
+    const parsed = JSON.parse(
+      (NativeModules.MpvPlayerModule.setConfig as jest.Mock).mock.calls[0][0],
+    );
+    expect(parsed.pip.autoEnterOnLeave).toBe(true);
+  });
+
+  it('sends the auto-enter flag the consumer asked for', async () => {
+    await render(
+      <PlayerProvider config={{ pip: { autoEnterOnLeave: false } }}>
+        <Text>child</Text>
+      </PlayerProvider>,
+    );
+    const parsed = JSON.parse(
+      (NativeModules.MpvPlayerModule.setConfig as jest.Mock).mock.calls[0][0],
+    );
+    expect(parsed.pip.autoEnterOnLeave).toBe(false);
+  });
+
   it('does not crash when JSON.stringify is given a non-circular config', async () => {
     // Smoke test: confirm the setConfig path completes without
     // throwing. (A test for circular-reference behaviour is out of

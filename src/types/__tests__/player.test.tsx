@@ -729,6 +729,70 @@ describe('usePlayer (inside PlayerProvider)', () => {
     });
   });
 
+  // B-007: the native layer used to DISCARD mpv's return code for
+  // `seek`, the relative `seek` and `playlist-clear`, so a refused
+  // command reached JS as nothing at all. It now travels the EXISTING
+  // error path, so it arrives as an `onError` with the stable contract
+  // the bridge maps mpv's MPV_ERROR_COMMAND (-12) to.
+  //
+  // This pins the JS-visible half of that: the failure is TRUTHFUL.
+  // It lands in `state.error`, and — just as important — it does NOT
+  // move the playhead or claim a seek is in flight, because the seek
+  // did not happen. A scrub bar that jumped to the requested position
+  // after a refused seek would be the same lie one layer down.
+  it('reports a refused mpv command as a truthful failure, not as a seek', async () => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PlayerProvider>{children}</PlayerProvider>
+    );
+    const { result } = await renderHook(() => usePlayer(), { wrapper });
+    const listeners = subs.handlers.get('onError') ?? [];
+    expect(listeners.length).toBeGreaterThan(0);
+
+    // The position the seek asked for, so a "fake seek" would be visible.
+    await act(async () => {
+      for (const l of listeners) {
+        l({ code: 3016, codeName: 'E_COMMAND_FAILED', recoverable: true, message: "mpv command 'seek' failed: command failed" });
+      }
+    });
+
+    expect(result.current.state.error).toEqual({
+      code: 3016,
+      codeName: 'E_COMMAND_FAILED',
+      recoverable: true,
+      message: "mpv command 'seek' failed: command failed",
+    });
+    // The refused seek did not move anything and is not in flight.
+    expect(result.current.state.positionMs).toBe(0);
+    expect(result.current.state.isSeeking).toBe(false);
+  });
+
+  it('keeps a terminal failure terminal when a refused command follows it', async () => {
+    // A refused command is RECOVERABLE (playback continued), so it must
+    // not overwrite the terminal failure the app is already showing.
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PlayerProvider>{children}</PlayerProvider>
+    );
+    const { result } = await renderHook(() => usePlayer(), { wrapper });
+    const listeners = subs.handlers.get('onError') ?? [];
+
+    await act(async () => {
+      for (const l of listeners) {
+        l({ code: 3001, codeName: 'E_LOAD_FAILED', recoverable: false, message: 'load failed' });
+      }
+    });
+    expect(result.current.state.error?.recoverable).toBe(false);
+
+    await act(async () => {
+      for (const l of listeners) {
+        l({ code: 3016, codeName: 'E_COMMAND_FAILED', recoverable: true, message: "mpv command 'seek' failed: command failed" });
+      }
+    });
+    // The terminal failure still wins — a recoverable degradation must
+    // not downgrade what the app is rendering.
+    expect(result.current.state.error?.recoverable).toBe(false);
+    expect(result.current.state.error?.codeName).toBe('E_LOAD_FAILED');
+  });
+
   it('updates state when an onFileLoaded event fires', async () => {
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <PlayerProvider>{children}</PlayerProvider>

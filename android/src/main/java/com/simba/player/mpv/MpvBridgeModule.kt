@@ -119,6 +119,15 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         @Volatile
         private var currentConfig: Map<String, Any?>? = null
 
+    /**
+     * Whether PiP should auto-enter when the user leaves the app.
+     *
+     * Read from `pip.autoEnterOnLeave` in the resolved config (and
+     * gated by `pip.enabled`, which is the master switch for every PiP
+     * entry request). It used to be a public flag that NOTHING read.
+     */
+    private var pipAutoEnter: Boolean = false
+
         /**
          * Phase 21: recursive JSONObject → Kotlin Map converter. Used
          * by [setConfig] so the stored config can be consumed
@@ -290,6 +299,13 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                 "seek"              -> "onSeek"
                 "surfaceAttached"   -> "onSurfaceAttached"
                 else                -> event
+            }
+            // The video's dimensions just changed. The params the SYSTEM
+            // reads for an auto-enter carry the aspect ratio, so they
+            // have to be refreshed with the new one - otherwise the
+            // auto-entered window has the shape of the previous video.
+            if (event == "videoReconfig") {
+                applyActivityPipParams()
             }
             try {
                 val payload = JsonUtil.jsonStringToReactMap(jsonPayload)
@@ -2252,6 +2268,10 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                 jsonObjectToMap(obj)
             }
             currentConfig = parsed
+            // The config is STORED; now ACT on it. `pip.autoEnterOnLeave`
+            // was a documented public flag that nothing read, so pressing
+            // home never entered PiP - the value was already here.
+            applyPipAutoEnterOnLeave(parsed)
             val keys = parsed?.keys?.sorted()?.joinToString(", ") ?: "(none)"
             Log.i(
                 TAG,
@@ -2269,6 +2289,94 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             // is the primary contract; the event is supplementary.
             emitErrorEvent("E_CONFIG_PARSE_FAILED", e.message ?: "setConfig parse failed", e)
             promise.reject("E_CONFIG_PARSE_FAILED", e.message ?: "setConfig parse failed", e)
+        }
+    }
+
+    /**
+     * Apply `pip.autoEnterOnLeave` to the Activity.
+     *
+     * `Activity.setAutoEnterEnabled(true)` (API 31+ / Android 12) is the
+     * platform's own switch for "enter PiP when the user leaves the app".
+     *
+     * Below API 31 there is NO platform equivalent: an app has to
+     * override `onUserLeaveHint()` in its own Activity, and this library
+     * ships NO Activity - the consumer's launcher Activity hosts
+     * playback (the one-Activity architecture). So below Android 12 this
+     * is a documented no-op and PiP entry stays manual.
+     *
+     * The consumer's Activity must also declare
+     * `android:supportsPictureInPicture="true"` for the OS to honour it.
+     * That is the consumer's manifest, not this library's.
+     *
+     * @param config the RESOLVED config map, as parsed by `setConfig`.
+     */
+    private fun applyPipAutoEnterOnLeave(config: Map<String, Any?>?) {
+        try {
+            val desired = PipAutoEnterPolicy.desiredAutoEnter(config) ?: return
+            pipAutoEnter = desired
+            applyActivityPipParams()
+        } catch (t: Throwable) {
+            // Never let this reject the `setConfig` promise: the config
+            // itself was stored fine, and a rejected promise would tell
+            // the consumer its WHOLE configuration failed.
+            Log.w(TAG, "[PlaybackTrace][Bridge][pip] applying auto-enter failed", t)
+        }
+    }
+
+    /**
+     * Push the PiP params the SYSTEM will use onto the Activity.
+     *
+     * `Activity.setPictureInPictureParams` is what the platform reads
+     * when it transitions the activity into PiP BY ITSELF - which is
+     * exactly the swipe-home path that `pip.autoEnterOnLeave` asks for.
+     * The params `enterPip` passes to `enterPictureInPictureMode` only
+     * describe a MANUAL entry.
+     *
+     * So the auto-enter flag has to live on the activity's params, and
+     * it has to carry the video's CURRENT aspect ratio - a stale aspect
+     * means the auto-entered window has the shape of the previous video.
+     * That is why this runs again on every `videoReconfig`: that is the
+     * moment mpv reports new dimensions.
+     *
+     * `Activity.setAutoEnterEnabled` does NOT exist - the platform's
+     * switch is `PictureInPictureParams.Builder.setAutoEnterEnabled`,
+     * which is API 31+. Below that the OS cannot auto-enter at all.
+     */
+    private fun applyActivityPipParams() {
+        try {
+            if (!pipAutoEnter) return
+            val activity = reactApplicationContext.currentActivity
+            if (activity == null) {
+                Log.w(
+                    TAG,
+                    "[PlaybackTrace][Bridge][pip] no activity yet; auto-enter PiP not applied",
+                )
+                return
+            }
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) {
+                Log.w(
+                    TAG,
+                    "[PlaybackTrace][Bridge][pip] auto-enter PiP needs Android 12 (API 31)+; " +
+                        "below that the OS cannot auto-enter, so PiP entry stays manual",
+                )
+                return
+            }
+            val aspect = currentVideoAspect() ?: (16f / 9f)
+            val params = com.simba.player.PipManager.buildPipParams(
+                context = activity,
+                aspect = aspect,
+                sourceRectHint = PlayerSurface.boundsInWindow(),
+                autoEnter = true,
+            )
+            activity.runOnUiThread {
+                activity.setPictureInPictureParams(params)
+                Log.i(
+                    TAG,
+                    "[PlaybackTrace][Bridge][pip] activity PiP params set, autoEnter=true",
+                )
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "[PlaybackTrace][Bridge][pip] applying activity params failed", t)
         }
     }
 
@@ -2363,6 +2471,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                     sourceRectHint = sourceRect,
                     chapterTitle = title,
                     progressPercentage = pct,
+                    autoEnter = pipAutoEnter,
                 )
                 // `enterPictureInPictureMode` ANSWERS whether the OS
                 // accepted the request, and the answer was being
@@ -2780,10 +2889,72 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     /**
      * Map an mpv error code to the lib's stable string contract.
      *
+     * The mapping itself lives in [MpvErrorContract] — one owner for the
+     * contract, and a seam a plain JUnit test can reach without a React
+     * context.
+     */
+    private fun mapMpvErrorCode(code: Int, message: String): String =
+        MpvErrorContract.mapCode(code, message)
+
+    /**
+     * T28.03: stable integer mapping for the structured error codes emitted
+     * by [emitErrorEvent]. The TS `onError` interface declares `code: number`
+     * - this helper provides the integer so programmatic handlers can switch
+     * on a stable value across versions. Numeric codes are PERMANENT: do
+     * not reuse a number once it ships (use a new range instead). Ranges:
+     *
+     *   1xxx - Initialization lifecycle (mount order, warm-up, ensurePtr)
+     *   2xxx - Activity / Intent / launch failures (PlayerActivity missing,
+     *          SecurityException, manifest mismatches)
+     *   3xxx - Playback failures (load failed, audio/video output init
+     *          failed, unknown format, unsupported, network, file not
+     *          found) - in use since v1.17.0
+     *   4xxx - Configuration / IPC errors (setConfig parse failures,
+     *          bridge serialisation mismatches)
+     *
+     * Returns `0` for unknown codes so unrecognised values degrade to
+     * a single sentinel rather than throwing.
+     */
+    private fun codeToNumeric(code: String): Int = MpvErrorContract.numeric(code)
+}
+
+/**
+ * The mpv error-code contract — the ONE place where an mpv error code
+ * becomes the lib's stable `{codeName, code}` pair.
+ *
+ * WHY IT IS AN OBJECT AND NOT TWO METHODS ON [MpvBridgeModule]
+ * -----------------------------------------------------------
+ * The mapping is PURE: it reads a number and a string and returns a
+ * string and a number. It touches no Android API and no React context.
+ *
+ * That purity is what makes it testable at all. The path that USES it
+ * (`onMpvError` -> `Arguments.createMap()` -> `eventEmitter.emit`) runs
+ * through React Native's native-backed `WritableMap`, which needs the
+ * JNI library that a JVM unit test does not have — so a unit test
+ * cannot drive the emit. It CAN drive the mapping, as long as the
+ * mapping is reachable without a module instance.
+ *
+ * So the contract lives here, `internal` (visible to this module's unit
+ * tests, invisible to consumers), and [MpvBridgeModule] delegates to
+ * it. One owner, one truth, and a seam that a plain JUnit test can
+ * reach.
+ *
+ * B-007: MPV_ERROR_COMMAND (-12) is now ALSO the landing spot for a
+ * command mpv REFUSED — a seek, a relative seek, a playlist clear.
+ * Before this, the native layer threw that code away and the app never
+ * heard about it. The mapping itself did not have to change: -12 was
+ * already "E_COMMAND_FAILED" / 3016. This object is where that
+ * coincidence is now load-bearing, so it is pinned by a test.
+ */
+internal object MpvErrorContract {
+
+    /**
+     * Map an mpv error code to the lib's stable string contract.
+     *
      * mpv's numeric codes are authoritative (`include/mpv/client.h`,
-     * `mpv_error`): -13 LOADING_FAILED, -14 AO_INIT_FAILED, -15
-     * VO_INIT_FAILED, -16 NOTHING_TO_PLAY, -17 UNKNOWN_FORMAT, -18
-     * UNSUPPORTED, -20 GENERIC, plus the API-level codes -1..-12.
+     * `mpv_error`): -12 COMMAND, -13 LOADING_FAILED, -14 AO_INIT_FAILED,
+     * -15 VO_INIT_FAILED, -16 NOTHING_TO_PLAY, -17 UNKNOWN_FORMAT, -18
+     * UNSUPPORTED, -20 GENERIC, plus the API-level codes -1..-11.
      *
      * The message heuristics are the FALLBACK, for the codes that carry
      * no information of their own.
@@ -2791,7 +2962,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * `E_RENDERER_GONE` is deliberately NOT the catch-all any more: it
      * means "the video output died", and a load failure is not that.
      */
-    private fun mapMpvErrorCode(code: Int, message: String): String = when (code) {
+    fun mapCode(code: Int, message: String): String = when (code) {
         -13 -> "E_LOAD_FAILED"
         -14 -> "E_AUDIO_INIT_FAILED"
         -15 -> "E_VIDEO_INIT_FAILED"
@@ -2826,7 +2997,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
 
     /**
      * T28.03: stable integer mapping for the structured error codes emitted
-     * by [emitErrorEvent]. The TS `onError` interface declares `code: number`
+     * by the bridge. The TS `onError` interface declares `code: number`
      * - this helper provides the integer so programmatic handlers can switch
      * on a stable value across versions. Numeric codes are PERMANENT: do
      * not reuse a number once it ships (use a new range instead). Ranges:
@@ -2843,7 +3014,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * Returns `0` for unknown codes so unrecognised values degrade to
      * a single sentinel rather than throwing.
      */
-    private fun codeToNumeric(code: String): Int = when (code) {
+    fun numeric(code: String): Int = when (code) {
         // 1xxx - Initialization
         "E_NOT_INITIALIZED" -> 1001
         // 2xxx - Activity / Intent / launch

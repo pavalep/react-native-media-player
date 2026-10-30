@@ -171,7 +171,88 @@ static JNIEnv *getEnv() {
 static void flushMpvCore(mpv_handle *mpv) {
     if (!mpv) return;
     const char *cmd[] = {"ignore", nullptr};
-    mpv_command(mpv, cmd);
+    // FIRE-AND-FORGET BY DESIGN - not an oversight.
+    //
+    // `ignore` is a no-op command, so its return value carries no
+    // information about whether the flush worked: the whole point of
+    // this call is that it BLOCKS until mpv has drained its core
+    // queue. Reporting a failure here would be reporting an error we
+    // invented, so the result is deliberately not acted on.
+    //
+    // It is still CAPTURED, because the file-wide invariant is that no
+    // mpv_command() call in this file throws its return value away
+    // (see runMpvCommand below, and the guard test that pins it).
+    const int result = mpv_command(mpv, cmd);
+    (void)result;
+}
+
+// ── Helper: report a refused mpv command to JS ────────────────────────────
+//
+// mpv reports a command failure through the RETURN VALUE of
+// mpv_command(): 0 is success, a negative value is one of mpv's own
+// error codes (`include/mpv/client.h`, `mpv_error`) -
+// MPV_ERROR_COMMAND (-12) for a command the core refuses,
+// MPV_ERROR_LOADING_FAILED (-13) for a source it cannot open.
+//
+// Every command in this file used to THROW THAT VALUE AWAY. A refused
+// seek was therefore indistinguishable from a completed one: the scrub
+// bar stayed where it was, no error was raised anywhere, and the app
+// believed the seek had worked. That is the silent lie B-007 is about.
+//
+// The failure now travels the EXISTING error path - the same
+// MPVLib.onNativeError(code, recoverable, message, requestId) callback
+// that event.cpp uses for mpv's own failures - so it lands on the same
+// `onError` event, with the same `{code, codeName, nativeCode,
+// recoverable, message}` payload, and the same stable contract the
+// Kotlin bridge already maps (-12 -> "E_COMMAND_FAILED" -> 3016). No new
+// event, no new channel, no new error shape.
+//
+// `recoverable = true` is the TRUTH here: a refused command does not
+// end playback - mpv keeps playing whatever it was playing. The app
+// renders a terminal error card only for `recoverable === false`, so
+// the failure is REPORTED rather than hidden, and it never paints over
+// a picture that is still moving.
+static void reportCommandFailure(const char *command, int result, const char *detail) {
+    const char *reason = mpv_error_string(result);
+    LOGE("[PlaybackTrace][Native][command] '%s' failed: %s (code=%d)%s%s",
+         command, reason, result,
+         (detail && detail[0]) ? " - " : "", (detail && detail[0]) ? detail : "");
+    JNIEnv *env = getEnv();
+    if (!env || !g_cls_MPVLib || !g_mid_onError) return;
+    char message[192];
+    snprintf(message, sizeof(message), "mpv command '%s' failed: %s%s%s",
+             command, reason,
+             (detail && detail[0]) ? " - " : "", (detail && detail[0]) ? detail : "");
+    jstring jMessage = env->NewStringUTF(message);
+    jstring jRequestId = env->NewStringUTF("");
+    env->CallStaticVoidMethod(g_cls_MPVLib, g_mid_onError,
+                              static_cast<jint>(result),
+                              static_cast<jboolean>(true),
+                              jMessage, jRequestId);
+    if (env->ExceptionCheck()) {
+        LOGE("onNativeError raised an exception; clearing it on the calling thread");
+        env->ExceptionClear();
+    }
+    if (jMessage) env->DeleteLocalRef(jMessage);
+    if (jRequestId) env->DeleteLocalRef(jRequestId);
+}
+
+// Runs an mpv command and REPORTS a refusal instead of swallowing it.
+//
+// Every mpv_command() call in this file goes through here (or captures
+// its result inline), so "the command was refused" can never again be
+// indistinguishable from "the command worked".
+//
+// Returns mpv's own return value so a caller that has to act on it can:
+// nativeScreenshot hands JS a path, and a path to a file that was never
+// written is a lie of the same family.
+static int runMpvCommand(mpv_handle *mpv, const char **args,
+                         const char *command, const char *detail) {
+    const int result = mpv_command(mpv, args);
+    if (result < 0) {
+        reportCommandFailure(command, result, detail);
+    }
+    return result;
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -541,7 +622,7 @@ Java_com_simba_player_mpv_MPVLib_nativeStop(JNIEnv *env, jclass, jlong nativePtr
     if (!lease.valid()) return;
     mpv_handle *mpv = lease.get();
     const char *args[] = {"stop", nullptr};
-    mpv_command(mpv, args);
+    runMpvCommand(mpv, args, "stop", nullptr);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -564,7 +645,10 @@ Java_com_simba_player_mpv_MPVLib_nativeSeek(
     char cmd[64];
     snprintf(cmd, sizeof(cmd), "%.3f", position);
     const char *args[] = {"seek", cmd, "absolute", nullptr};
-    mpv_command(mpv, args);
+    // B-007: the return value used to be thrown away here, so a seek
+    // mpv refused was indistinguishable from a seek that worked. The
+    // scrub bar simply did not move and nothing was reported.
+    runMpvCommand(mpv, args, "seek", cmd);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -576,7 +660,12 @@ Java_com_simba_player_mpv_MPVLib_nativeSeekRelative(
     char cmd[64];
     snprintf(cmd, sizeof(cmd), "%.3f", seconds);
     const char *args[] = {"seek", cmd, "relative", nullptr};
-    mpv_command(mpv, args);
+    // B-007: same defect as the absolute seek above - the refusal used
+    // to be discarded, so a relative skip that did not happen looked
+    // exactly like one that did.
+    char detail[64];
+    snprintf(detail, sizeof(detail), "relative %+.3f s", seconds);
+    runMpvCommand(mpv, args, "seek", detail);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -587,10 +676,10 @@ Java_com_simba_player_mpv_MPVLib_nativeStepFrame(
     mpv_handle *mpv = lease.get();
     if (direction > 0) {
         const char *args[] = {"frame-step", nullptr};
-        mpv_command(mpv, args);
+        runMpvCommand(mpv, args, "frame-step", nullptr);
     } else {
         const char *args[] = {"frame-back-step", nullptr};
-        mpv_command(mpv, args);
+        runMpvCommand(mpv, args, "frame-back-step", nullptr);
     }
 }
 
@@ -602,8 +691,14 @@ Java_com_simba_player_mpv_MPVLib_nativeScreenshot(
     mpv_handle *mpv = lease.get();
     const char *path = env->GetStringUTFChars(outputPath, nullptr);
     const char *args[] = {"screenshot-to-file", path, nullptr};
-    mpv_command(mpv, args);
+    const int result = runMpvCommand(mpv, args, "screenshot-to-file", path);
     env->ReleaseStringUTFChars(outputPath, path);
+    // A refused screenshot wrote NO file. Returning the path anyway
+    // would hand JS a path to a file that does not exist - the same
+    // silent lie this change removes everywhere else. The empty string
+    // is what this method already returns when the handle is not
+    // usable, and it is what the no-op JS bridge returns too.
+    if (result < 0) return env->NewStringUTF("");
     return outputPath;
 }
 
@@ -732,7 +827,9 @@ Java_com_simba_player_mpv_MPVLib_nativeLoadPlaylist(
     if (!lease.valid()) return;
     mpv_handle *mpv = lease.get();
     const char *clearArgs[] = {"playlist-clear", nullptr};
-    mpv_command(mpv, clearArgs);
+    // B-007: the clear used to discard mpv's verdict, so a playlist
+    // that was NOT cleared looked exactly like one that was.
+    runMpvCommand(mpv, clearArgs, "playlist-clear", nullptr);
     jsize count = env->GetArrayLength(paths);
     for (jsize i = 0; i < count; i++) {
         jstring jpath = (jstring)env->GetObjectArrayElement(paths, i);
@@ -756,7 +853,7 @@ Java_com_simba_player_mpv_MPVLib_nativePlaylistNext(
     if (!lease.valid()) return;
     mpv_handle *mpv = lease.get();
     const char *args[] = {"playlist-next", nullptr};
-    mpv_command(mpv, args);
+    runMpvCommand(mpv, args, "playlist-next", nullptr);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -766,7 +863,7 @@ Java_com_simba_player_mpv_MPVLib_nativePlaylistPrev(
     if (!lease.valid()) return;
     mpv_handle *mpv = lease.get();
     const char *args[] = {"playlist-prev", nullptr};
-    mpv_command(mpv, args);
+    runMpvCommand(mpv, args, "playlist-prev", nullptr);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -778,7 +875,7 @@ Java_com_simba_player_mpv_MPVLib_nativePlaylistRemove(
     char cmd[32];
     snprintf(cmd, sizeof(cmd), "%d", index);
     const char *args[] = {"playlist-remove", cmd, nullptr};
-    mpv_command(mpv, args);
+    runMpvCommand(mpv, args, "playlist-remove", cmd);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -788,7 +885,7 @@ Java_com_simba_player_mpv_MPVLib_nativePlaylistShuffle(
     if (!lease.valid()) return;
     mpv_handle *mpv = lease.get();
     const char *args[] = {"playlist-shuffle", nullptr};
-    mpv_command(mpv, args);
+    runMpvCommand(mpv, args, "playlist-shuffle", nullptr);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -798,7 +895,10 @@ Java_com_simba_player_mpv_MPVLib_nativePlaylistClear(
     if (!lease.valid()) return;
     mpv_handle *mpv = lease.get();
     const char *clearArgs[] = {"playlist-clear", nullptr};
-    mpv_command(mpv, clearArgs);
+    // B-007: the third command the register named. The verdict mpv
+    // returned was discarded, so a playlist that was NOT cleared was
+    // indistinguishable from one that was.
+    runMpvCommand(mpv, clearArgs, "playlist-clear", nullptr);
 }
 
 // `nativeSelectTrack()` was REMOVED — it carried no track type, and it
@@ -818,10 +918,10 @@ Java_com_simba_player_mpv_MPVLib_nativeSetVideoFilter(
     const char *utf = env->GetStringUTFChars(filter, nullptr);
     if (enable) {
         const char *cmd[] = {"vf", "add", utf, nullptr};
-        mpv_command(mpv, cmd);
+        runMpvCommand(mpv, cmd, "vf add", utf);
     } else {
         const char *cmd[] = {"vf", "del", utf, nullptr};
-        mpv_command(mpv, cmd);
+        runMpvCommand(mpv, cmd, "vf del", utf);
     }
     env->ReleaseStringUTFChars(filter, utf);
 }
@@ -836,10 +936,10 @@ Java_com_simba_player_mpv_MPVLib_nativeSetAudioFilter(
     const char *utf = env->GetStringUTFChars(filter, nullptr);
     if (enable) {
         const char *cmd[] = {"af", "add", utf, nullptr};
-        mpv_command(mpv, cmd);
+        runMpvCommand(mpv, cmd, "af add", utf);
     } else {
         const char *cmd[] = {"af", "del", utf, nullptr};
-        mpv_command(mpv, cmd);
+        runMpvCommand(mpv, cmd, "af del", utf);
     }
     env->ReleaseStringUTFChars(filter, utf);
 }
