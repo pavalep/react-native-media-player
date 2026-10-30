@@ -1,4 +1,134 @@
 
+## [2.1.0] - 2026-10-30
+
+### Fixed
+
+- **A refused mpv command was indistinguishable from one that worked.**
+
+  Every `mpv_command()` call in `android/src/main/cpp/main.cpp` threw
+  mpv's return value away. mpv reports a command failure through that
+  value — `MPV_ERROR_COMMAND` (-12) for a command the core refuses — so
+  a seek mpv refused looked exactly like a seek that landed: the scrub
+  bar simply did not move, nothing was reported anywhere, and the app
+  believed the seek had worked.
+
+  The register named `seek` (absolute), `seek` (relative) and
+  `playlist-clear`; the change covers **every** command in the file, so
+  no sibling of the same defect is left behind.
+
+  A refusal now travels the EXISTING error path — the same
+  `MPVLib.onNativeError(code, recoverable, message, requestId)` callback
+  that `event.cpp` uses for mpv's own failures — so it lands on the same
+  `onError` event with the same `{code, codeName, nativeCode,
+  recoverable, message}` payload and the same stable mapping
+  (-12 → `E_COMMAND_FAILED` → 3016). No new event, no new channel, no
+  new error shape.
+
+  `recoverable = true` is the truth here: a refused command does not
+  end playback, so the failure is REPORTED rather than painted over a
+  picture that is still moving.
+
+  `nativeScreenshot` now returns an empty string when mpv refuses the
+  write. It used to return the path anyway — a path to a file that was
+  never written, which is the same silent lie.
+
+- **`pip.autoEnterOnLeave` was a public flag that nothing read.**
+
+  `PipConfig.autoEnterOnLeave` was declared in the public config type,
+  defaulted to `true`, and documented as "auto-enter on home / recents /
+  app-switcher". **Nothing read it** — not the JS layer, not the native
+  layer. The value was already reaching Kotlin inside the resolved
+  config JSON that `setConfig` parses; it sat there, unread, while the
+  README described a feature that could not happen.
+
+  It now drives the platform's own switch,
+  `PictureInPictureParams.Builder.setAutoEnterEnabled` (API 31+ /
+  Android 12). The params are pushed onto the Activity with
+  `Activity.setPictureInPictureParams` — which is what the OS reads when
+  it transitions into Picture-in-Picture BY ITSELF, the swipe-home path
+  the flag was written for. The params carry the video's CURRENT aspect
+  ratio and are refreshed on every `videoReconfig`, so the auto-entered
+  window has the shape of the video being played and not of the previous
+  one.
+
+  `pip.enabled` remains the master switch for every PiP entry request:
+  a disabled PiP means auto-enter is off, whatever the other flag says.
+
+  Below API 31 the OS cannot auto-enter at all, so entry stays manual
+  through `commands.enterPip()`. The library logs that instead of
+  pretending, because the library ships no Activity and the pre-31
+  equivalent would be the consumer overriding `onUserLeaveHint()` in its
+  own launcher Activity.
+
+- **The published package carried things no consumer runs.**
+
+  7 Kotlin test files, 13 JS test files, and two one-shot development
+  patches — including a Python script — shipped in the tarball.
+  `example/` and the git metadata were already out, and are now excluded
+  explicitly so a future change to `files` cannot let them back in.
+
+  83 files / 285.2 kB → **53 files / 217.6 kB**.
+
+### Changed
+
+- **The repository no longer carries its own scratch.** 16 commit-message
+  drafts, the `delete_me/` folder (24 more drafts, a 63 MB jniLibs
+  archive and a 15 MB test archive), `orphan-cleanup.txt` and six
+  published npm tarballs at 65 MB each — roughly 390 MB of git history
+  for no reason, each tarball 65 MB because it still carried the native
+  binaries. Nothing was deleted; it all moved under `.local/`, which is
+  gitignored.
+
+- **The README was rewritten against the source.** It advertised
+  `<DefaultControls>`, which was removed in 2.0.0, and described the
+  auto-enter flag that nothing read. It also documented four hooks and
+  three command groups that do not exist. Every claim is now checked
+  against the code, and the "what this is not" section says plainly
+  what the library does not do.
+
+- **This changelog records 2.0.0 and 2.0.1,** which it did not — 2.0.0
+  was a breaking release and its absence was the reason npmjs showed a
+  README describing a component that no longer existed.
+
+## [2.0.1] - 2026-10-29
+
+### Fixed
+
+- **`isSurfaceMounted()` always answered `false`,** so the library's
+  `commands.openPlayer({type: 'video'})` always refused — including for
+  a consumer that had a picture mounted. The library's own jest mock
+  answered `true`, the one value the native code could never produce, so
+  the suite was green exactly where the product was broken.
+
+  NEW `MpvRenderViewRegistry` holds the live picture views as weak
+  references, written by `MpvRenderViewManager.createViewInstance` and
+  withdrawn by `onDropViewInstance`. The old `PlayerSurface` registry
+  was written by a `mount()` that nothing calls and an `attach()` that
+  nothing calls, so its view reference was never written and `current()`
+  always answered `null`.
+
+## [2.0.0] - 2026-10-29
+
+### Removed (BREAKING)
+
+- **`<DefaultControls>` is removed,** along with `DefaultControlsProps`.
+  It was a 564-line transport chrome bundle, publicly exported, and wired
+  as `<PlayerRoot>`'s fallback whenever a consumer did not pass
+  `renderControls` — so the library always carried a chrome
+  implementation a consumer could end up using by accident, and one it
+  had to keep working.
+
+  **`<PlayerRoot>` without `renderControls` renders no controls** after
+  2.0.0, where it rendered `DefaultControls` before.
+
+  `renderControls` stays OPTIONAL on `<PlayerProvider>`, and that is
+  deliberate: the common case is a consumer that drives the player
+  itself and never renders a full-screen control bar. Omitted now means
+  "no chrome", not "the library's controls".
+
+  The contract is now stated in one place: **the library draws no
+  chrome**.
+
 ## [1.22.0] - 2026-10-21
 
 ### Fixed

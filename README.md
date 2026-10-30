@@ -1,6 +1,9 @@
 # @simba-dev/react-native-media-player
 
-React Native video & audio player powered by [libmpv](https://mpv.io/), with first-class **Picture-in-Picture**, **MediaSession**, **foreground service**, and a customizable TypeScript UI. Built for Android. Designed to be a drop-in replacement for `react-native-video` / `react-native-track-player` / `expo-av`.
+React Native video and audio playback for Android, backed by [libmpv](https://mpv.io/).
+One engine for both lanes: a MediaSession and a foreground service for audio, Picture-in-Picture for video.
+
+The library renders the picture and exposes state and commands. It draws no controls of its own — your app supplies the chrome.
 
 ![Simba Player hero image — Android video player UI mockup](https://raw.githubusercontent.com/pavalep/react-native-media-player/main/assets/hero.svg)
 
@@ -17,48 +20,74 @@ React Native video & audio player powered by [libmpv](https://mpv.io/), with fir
 </p>
 
 <p align="left">
-  <a href="https://github.com/pavalep/react-native-media-player/releases">📦 Releases</a>
+  <a href="https://github.com/pavalep/react-native-media-player/releases">Releases</a>
   &nbsp;·&nbsp;
-  <a href="./CHANGELOG.md">📝 CHANGELOG</a>
+  <a href="https://github.com/pavalep/react-native-media-player/blob/main/CHANGELOG.md">CHANGELOG</a>
   &nbsp;·&nbsp;
-  <a href="https://www.npmjs.com/package/@simba-dev/react-native-media-player">📦 npm package</a>
+  <a href="https://www.npmjs.com/package/@simba-dev/react-native-media-player">npm package</a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/pavalep/react-native-media-player/tags">🏷️ Tags</a>
+  <a href="https://github.com/pavalep/react-native-media-player/tags">Tags</a>
 </p>
 
-## Table of contents
+## Contents
 
-1. [What is `@simba-dev/react-native-media-player`?](#what-is-simbareact-native-media-player)
-2. [Installation](#installation)
-3. [Basic usage](#basic-usage)
-4. [Custom UI](#custom-ui)
-5. [Configuration](#configuration)
-6. [Picture-in-Picture](#picture-in-picture)
-7. [Background audio](#background-audio)
-8. [Theming](#theming)
-9. [API reference](#api-reference)
-10. [Troubleshooting](#troubleshooting)
-11. [Limitations](#limitations)
-12. [Sponsor & support](#sponsor--support)
-13. [Contributing](#contributing)
-14. [License](#license)
+1. [What this is](#what-this-is)
+2. [What this is not](#what-this-is-not)
+3. [Requirements](#requirements)
+4. [Installation](#installation)
+5. [Consumer setup](#consumer-setup)
+6. [Quick start](#quick-start)
+7. [Controls](#controls)
+8. [Configuration](#configuration)
+9. [Picture-in-Picture](#picture-in-picture)
+10. [Background audio](#background-audio)
+11. [Theming](#theming)
+12. [API reference](#api-reference)
+13. [Troubleshooting](#troubleshooting)
+14. [Limitations](#limitations)
+15. [Contributing](#contributing)
+16. [License](#license)
 
 ---
 
-## What is `@simba-dev/react-native-media-player`?
+## What this is
 
-A standalone NPM package that gives your React Native Android app a unified **video + audio** playback engine backed by **libmpv**. The same engine, the same MediaSession, the same foreground service — for both video and audio playback.
+A playback engine for React Native on Android, backed by libmpv. One engine serves both audio and
+video, and the two lanes meet in the same bridge:
 
-**Highlights:**
+- **One Activity.** The library declares no Activity. Playback happens inside the launcher Activity
+  your app already has; the video picture is `<SimbaVideo />` in your React tree.
+- **One engine for audio and video.** Audio files play through the same libmpv instance with no
+  surface attached, so there is no second player to maintain.
+- **MediaSession and foreground service.** Title, artist and album reach the lock screen and the
+  media notification; play, pause, stop, next, previous and seek are advertised to the session, so
+  headset buttons and Bluetooth controls work.
+- **Picture-in-Picture.** Manual entry on demand, and OS-level auto-enter on leave from Android 12.
+- **Typed surface.** Config, state, commands and hooks are all typed.
 
-- **One Activity** — playback renders into a `SurfaceView` your app already hosts. There is no second player window to declare, and no second Activity to keep in sync with yours.
-- **Unified audio + video** — one engine, one set of controls. Audio files use the same `libmpv` instance with the surface hidden; no second player to maintain.
-- **In-window video** — the surface is mounted once and resized to whatever rect you give it, so a docked mini player shows a **live picture**, not a poster frame.
-- **Picture-in-Picture** — auto-enter on background (configurable), manual toggle, custom RemoteActions. Works correctly with the React Native view tree (no nested-SurfaceView surprises).
-- **MediaSession + lock-screen controls** — title / artist / album on the lock screen; play / pause / skip / seek from Bluetooth headphones, wired headsets, Android Auto, etc.
-- **Foreground service** — keeps audio alive when the activity backgrounds (Spotify-style behavior, opt-in).
-- **Customizable UI** — use `<DefaultControls>` out of the box, swap in your own via the `renderControls` prop, or build fully from scratch with `usePlayer` + `useTheme`.
-- **TypeScript-first** — every prop, hook, and config field is fully typed.
+## What this is not
+
+- **Not a drop-in replacement for `react-native-video`, `expo-av` or `react-native-track-player`.**
+  Those expose a component you hand a `source` to. This one has a different shape: a provider, a
+  `<SimbaVideo />` picture, and `usePlayer()` for state and commands. There is no `<Video source={…} />`
+  here, and no adapter will make one.
+- **Not a control surface.** Since 2.0.0 the library ships no controls at all — see
+  [Controls](#controls).
+- **Not iOS.** `react-native.config.js` sets `ios: null`; there is no iOS implementation.
+- **Not a legacy-bridge library.** The native package is a `TurboReactPackage`, so the New
+  Architecture is required (`newArchEnabled=true`).
+- **Not a "clone the repo and build it" package.** The prebuilt libmpv binaries are downloaded at
+  install time — see [Installation](#installation).
+
+## Requirements
+
+| | |
+| --- | --- |
+| React Native | `>= 0.76.0` (peer dependency) |
+| React | `>= 18.0.0` (peer dependency) |
+| Android | API 24+ (Android 7.0). PiP entry calls `Activity.enterPictureInPictureMode()`, which was added in API 24. `compileSdk` and `targetSdk` are inherited from your app's `rootProject.ext` — the library does not pin them. |
+| JDK | 17. The library's Kotlin `jvmTarget` is 17. |
+| New Architecture | Required. `PlayerPackage` extends `TurboReactPackage`. |
 
 ## Installation
 
@@ -66,22 +95,32 @@ A standalone NPM package that gives your React Native Android app a unified **vi
 npm install @simba-dev/react-native-media-player
 ```
 
-Autolinking handles the rest — RN's `react-native config` will find the package via the shipped [`react-native.config.js`](./react-native.config.js) and register `com.simba.player.PlayerPackage` in your `MainApplication.kt` automatically on next build.
+Autolinking handles the rest: the shipped `react-native.config.js` tells React Native's CLI where
+the Android module lives, so `com.simba.player.PlayerPackage` is registered in your
+`MainApplication.kt` on the next build.
 
-### Requirements
+### The native binaries
 
-- React Native **≥ 0.76** (bridgeless mode required)
-- Android `minSdk` **24** (Android 7.0 Nougat — needed for Picture-in-Picture)
-- Kotlin **1.9+** in the consumer app
+The `postinstall` script (`scripts/download-native.js`) downloads the prebuilt native libraries
+(libmpv and friends) from the matching GitHub release, verifies the archive's SHA-256 and extracts
+it into `android/src/main/jniLibs/<abi>/` inside the installed package. Four ABIs are published:
+`arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`.
 
-### Consumer setup
+The script is idempotent — if the binaries are already in place it exits without a network call,
+so re-running `npm install` is safe. Set `SKIP_DOWNLOAD_NATIVE=1` to skip the download entirely
+(this is what the release workflow does, because CI builds the binaries itself).
 
-Nothing to register. The package ships its own `<service>` and `<receiver>` declarations, and playback renders into **your** existing launcher Activity — there is no player Activity to declare.
+## Consumer setup
 
-Your launcher Activity does need the PiP prerequisites on Android 12+:
+The package's own manifest declares a foreground service and a PiP action receiver. It declares no
+Activity: playback happens in the Activity your app already has.
+
+### Picture-in-Picture
+
+Your launcher Activity has to opt in:
 
 ```xml
-<!-- MOBILE_APP_REACT_NATIVE/android/app/src/main/AndroidManifest.xml -->
+<!-- android/app/src/main/AndroidManifest.xml -->
 <activity
     android:name=".MainActivity"
     android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|navigation"
@@ -97,9 +136,10 @@ Your launcher Activity does need the PiP prerequisites on Android 12+:
 </activity>
 ```
 
-`resizeableActivity="true"` is **not optional**. Its absence in an earlier release was misdiagnosed as "the SurfaceView is nested in React Native's view tree", which is what produced the original PiP black screen and the whole second-Activity architecture built on top of it.
+`resizeableActivity="true"` is not optional. An Activity that is not resizeable cannot enter
+Picture-in-Picture.
 
-If you plan to use **background audio**, declare the foreground-service permissions:
+### Background audio
 
 ```xml
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -107,621 +147,338 @@ If you plan to use **background audio**, declare the foreground-service permissi
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 ```
 
-For **API 33+** (Android 13+) the app must request `POST_NOTIFICATIONS` at runtime before the first media-style notification is shown. The bridge's `requestNotificationPermission()` helper does this:
+On Android 13+ (API 33) the app must hold `POST_NOTIFICATIONS` before the media notification is
+shown. `commands.requestNotificationPermission()` asks for it; on older versions it does nothing.
 
-```ts
-import { getMpvPlayerModule } from '@simba-dev/react-native-media-player';
-getMpvPlayerModule().requestNotificationPermission?.(); // graceful no-op on older APIs
-```
+## Quick start
 
-## Basic usage
-
-```tsx
-// App.tsx — one wrapper, one import, zero glue code
-import React from 'react';
-import {
-  SimbaPlayer,
-  useOpenFromUrl,
-} from '@simba-dev/react-native-media-player';
-
-export default function App() {
-  return (
-    <SimbaPlayer
-      getResumePosition={(uri) =>
-        store.getState().bookmarks.byFileUri[uri]?.positionMs
-      }
-    >
-      <AppContent />
-    </SimbaPlayer>
-  );
-}
-
-function AppContent() {
-  // Deep links: open incoming content:// + file:// URIs in the player.
-  const openFromUrl = useOpenFromUrl();
-  React.useEffect(() => {
-    Linking.getInitialURL().then(url => url && openFromUrl(url));
-    const sub = Linking.addEventListener('url', ({ url }) => openFromUrl(url));
-    return () => sub.remove();
-  }, [openFromUrl]);
-
-  return <YourNavigator />;
-}
-```
-
-That's it — `<SimbaPlayer>` is the one-import, one-wrapper integration point. It composes the `PlayerProvider` (config + state) and `PlayerResumeProvider` (bookmark-aware resume lookup). `useOpenFromUrl()` absorbs the deep-link URI-scheme filter + title-derivation + extension-classification. `getResumePosition` is the function-prop shape for the resume lookup.
-
-To play media in-window, drive it with `useLaunchPlayback(payload)` from your own tree — it loads the payload into the surface you have mounted, exactly once per launch identity. There is no activity branch to switch on, because there is no second Activity.
-
-### Per-screen usage (V15+)
-
-Every player-related call is a one-line module hook. No `useAppDispatch` in player files. No `useAppSelector(state => state.player.X)`. No V11-mirrored redux state.
-
-```tsx
-import {
-  usePlayerActivity,   // single-track play
-  useOpenPlaylist,     // play all from a list
-  useQueue,            // add / remove / reorder queue items
-  useSleepTimer,       // arm a sleep timer
-  useEqualizer,        // 10-band EQ
-  useIsLiked,          // per-file "liked" state
-  useShuffle,          // shuffle flag
-} from '@simba-dev/react-native-media-player';
-
-// Single-track play (V14, unchanged)
-const {openPlayer} = usePlayerActivity();
-const handlePlay = (item) => openPlayer({uri: item.uri, title: item.title, type: 'audio'});
-
-// Play all from a list (V15 — the "play all" two-step absorption)
-const {openPlaylist} = useOpenPlaylist();
-const handlePlayAll = () => openPlaylist(sortedTracks, {type: 'audio'});
-
-// Add to queue (V15 — zustand-backed, no Redux)
-const {addToQueue} = useQueue();
-const handleAddToQueue = (item) => addToQueue({uri: item.uri, title: item.title, ...});
-
-// Set sleep timer (V15 — public surface; the consumer hasn't wired UI yet)
-const {endTime, setTimer, clear} = useSleepTimer();
-const handleSet30Min = () => setTimer(30 * 60);  // 30 minutes
-```
-
-### Launching a file from JS
-
-```tsx
-import { usePlayerActivity } from '@simba-dev/react-native-media-player';
-
-function TrackRow({ track }) {
-  const { openPlayer } = usePlayerActivity();
-  return (
-    <Pressable onPress={() => openPlayer({
-      uri: track.uri,
-      title: track.title,
-      type: 'audio',        // 'video' | 'audio'
-      startPositionMs: 0,   // optional
-    })}>
-      <Text>{track.title}</Text>
-    </Pressable>
-  );
-}
-// Audio starts the foreground service; video loads into the surface
-// your app already has mounted. Either way you own the chrome.
-```
-
-### Resume-aware openPlayer (with bookmarks)
-
-If your app has a bookmarks/history feature, wrap your tree in `<SimbaPlayer>` with a `lookup` adapter and use `useOpenWithResume()`. The hook accepts a `resumeId` and looks up the saved position via your adapter — no manual position plumbing in every call site.
+The integration is **1 import + 1 wrapper + at most 1 optional adapter**.
 
 ```tsx
 // App.tsx
-import { SimbaPlayer, type PlayerResumeLookup } from '@simba-dev/react-native-media-player';
+import React from 'react';
+import {SimbaPlayer} from '@simba-dev/react-native-media-player';
 
-const resumeLookup: PlayerResumeLookup = {
-  getResumePosition: (resumeId) => {
-    // resolve the resume position (ms) for the given item
-    // — return undefined for "no saved position"
-    return store.getState().bookmarks.byFileUri[resumeId]?.positionMs;
-  },
-};
-
-<SimbaPlayer lookup={resumeLookup}>
-  <AppContent />
-</SimbaPlayer>
-
-// TrackRow.tsx
-import { useOpenWithResume } from '@simba-dev/react-native-media-player';
-
-function TrackRow({ track }) {
-  const openPlayer = useOpenWithResume();
+export default function App() {
   return (
-    <Pressable onPress={() => openPlayer({
-      uri: track.uri,
-      title: track.title,
-      type: 'audio',
-      resumeId: track.uri,  // module looks up the saved position
-    })}>
-      <Text>{track.title}</Text>
-    </Pressable>
+    <SimbaPlayer config={{audio: {backgroundPlayback: true}}}>
+      <RootNavigator />
+    </SimbaPlayer>
   );
 }
 ```
 
-### Mapping content kinds to V13 stream types
+`<SimbaPlayer>` composes `PlayerProvider` (config plus live player state) and
+`PlayerResumeProvider` (the resume lookup). Its props are `config`, `resumePolicy` and
+`children`.
 
-If your items have content kinds like `'music'`, `'movie'`, `'podcast'` (not the V13 stream types `'audio' | 'video'`), use the `resolveStreamType` helper:
+### Play something
 
 ```tsx
-import { usePlayerActivity, resolveStreamType } from '@simba-dev/react-native-media-player';
+import {usePlayerActivity} from '@simba-dev/react-native-media-player';
 
-const { openPlayer } = usePlayerActivity();
-openPlayer({
-  uri: item.uri,
-  title: item.title,
-  type: resolveStreamType(item.kind),  // 'music' -> 'audio', 'movie' -> 'video', etc.
+const {openPlayer} = usePlayerActivity();
+
+await openPlayer({
+  uri: 'https://example.com/movie.mkv',
+  title: 'Movie',
+  type: 'video',
 });
 ```
 
-## Custom UI
+`type: 'audio'` starts the foreground media service. `type: 'video'` loads into the mounted
+`<SimbaVideo />` and resolves `false` when no surface is mounted — check `commands.isSurfaceMounted()`
+if you expected it to work and it did not.
 
-Two ways to swap the controls:
-
-### 1. `renderControls` prop (recommended)
+### Render the picture
 
 ```tsx
-import React from 'react';
-import { Pressable, Text, View } from 'react-native';
-import {
-  PlayerProvider,
-  PlayerRoot,
-  usePlayer,
-  useTheme,
-} from '@simba-dev/react-native-media-player';
+import {SimbaVideo} from '@simba-dev/react-native-media-player';
 
-function MyCustomControls() {
-  const { state, commands } = usePlayer();
-  const theme = useTheme();
+<SimbaVideo style={{flex: 1}} resizeMode="contain" />;
+```
+
+`resizeMode` is `'contain' | 'cover' | 'stretch'` and defaults to `'contain'`.
+
+### Drive it
+
+```tsx
+import {usePlayer, usePlayerProgress} from '@simba-dev/react-native-media-player';
+
+function Controls() {
+  const {state, commands} = usePlayer();
+  const {positionMs, durationMs} = usePlayerProgress();
+
   return (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-      <Text style={{ color: theme.text }}>{state.title}</Text>
-      <Pressable onPress={state.isPlaying ? commands.pause : commands.play}>
-        <Text style={{ color: theme.accent, fontSize: 24 }}>
-          {state.isPlaying ? '⏸' : '▶'}
-        </Text>
-      </Pressable>
+    <View>
+      <Text>
+        {Math.floor(positionMs / 1000)} / {Math.floor(durationMs / 1000)}
+      </Text>
+      <Button
+        title={state.isPlaying ? 'Pause' : 'Play'}
+        onPress={commands.togglePlayPause}
+      />
     </View>
   );
 }
-
-export default function App() {
-  return (
-    <PlayerProvider renderControls={() => <MyCustomControls />}>
-      <PlayerRoot />
-    </PlayerProvider>
-  );
-}
 ```
 
-The `renderControls` function takes no arguments — your component reads what it needs (`usePlayer`, `useTheme`, `usePlayerProgress`) from the provider context. When omitted, `<PlayerRoot>` falls back to `<DefaultControls>`.
+`usePlayer()` returns `{state, commands}`. `usePlayerProgress()` returns the progress object
+directly (`positionMs`, `durationMs`, `isBuffering`, `isSeeking`, `seekable`, `cacheRanges`,
+`cacheFill`).
 
-### 2. Build fully from scratch
-
-Skip `<PlayerRoot>` entirely and lay out your own tree:
+### Optional adapter: resume positions
 
 ```tsx
-import React from 'react';
-import { View } from 'react-native';
-import { PlayerProvider, PlayerSurface } from '@simba-dev/react-native-media-player';
-import { MyControls } from './MyControls';
-
-export default function App() {
-  return (
-    <PlayerProvider>
-      <View style={{ flex: 1 }}>
-        <PlayerSurface />
-        {/* your own controls, positioned absolutely over the surface */}
-        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
-          <MyControls />
-        </View>
-      </View>
-    </PlayerProvider>
-  );
-}
+<SimbaPlayer resumePolicy={(id) => bookmarks.byId[id]?.positionMs}>
+  <RootNavigator />
+</SimbaPlayer>
 ```
 
-## Configuration
+`resumePolicy` receives the `resumeId` you pass to `useOpenWithResume()` and returns a saved
+position in milliseconds, or `undefined` when there is none.
 
-Pass a `config` prop to `<PlayerProvider>`:
+## Controls
+
+**The library draws no controls.** That has been the contract since 2.0.0.
+
+`<DefaultControls>` — the default control bundle the package used to ship — was **removed in
+2.0.0**. The export no longer exists, and `<PlayerRoot>` no longer falls back to it. If you were
+using it, keep your own copy in your app or render your own controls; the library will not supply
+them.
+
+There are two ways to have chrome, and you can mix them:
+
+1. **Render your own component** wherever you want it, reading `usePlayer()`,
+   `usePlayerProgress()` and `useTheme()`. Nothing else is needed.
+2. **Use the `renderControls` slot** on `<PlayerProvider>`. The function returns the tree to draw
+   over the picture, and `<PlayerRoot>` positions it in an absolutely positioned overlay:
 
 ```tsx
-<PlayerProvider
-  config={{
-    theme: { accent: '#00FF88' },
-    pip: { enabled: true, autoEnterOnLeave: true },
-    audio: { backgroundPlayback: true, respectAudioFocus: true },
-    hardwareDecoding: 'auto', // 'auto' | 'mediacodec' | 'no'
-    notifications: { enabled: true, channelId: 'my_app_media' },
-    subtitle: { preferredLanguages: ['en'], fontSize: 18 },
-    debug: { verboseLogging: false },
-  }}
->
-  {children}
+<PlayerProvider config={config} renderControls={() => <MyControls />}>
+  <PlayerRoot />
 </PlayerProvider>
 ```
 
-Every field is optional and falls back to the defaults in [`DEFAULT_PLAYER_CONFIG`](./src/types/config.ts). See the [API reference](#api-reference) for the full type definitions.
+`renderControls` takes no arguments — read what you need from the hooks inside your component.
+The slot is JS-only: it is never sent to the native side. `useRenderControls()` returns the slot,
+or `null` when there is none.
 
-### Spread-and-override pattern
+`<PlayerRoot>` renders `<PlayerSurface />` — a transparent `flex: 1` layout placeholder — plus the
+overlay. The picture itself is `<SimbaVideo />`; `<PlayerSurface>` is not the video surface.
 
-For minor overrides, spread the defaults:
+## Configuration
+
+`config` is a `PlayerConfig`. Every field is optional and merged with the defaults by
+`resolvePlayerConfig`.
+
+| Section | Fields | Default |
+| --- | --- | --- |
+| `theme` | `accent`, `background`, `text`, `textSecondary`, `surface`, `icon?` | `#FFD700`, `#121216`, `#FFFFFF`, `rgba(255,255,255,0.6)`, `rgba(255,255,255,0.1)` |
+| `pip` | `enabled`, `autoEnterOnLeave` | `true`, `true` |
+| `hardwareDecoding` | `'auto' \| 'mediacodec' \| 'no'` | `'auto'` |
+| `notifications` | `enabled`, `channelId` | `true`, `'simba_player_media'` |
+| `audio` | `backgroundPlayback`, `respectAudioFocus` | `true`, `true` |
+| `subtitle` | `preferredLanguages`, `fontSize` | `[]`, `16` |
+| `debug` | `verboseLogging` | `false` |
 
 ```tsx
-import { DEFAULT_PLAYER_CONFIG } from '@simba-dev/react-native-media-player';
+import {PlayerProvider} from '@simba-dev/react-native-media-player';
 
 <PlayerProvider
   config={{
-    ...DEFAULT_PLAYER_CONFIG,
-    audio: { ...DEFAULT_PLAYER_CONFIG.audio, backgroundPlayback: false },
-  }}
->
+    theme: {accent: '#00FF88'},
+    pip: {enabled: true, autoEnterOnLeave: true},
+    audio: {backgroundPlayback: true, respectAudioFocus: true},
+    hardwareDecoding: 'auto',
+  }}>
+  <App />
+</PlayerProvider>;
 ```
+
+The resolved config is pushed to the native bridge as JSON. The native side acts on the PiP
+section (it drives the auto-enter switch); the remaining sections are values your app reads back
+with `usePlayerConfig()` and applies itself. `DEFAULT_PLAYER_CONFIG` and `DEFAULT_THEME` are
+exported if you would rather spread and patch.
 
 ## Picture-in-Picture
 
-Picture-in-Picture is on by default. Two configuration knobs:
+Manual entry:
 
 ```tsx
-<PlayerProvider
-  config={{
-    pip: {
-      enabled: true,         // master switch — when false, all PiP entry requests are ignored
-      autoEnterOnLeave: true, // auto-enter on home/recents/app-switcher
-    },
-  }}
->
+commands.enterPip();          // chapter title and progress are optional arguments
+commands.exitPip();
+commands.exitPipAndFinish();
 ```
 
-### Manual PiP control
+`enterPip()` calls `enterPictureInPictureMode()` on the current Activity, so the Activity has to
+declare `android:supportsPictureInPicture="true"` (see [Consumer setup](#consumer-setup)).
 
-```tsx
-import { NativeModules } from 'react-native';
-const { MpvPlayerModule } = NativeModules;
+**Auto-enter on leave** is `config.pip.autoEnterOnLeave` (default `true`). It maps onto the
+Android 12 / API 31 platform feature `PictureInPictureParams.Builder.setAutoEnterEnabled`: the
+OS enters Picture-in-Picture for you when the user leaves the app. **Below API 31 the platform
+has no such feature** — the OS cannot auto-enter Picture-in-Picture there, and entry stays manual
+through `commands.enterPip()`.
 
-MpvPlayerModule.enterPip();             // enter PiP right now
-MpvPlayerModule.exitPip();              // expand back to fullscreen
-MpvPlayerModule.exitPipAndFinish();     // close the player session
-```
+The two PiP flags combine: auto-enter needs `pip.enabled` and `pip.autoEnterOnLeave` to both be
+true.
 
-### PiP RemoteActions
+The Picture-in-Picture action row has three buttons: **Play/Pause**, **Expand** and **Close**.
+They arrive in JS as the `onPipPlayPause`, `onPipExpand` and `onPipClose` events, next to
+`onPipModeChanged`.
 
-The module's lock-screen / PiP notification exposes Play / Pause / Skip-Back / Skip-Forward actions out of the box. Custom actions are not yet exposed via the public TS API — see the [Limitations](#limitations) section.
+The media notification and lock screen are a separate surface. Its MediaSession advertises play,
+pause, play/pause, stop, skip-to-next, skip-to-previous and seek-to, with title, artist and album
+metadata.
 
 ## Background audio
 
-Audio files keep playing when the user backgrounds the app (Spotify-style). Video files always pause on background — this is intentional, see the [audio unification rationale](#limitations).
-
-To disable background audio:
-
-```tsx
-<PlayerProvider
-  config={{ audio: { backgroundPlayback: false } }}
->
-```
-
-When `backgroundPlayback` is enabled, the module starts a foreground service (`com.simba.player.MediaPlaybackService`) that hosts the MediaSession + media-style notification. The notification's transport controls work on the lock screen, in Android Auto, on Bluetooth headphones (play / pause / skip), and via Google Assistant.
+`audio.backgroundPlayback` defaults to `true`: audio keeps playing when the app is backgrounded,
+through the foreground media service. Video is the Picture-in-Picture lane instead — it does not
+keep playing in the background.
 
 ## Theming
 
-Every color in `<DefaultControls>` comes from the `PlayerTheme` slice of the config:
-
 ```tsx
-<PlayerProvider
-  config={{
-    theme: {
-      accent: '#FFD700',                       // play button, progress fill
-      background: '#121216',                   // surface background
-      text: '#FFFFFF',                         // primary text
-      textSecondary: 'rgba(255,255,255,0.6)',  // subtitles, time labels
-      surface: 'rgba(255,255,255,0.1)',        // floating cards, icon backgrounds
-      icon: '#FFFFFF',                         // optional — defaults to `text`
-    },
-  }}
->
-```
-
-Read the theme from a custom component:
-
-```tsx
-import { useTheme } from '@simba-dev/react-native-media-player';
+import {useTheme} from '@simba-dev/react-native-media-player';
 
 const theme = useTheme();
-<View style={{ backgroundColor: theme.background }} />;
+// {accent, background, text, textSecondary, surface, icon?}
 ```
-
-Default theme is dark with a golden accent (`DEFAULT_THEME`).
 
 ## API reference
 
-Every public export lives in [`src/index.ts`](./src/index.ts). The **V13+ surface** is the recommended way to integrate; the V12 surface (`PlayerProvider` + `usePlayer()` directly) still works for backward compatibility but is undocumented for new consumers.
+### Components
 
-### Components (V13+ recommended, V14 additions in **bold**)
+| Export | Props | Notes |
+| --- | --- | --- |
+| `<SimbaPlayer>` | `config?`, `resumePolicy?`, `children` | The one-import integration point. Composes `PlayerProvider` + `PlayerResumeProvider`. `resumePolicy: (itemId: string) => number \| undefined`. |
+| `<PlayerProvider>` | `config?`, `renderControls?`, `children` | Resolved config, live player state, and the controls slot. |
+| `<PlayerRoot>` | `launchParams?` | The surface placeholder plus the controls overlay. `launchParams` is a `{uri, title, type, startPositionMs, requestId?}` payload; it is loaded once per `(uri, startPositionMs)` pair. |
+| `<SimbaVideo>` | `resizeMode?` + standard view props | The picture. `resizeMode`: `'contain' \| 'cover' \| 'stretch'`, default `'contain'`. |
+| `<PlayerSurface>` | `backgroundColor?` | A transparent `flex: 1` layout placeholder. Not the video surface. |
 
-| Component | Purpose |
-|---|---|
-| `<SimbaPlayer>` | **One-import, one-wrapper integration.** Composes `PlayerProvider` + `PlayerResumeProvider`. Adds the `getResumePosition` function prop (alongside the legacy `lookup` object prop). Use this at the app root. |
-| `<PlayerRoot>` | Renders `<PlayerSurface>` + the controls overlay (default `<DefaultControls>` or custom via `renderControls`). |
-| `<PlayerSurface>` | `<View flex:1>` placeholder for the native SurfaceView. a11y-hidden. |
-| `<DefaultControls>` | Pre-built controls (top bar, scrubber, transport, auto-hide). |
-| `<PlayerProvider>` | (V12 surface) Wraps the app; provides resolved config + `renderControls` slot. Use `<SimbaPlayer>` instead unless you need the raw provider. |
+### Hooks
 
-### Hooks (V13+, V14 additions in **bold**, V15 additions in __bold-italic__)
+| Export | Returns |
+| --- | --- |
+| `usePlayer()` | `{state, commands}` |
+| `usePlayerProgress()` | `PlayerProgress` — `positionMs`, `durationMs`, `isBuffering`, `isSeeking`, `seekable`, `cacheRanges`, `cacheFill` |
+| `usePlayerConfig()` | The resolved `ResolvedPlayerConfig`. Throws outside a `<PlayerProvider>`. |
+| `useTheme()` | The resolved `PlayerTheme`. |
+| `useRenderControls()` | The `renderControls` slot, or `null`. |
+| `usePlayerActivity()` | `{openPlayer(opts)}` → `Promise<boolean>` |
+| `useOpenWithResume()` | `(opts & {resumeId?}) => Promise<boolean>` — resolves the resume position through the nearest `<SimbaPlayer>`'s `resumePolicy`. |
+| `usePlayItem()` | `({id, uri, title}, {type}) => Promise<boolean>` |
+| `useOpenFromUrl()` | `(uri: string) => Promise<boolean>` — accepts `content://` and `file://` URIs, derives a title, classifies the type and opens it. |
+| `useOpenPlaylist()` | `{openPlaylist(entries, opts?)}` → `Promise<boolean>` |
+| `useLaunchPlayback()` | `(launchParams)` — loads a payload once per `(uri, startPositionMs)` pair. |
+| `useQueue()` / `useQueueLength()` / `useQueueItems()` / `useQueueItemsAs()` | The queue store and convenience selectors. |
+| `usePlaybackHistory()` / `usePlaybackHistoryAs()` | The playback history. |
+| `useQueueSelection()` / `useQueueSelectedIndices()` | The selection store. |
 
-| Hook | Returns | Throws outside provider? |
-|---|---|---|
-| `usePlayerActivity()` | `{ openPlayer(opts) }` - `audio` starts the foreground service; `video` loads into the mounted surface and resolves `false` if there is none. | ❌ No (no-op fallback) |
-| `useOpenWithResume()` | `(opts: OpenPlayerOptions & { resumeId? }) => Promise<boolean>` | ❌ No (no-op lookup) |
-| **`useOpenFromUrl()`** | **`(uri: string) => Promise<boolean>`** — **deep-link helper** that filters `content://` + `file://` URIs, derives a title from the basename, classifies audio/video by extension, and forwards to `useOpenWithResume().openPlayer(...)` | ❌ No |
-| **`useOpenPlaylist()`** | __V15 — `{ openPlaylist(entries, opts) }` — "play all from a list" two-step absorption. `opts: { type?, startIndex?, startPositionMs?, shuffle?, startExtras? }`__ | ❌ No |
-| **`useSimbaPlayerLookup(selector?)`** | **`PlayerResumeLookup`** — **factory hook** that wraps an optional `selector` in a memoized lookup object. Without a selector, returns no-op. | ❌ No |
-| __`useQueue()` / `useQueueItems()` / `useQueueLength()` / `usePlaybackHistory()`__ | __V15 — queue + playback history state (zustand-backed). `useQueue()` returns the full store (queue, history, 9 actions: addToQueue, prependToQueue, removeFromQueue, reorderQueue, clearQueue, shuffleQueue, playFromQueue, addToPlaybackHistory, clearPlaybackHistory).__ | ❌ No |
-| __`useQueueSelection()` / `useQueueSelectedIndices()`__ | __V15 — multi-select state for the queue (selected indices + 4 actions: setSelection, clearSelection, removeSelected, moveSelectedToTop).__ | ❌ No |
-| __`useSleepTimer()` / `useSleepTimerEnd()` / `useSleepTimerMode()`__ | __V15 — sleep timer state (endTime + mode) + actions (setTimer, setMode, clear).__ | ❌ No |
-| __`useEqualizer()` / `useEqualizerEnabled()`__ | __V15 — 10-band equalizer (gains + enabled) + actions (setGains, toggle).__ | ❌ No |
-| __`useIsLiked(uri)` / `useToggleLiked()`__ | __V15 — per-file "liked" state (Record<uri, boolean>) + toggle action.__ | ❌ No |
-| __`useShuffle()` / `useShuffleEnabled()`__ | __V15 — shuffle flag + toggle action.__ | ❌ No |
-| `usePlayItem()` | `(item, opts) => Promise<boolean>` | ❌ No (sugar on `useOpenWithResume`) |
-| `usePlayer()` | `{ state: PlayerState, commands: PlayerCommands, progress: PlayerProgress }` | ❌ No (returns defaults) |
-| `usePlayerProgress()` | `{ positionMs, durationMs, isBuffering, isSeeking, seekable, cacheRanges, cacheFill }` | ❌ No (returns 0/0) |
-| `usePlayerConfig()` | `ResolvedPlayerConfig` | ✅ Yes (programmer error) |
-| `useTheme()` | `PlayerTheme` | ✅ Yes (programmer error) |
-| `useRenderControls()` | `RenderControlsFn \| null` | ❌ No (falls back to default controls) |
+`openPlayer` accepts `{uri, title, type, startPositionMs?, artworkPath?, artist?, album?}`. The
+artwork, artist and album fields apply to the audio lane only.
 
-### Types (V13+)
+The queue store's actions are `addToQueue`, `prependToQueue`, `removeFromQueue`,
+`removeFromQueueByIndex`, `reorderQueue`, `clearQueue`, `shuffleQueue`, `addToPlaybackHistory` and
+`clearPlaybackHistory`.
 
-| Type | Notes |
-|---|---|
-| `PlayerState` | 20 fields: `isPlaying`, `title`, `artist`, `album`, `positionMs`, `durationMs`, `isBuffering`, `isSeeking`, `seekable`, `volume`, `isMuted`, `speed`, `loopMode`, `playlist`, `currentIndex`, `tracks`, `chapters`, `currentChapter`, `videoParams`, `error` |
-| `PlayerProgress` | 7 fields: `positionMs`, `durationMs`, `isBuffering`, `isSeeking`, `seekable`, `cacheRanges`, `cacheFill` |
-| `PlayerCommands` | 38 methods: `play`, `pause`, `seek`, `skipBackward`, `skipForward`, `togglePlayPause`, `stop`, `seekBy`, `seekToChapter`, `next`, `previous`, `setVolume`, `setMuted`, `toggleMute`, `setSpeed`, `setLoopMode`, `loadFile`, `loadPlaylist`, `playlistRemove`, `shuffle`, `clear`, `cycleTrack`, `setTrack`, `enterPip`, `exitPip`, `exitPipAndFinish`, `setKeepScreenOn`, `setOrientation`, `setImmersive`, `setScreenBrightness`, `requestNotificationPermission`, `openPlayer`, `getProperty`, `setProperty`, `observeProperty`, `unobserveProperty`, `grantPersistablePermission`, `verifyContentUri` |
-| `OpenPlayerOptions` | `{ uri, title, type: 'video' \| 'audio', startPositionMs? }` — the V13 `openPlayer` arg shape (replaces V11's positional args) |
-| `LaunchParams` | `{ uri, title, type, startPositionMs, requestId? }` - one playback launch payload. Pass it to `useLaunchPlayback(...)` to load it in-window. `requestId` gives the launch a unique identity so re-launching the same file at the same position still reloads. |
-| `ContentKind` | `'video' \| 'audio' \| 'music' \| 'movie' \| 'podcast' \| 'live-tv' \| 'radio' \| 'audiobook' \| 'archive-audio' \| 'episode' \| 'video-file' \| string` |
-| `PlayerResumeLookup` | `{ getResumePosition(itemId: string): number \| undefined }` — adapter for the bookmark-aware resume lookup |
-| **`GetResumePosition`** | **V14 — `(itemId: string) => number \| undefined`** — the function reference shape for `<SimbaPlayer getResumePosition={...}>` |
-| `SimbaPlayerProps` | `{ config?, lookup?, getResumePosition?, children }` — V14 adds `getResumePosition` (function prop, recommended). If both `lookup` and `getResumePosition` are passed, `getResumePosition` wins. |
-| `MpvPlayerModuleBridge` | Typed view of the native module (78 methods) |
-| `PlayerConfig`, `ResolvedPlayerConfig`, `PlayerTheme`, `PipConfig`, `AudioConfig`, `SubtitleConfig`, `NotificationConfig`, `DebugConfig`, `HardwareDecodingPolicy` | V12 surface — same as before |
-| `MpvTrack`, `MpvChapter`, `MpvFileInfo`, `MpvVideoParams`, `MpvAudioDevice`, `MpvPlaybackState`, `MpvLoopMode`, `MpvEventName`, `MpvEvents`, `MpvEventPayloads`, `PlayerEventName`, `PlayerEventPayloads` | Low-level mpv types |
+`captureFrame(uri, positionMs, options?)` returns a `Promise<string | null>` — a JPEG written for
+that position in that file. The defaults are 640×360 at quality 80, exported as
+`DEFAULT_FRAME_WIDTH`, `DEFAULT_FRAME_HEIGHT` and `DEFAULT_FRAME_QUALITY`.
 
-### Constants
+### Commands
 
-| Constant | Description |
-|---|---|
-| `DEFAULT_THEME` | Dark theme with golden accent |
-| `DEFAULT_PLAYER_CONFIG` | Fully-resolved default config (useful for spread-and-override) |
+`commands` is a stable object; every method resolves the bridge at call time.
 
-### Functions
+| Group | Methods |
+| --- | --- |
+| Transport | `play`, `pause`, `togglePlayPause`, `stop`, `stopPlayback`, `next`, `previous` |
+| Seeking | `seek(positionMs)`, `seekBy(deltaMs)`, `skipForward(seconds)`, `skipBackward(seconds)`, `seekToChapter(index)` |
+| Volume and speed | `setVolume(0..100)`, `setMuted(boolean)`, `toggleMute()`, `setSpeed(number)`, `setLoopMode('none' \| 'file' \| 'playlist')` |
+| Playlist | `loadFile(uri, title?)`, `loadPlaylist(uris, startIndex?)`, `playlistRemove(index)`, `shuffle()`, `clear()`, `setShuffle(boolean)` |
+| Tracks | `cycleTrack(type)`, `setTrack(type, trackId)` |
+| Picture-in-Picture | `enterPip(chapterTitle?, progressPct?)`, `exitPip()`, `exitPipAndFinish()` |
+| Screen | `setKeepScreenOn(boolean)`, `setOrientation(mode)`, `setImmersive(boolean)`, `setScreenBrightness(0..1)`, `getScreenBrightness()` |
+| Surface | `setVideoBounds(x, y, width, height)`, `fillVideoBounds()`, `setSurfaceVisible(boolean)`, `isSurfaceMounted()` |
+| Filters | `setAudioFilter(name, enabled)`, `setVideoFilter(name, enabled)` |
+| Notifications | `requestNotificationPermission()` |
+| mpv properties | `getProperty(name)`, `setProperty(name, value)`, `observeProperty(name)`, `unobserveProperty(name)` |
+| Content URIs | `grantPersistablePermission(uri)`, `verifyContentUri(uri)` |
 
-| Function | Description |
-|---|---|
-| `resolvePlayerConfig(config)` | Merge a partial config with defaults — useful for tests / debug overlays |
-| `getMpvPlayerModule()` | Typed wrapper over `NativeModules.MpvPlayerModule`. Returns a no-op stub on non-RN platforms (jest, web). |
-| `resolveStreamType(kind: ContentKind): 'video' \| 'audio'` | Map a content kind to the V13 stream type. Idempotent — `'video'` and `'audio'` pass through unchanged. Use this when your items have `'music'`, `'movie'`, etc. but V13 `openPlayer` expects `'video' | 'audio'`. |
-| `subscribePlayerEvent(name, handler)` → unsubscribe | Subscribe to a native mpv event (22 events). Returns an unsubscribe function. |
-| `removeAllListeners(event?)` | Remove all listeners for an event (or all events if no arg). |
+### Bridge
+
+`getMpvPlayerModule()` returns the native module, or a no-op stand-in when the native side is
+not wired (Jest, web previews) so consumer code stays renderable.
+`subscribePlayerEvent(name, handler)` subscribes to one of the 26 named events and returns an
+unsubscribe function; `removeAllListeners()`, `setDebugLogging()` and
+`dumpObservedProperties()` are also exported. The event names are typed as `PlayerEventName`.
+
+### State
+
+`state` carries `isPlaying`, `isLoading`, `title`, `artist`, `album`, `positionMs`, `durationMs`,
+`isBuffering`, `isSeeking`, `seekable`, `volume`, `isMuted`, `speed`, `loopMode`, `playlist`,
+`currentIndex`, `tracks`, `chapters`, `currentChapter`, `videoParams`, `error` and `shuffle`.
 
 ## Troubleshooting
 
-### "MpvPlayerModule is undefined" on JS side
+**`openPlayer` resolves `false` for a video.** No surface is mounted. Render `<SimbaVideo />`
+before launching, and check `commands.isSurfaceMounted()`.
 
-You probably haven't rebuilt the native side after `npm install`. Run:
+**Picture-in-Picture does not start.** The Activity is missing
+`android:supportsPictureInPicture="true"` or `android:resizeableActivity="true"`. Auto-enter on
+leave additionally needs API 31+ — below that, enter PiP yourself with `commands.enterPip()`.
 
-```bash
-cd android && ./gradlew :app:assembleDebug
-```
+**Gradle fails with `libmpv.so not found at android/src/main/jniLibs/…`.** The postinstall
+download did not run. Re-run `npm install` in the app, or run the script by hand; `SKIP_DOWNLOAD_NATIVE=1`
+is set somewhere in your environment or CI.
 
-Or do a full Metro reset:
+**`NativeModules.MpvPlayerModule` is `undefined` at runtime.** The New Architecture is required.
+Check `newArchEnabled=true` in the app's `android/gradle.properties`, and that the app's React
+Native Gradle plugin runs `autolinkLibrariesWithApp()` — the library's own build file applies
+`com.facebook.react` for that pipeline.
 
-```bash
-npm start --reset-cache
-```
-
-### Player launches but video is black
-
-- **Permissions:** on API 33+ the app must request `POST_NOTIFICATIONS` before showing the media-style notification. Use `MpvPlayerModule.requestNotificationPermission()`.
-- **Codec:** if the device can't decode the format (rare - libmpv handles most), try `hardwareDecoding: 'no'` to force software decoding.
-- **HTTPS:** libmpv's curl backend rejects malformed URLs. Ensure your media URLs are valid `https://` (or `content://` for local files).
-
-### App is stuck at a white screen after splash (no JS error, just white)
-
-This is almost always a **`dlopen failed: cannot locate symbol` on the libmpv.so** chain — visible in `adb logcat -d --pid=$(adb shell pidof <your.package>) | grep dlopen` as:
-
-```
-dlopen failed: cannot locate symbol
-  "_ZNSt6__ndk127__from_chars_floating_pointIfE..."
-referenced by ".../libmpv.so"
-```
-
-Cause: the lib's bundled prebuilts (from `mpv-android` releases) are built against **LLVM 17+ libc++** (NDK r28+), which has `__from_chars_floating_point`. If your APK's `lib/<abi>/libc++_shared.so` is missing that symbol, `libsimbaplayer_mpv.so` fails to load, the `MpvBridgeModule` TurboModule never registers, and the app can't render past splash.
-
-Fix: **remove any `excludes += ["lib/*/libc++_shared.so"]` from your `android/app/build.gradle` `packagingOptions { jniLibs { } }` block** if you have one. The lib ships its own LLVM 17+ libc++_shared.so via the postinstall hook (`scripts/download-native.js` downloads the matching `jniLibs.tar.gz` from the GitHub release) and your APK should bundle that copy. Also **delete** any pre-v1.5.14 leftover `app/src/main/jniLibs/<abi>/<abi>/libc++_shared.so` (NDK r27 LLVM 16, missing the symbol) if you kept one around from a prior workaround.
-
-After this, `gradle :app:assembleDebug` will bundle the lib's libc++_shared.so and `libsimbaplayer_mpv.so` will resolve symbols cleanly.
-
-### PiP doesn't auto-enter on home press
-
-Make sure:
-
-1. The activity has `android:supportsPictureInPicture="true"` and `android:resizeableActivity="true"` in your `AndroidManifest.xml` (the consumer must declare these — the library doesn't force them).
-2. `config.pip.autoEnterOnLeave === true` (the default).
-3. The app targets API 24+ on a device that supports PiP (most modern Android devices do).
-
-### Debug logging
-
-Enable verbose logging from JavaScript:
-
-```tsx
-import { setDebugLogging } from '@simba-dev/react-native-media-player';
-
-// Enable verbose logging (sets mpv msg-level=all + logs every bridge call)
-setDebugLogging(true);
-
-// ... your code ...
-
-// Disable for production
-setDebugLogging(false);
-```
-
-Or via the PlayerProvider config:
-
-```tsx
-<PlayerProvider config={{ debug: { verboseLogging: true } }}>
-```
-
-Then watch logcat:
-
-```bash
-adb logcat -v color MpvBridgeModule:V MPVLib:V PipManager:V MediaPlaybackService:V ReactNativeJS:V *:S
-```
-
-The `[PlaybackTrace]` prefix tags every bridge call so you can trace end-to-end.
-
-#### Property dump
-
-To dump all currently-observed mpv properties to logcat (useful for debugging state divergence between native and JS):
-
-```tsx
-import { dumpObservedProperties } from '@simba-dev/react-native-media-player';
-
-const count = dumpObservedProperties();
-console.log(`Dumped ${count} properties to logcat`);
-```
-
-Output looks like:
-
-```
-[PlaybackTrace][Bridge][dumpObservedProperties] 12 properties observed:
-[PlaybackTrace][Bridge][dumpProperties] property=time-pos value="123.456" requested=true
-[PlaybackTrace][Bridge][dumpProperties] property=duration value="600" requested=true
-...
-```
-
-#### Memory-pressure response
-
-When the system signals memory pressure via `ComponentCallbacks2.onTrimMemory()`, the bridge automatically reduces mpv's cache:
-
-| Level | Cache-secs |
-|---|---|
-| `TRIM_MEMORY_RUNNING_MODERATE` | 10 |
-| `TRIM_MEMORY_RUNNING_LOW` | 5 |
-| `TRIM_MEMORY_RUNNING_CRITICAL` | 2 |
-| `TRIM_MEMORY_BACKGROUND` | 10 |
-| `TRIM_MEMORY_COMPLETE` | 0 |
-
-No configuration needed — the bridge adjusts `mpv.setPropertyString('cache-secs', ...)` from the host Activity's own `onTrimMemory` callbacks.
-
-#### Native module init log
-
-On every React Native init, the bridge logs:
-
-```
-[PlaybackTrace][Bridge][initialize] MpvPlayerModule v0.1.0 init: package=com.simba.app isHeadlessJsTask=false debugLogging=false
-```
-
-This confirms the module is wired + reports the package name + current debug-logging state. Use `adb logcat -s MpvBridgeModule` to filter.
-
-### TypeScript "Cannot find module '@simba-dev/react-native-media-player'"
-
-Make sure the package is in your `dependencies` (not `devDependencies`) and Metro has been restarted. The `package.json` field `"react-native": "src/index.ts"` lets Metro resolve to the source directly without a build step.
+**No media notification on Android 13+.** The app has not been granted `POST_NOTIFICATIONS`.
+Call `commands.requestNotificationPermission()`.
 
 ## Limitations
 
-- **Android-only.** iOS is not supported (no plans — the libmpv backend is the only reason this package exists; iOS has `AVPlayer`). The `react-native.config.js` returns `ios: null` to skip iOS autolinking entirely.
-- **No DRM.** libmpv does not implement Widevine / FairPlay / PlayReady. Widevine is on the libmpv roadmap but not stable.
-- **No casting.** Chromecast and AirPlay are out of scope. The MediaSession integrates with Android Auto and Bluetooth headphones, but not Cast.
-- **GPL considerations.** libmpv is GPLv2+ by default. Bundling libmpv in your APK makes any consumer app that links against it subject to GPL terms unless you choose an LGPL-compatible build path. See the [License](#license) section below and the bundled [`MPV_NATIVE_PROVENANCE.md`](./android/src/main/jniLibs/MPV_NATIVE_PROVENANCE.md) for the exact provenance of the binary.
-- **Audio vs video background behavior.** Video files always pause on background (no PiP, no audio continuation) — this is intentional. The V11 codebase had separate engines for audio vs video; V12 unifies them on libmpv but keeps the "video = foreground-only" rule because the SurfaceView's GPU compositing stops when the activity backgrounds.
-- **PiP custom RemoteActions.** The lock-screen / PiP notification exposes a fixed set of actions (Play / Pause / Skip-Back / Skip-Forward). Custom actions are a W7+ feature.
-- **React Native ≥ 0.76 only.** Bridgeless mode is required (the TurboModule path uses `TurboReactPackage`, which doesn't work on the legacy bridge).
-
-## Sponsor & support
-
-`@simba-dev/react-native-media-player` is free, open source software made possible by [Paval E P](https://github.com/pavalep) and the contributors who help maintain it. If you find it useful in your own work, consider supporting its continued development.
-
-<a href="https://buymeacoffee.com/pavalep"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" /></a>
-
-Every contribution — large or small — helps me spend more time maintaining, experimenting, and shipping the next set of fixes and features. 🙏
-
-### About the maintainer
-
-> I'm an independent developer building software, experimenting with ideas, and working on projects through **Varna Labs**, my sole proprietorship registered under India's Udyam/MSME framework. 🇮🇳
->
-> If you like my projects, find something I've built useful, or simply want to support independent development, consider [making a contribution](https://buymeacoffee.com/pavalep). 🙌
->
-> It doesn't have to be much — every little bit helps me spend more time building, experimenting, maintaining projects, and bringing new ideas to life. ✨
->
-> 💡 Have a viable project or something interesting you'd like to build together?
-> Feel free to [reach out](https://github.com/pavalep). I'm always happy to discuss potential collaborations and see where a good idea can go. 🤝
->
-> Your support keeps independent work moving. 🦋
-> Gracias for being here! ❤️
+- **Android only.** There is no iOS implementation.
+- **No controls.** The library ships none; see [Controls](#controls).
+- **Auto-enter Picture-in-Picture needs Android 12 (API 31) or newer.** Below that the OS cannot
+  do it and entry is manual.
+- **Most config sections are consumed in JavaScript.** The native side receives the resolved
+  config as JSON and acts on the PiP auto-enter switch; the rest are values your app reads back
+  through `usePlayerConfig()`.
+- **`notifications.channelId` is not read natively.** The foreground service creates its own
+  notification channel, `simba_player_media_playback`.
+- **The bundled native binaries carry their own licence.** They are built by the mpv-android
+  project and are subject to its terms (libmpv's default build is GPLv2+), so linking them into
+  your app is a licensing decision you own. The library's own JavaScript and Kotlin code is MIT.
 
 ## Contributing
 
-### Local development
-
-The module is a sibling of the consumer app at `SIMBA/react-native-media-player/`. To work on the module and test it in the consumer app:
+From the repository root:
 
 ```bash
-# 1. Make changes in react-native-media-player/
-
-# 2. Typecheck
-cd react-native-media-player
-npx tsc --noEmit -p .
-
-# 3. Build the AAR
-cd ../MOBILE_APP_REACT_NATIVE/android
-./gradlew :react-native-media-player:assembleDebug
-
-# 4. Build the consumer APK (catches consumer-side regressions)
-./gradlew :app:assembleDebug
-
-# 5. Run on device
-cd ..
-npm run android
+npm install        # postinstall downloads the native binaries
+npm run typecheck  # tsc --noEmit
+npm test           # jest
+npm run build      # tsc
+npm run lint       # placeholder — no linter is configured yet
 ```
 
-### Tests
+There is an `example/` app with `npm run android`, `npm start` and `npm run typecheck`. Its
+sources still target the pre-2.0.0 API (they import the removed `DefaultControls` and demo
+screens that no longer exist), so it does not currently typecheck — it is a work in progress, not
+a reference implementation.
 
-Wave 7 (Phases 33-34) adds JUnit + Jest tests. Until then, manual testing via the consumer app is the gate.
-
-```bash
-# Type check only
-cd react-native-media-player
-npx tsc --noEmit -p .
-
-# Verify the package is publishable (without actually publishing)
-npm pack --dry-run
-```
-
-### Pull request guidelines
-
-- One phase per PR (matches the spec's phase structure).
-- Update SPEC + TRACKER docs as part of the change.
-- Verify `./gradlew :react-native-media-player:assembleDebug :app:assembleDebug` passes.
-- Verify `npx tsc --noEmit -p .` passes from the module root.
+Releases are cut by the `release.yml` workflow: it builds the native libraries from the pinned
+mpv-android release, attaches them to the GitHub Release, and publishes to npm. Do not publish by
+hand.
 
 ## License
 
-**MIT** for the Java/Kotlin/TypeScript code in this package. See [`LICENSE`](./LICENSE).
-
-**Note on bundled native libraries** (see [`LICENSE`](./LICENSE) for full text):
-
-- [libmpv](https://mpv.io/) — **GPLv2+** by default. Bundling it makes any consumer app that links against it subject to GPL terms unless an LGPL-compatible build path is chosen.
-- Bundled FFmpeg libraries (`libavcodec`, `libavformat`, `libavutil`, `libavfilter`, `libavdevice`, `libswresample`, `libswscale`) — **LGPLv2.1+** unless configured otherwise at build time.
-- `libOpenCL` — Apache-2.0.
-- `libc++_shared` — Apache-2.0 with LLVM exceptions.
-
-Consumers are responsible for ensuring their app's license obligations are met when shipping these binaries. See [`android/src/main/jniLibs/MPV_NATIVE_PROVENANCE.md`](./android/src/main/jniLibs/MPV_NATIVE_PROVENANCE.md) for the exact provenance of each bundled binary.
-
----
-
-**Status:** latest published version is **1.5.20** on [npmjs](https://www.npmjs.com/package/@simba-dev/react-native-media-player) and [GitHub Releases](https://github.com/pavalep/react-native-media-player/releases). See [CHANGELOG.md](./CHANGELOG.md) for the full per-version notes.
+MIT — see [LICENSE](./LICENSE). The prebuilt native binaries are third-party builds of mpv and
+carry their own licence terms; see [Limitations](#limitations).
