@@ -75,23 +75,43 @@ junit.xml
 ../secrets/
 secrets/v13-orphan-2026-09-04/
 
-# Scratch commit-message drafts left over from V13 + V16 phase work.
-# These were authored, used to draft commits, but never committed
-# themselves. They're noise in `git status`.
+# ── Local scratch ────────────────────────────────────────────────────────
+# Scratch that belongs to THIS working copy: commit-message drafts, gate
+# output and build artefacts. It lives under `.local/` (gitignored), so
+# it is still on disk but stops appearing in `git status`, stops being
+# committed, and stops shipping to npm.
+.local/
+
+# Commit-message drafts left over from V13 + V16 + V22 phase work.
+# These were authored to draft commits and were never meant to be
+# committed. 16 of them HAD been committed before the pattern existed,
+# so git kept tracking them even after the ignore rule was added —
+# the "Correction, F5 A7" note below records that.
 COMMITMSG_*.txt
+COMMIT_MSG_*.txt
 COMMIT_MSG.txt
 orphan-cleanup.txt
-
-# ── Correction, F5 A7 (2026-10-14) ───────────────────────────────────
-# The rules above spell this COMMITMSG_*.txt (no underscore) and
-# COMMIT_MSG.txt (exact name). Neither matches the files that actually
-# exist on disk, which are COMMIT_MSG_F1.txt, COMMIT_MSG_F5_A2.txt,
-# COMMIT_MSG_RELEASE_1_14_0.txt, etc. - so all 15 showed up in every
-# git status. COMMIT_MSG_*.txt is the pattern that matches reality.
-COMMIT_MSG_*.txt
 
 # Gate output captured at the repo root during verification.
 jest_*.txt
 kotlin_*.txt
 kotlin_test_*.txt
 gradle_out.txt
+
+# Published npm tarballs and release archives.
+#
+# Six 65 MB tarballs (1.6.0 → 1.8.3) were committed at the repo root,
+# which put ~390 MB into the git history for no reason: the registry
+# already holds every one of them, and each tarball was 65 MB because
+# it still carried the native binaries that B-027 later removed from
+# the package.
+*.tgz
+*.tar.gz
+*.sha256
+
+# The `delete_me/` scratch folder — commit drafts plus a 63 MB jniLibs
+# archive and a 15 MB test archive — was committed in full.
+delete_me/
+
+# Orphaned V13 working copies.
+v13-orphan-2026-09-04/
