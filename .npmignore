@@ -2,6 +2,29 @@
 # This file supplements package.json's `files` allow-list.
 # Anything not in `files` that npm tries to include via the
 # implicit `**/*` default is filtered out here.
+#
+# ── IMPORTANT: this file ALONE IS NOT ENOUGH ─────────────────────────
+# When `files` in package.json NAMES a path, npm's allow-list wins and
+# `.npmignore` is ignored for that path. That was measured, not
+# assumed: with only the `.npmignore` entry for `android/src/main/
+# jniLibs/`, the pack still held all 43 `.so` files, because `files`
+# names `android/`. B-027's fix was the matching NEGATION in `files`
+# (`"!android/src/main/jniLibs/"`).
+#
+# So every rule below has a twin in package.json's `files` array, and
+# the `files` entry is the one that actually does the work. They are
+# kept in sync deliberately: this file documents the intent, and the
+# `files` entry enforces it.
+
+# The example app. It is a development harness for THIS repo — it is
+# welcome in GitHub and useless (and large) inside a consumer's
+# node_modules.
+example/
+
+# Version control metadata and local docs. Neither belongs in a
+# published package.
+.git/
+md/
 
 # Native binaries fetched by the postinstall hook at consumer install time
 # (would bloat the tarball by ~68MB — the .so files are downloaded, not shipped)
@@ -22,7 +45,16 @@ src/README.example.tsx
 **/*.spec.ts
 **/*.spec.tsx
 __tests__/
+__mocks__/
 coverage/
+android/src/test/
+
+# One-shot development patches that rewrite the library's own Kotlin
+# source. They were used once during the V16.0.6 release and have no
+# meaning to a consumer — a Python script inside an npm package is
+# noise.
+scripts/override_react_methods.js
+scripts/override_react_methods.py
 
 # Editor / OS noise
 .DS_Store

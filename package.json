@@ -8,7 +8,11 @@
   "files": [
     "src/",
     "!src/README.example.tsx",
+    "!src/**/__tests__/",
+    "!src/**/__mocks__/",
     "scripts/",
+    "!scripts/override_react_methods.js",
+    "!scripts/override_react_methods.py",
     "android/",
     "android/build.gradle",
     "android/consumer-rules.pro",
@@ -16,13 +20,17 @@
     "!android/.cxx/",
     "!android/.gradle/",
     "!android/build/",
+    "!android/src/test/",
     "!android/src/main/jniLibs/",
     "assets/",
     "LICENSE",
     "README.md",
     "react-native.config.js",
     "tsconfig.json",
-    "!.npmignore"
+    "!.npmignore",
+    "!example/",
+    "!.git/",
+    "!md/"
   ],
   "keywords": [
     "react-native",
