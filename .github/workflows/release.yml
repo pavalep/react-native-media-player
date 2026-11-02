@@ -434,6 +434,17 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          # `set -e` is load-bearing here, not decoration.
+          #
+          # Without it, a FAILED `npm publish` was invisible: the script's
+          # last command was the `echo` that writes the step output, so the
+          # step exited 0 and the job reported SUCCESS with nothing on
+          # npm. The GitHub Release was still created, because that step
+          # comes after this one — so the release looked complete while
+          # the package was missing.
+          #
+          # A publish that does not land MUST fail the build.
+          set -euo pipefail
           VERSION="${{ steps.resolve.outputs.version }}"
           DIST_TAG="${{ inputs.npm_dist_tag }}"
           DIST_TAG="${DIST_TAG:-latest}"
@@ -444,6 +455,12 @@ jobs:
             npm publish --tag="${DIST_TAG}"
             echo "skipped=false" >> "$GITHUB_OUTPUT"
           fi
+          # Belt and braces: prove the version is actually on npm, from
+          # the registry, in THIS step. A publish that reports success but
+          # left nothing behind must not pass.
+          npm view "@simba-dev/react-native-media-player@${VERSION}" version \
+            || { echo "::error::Version ${VERSION} is NOT on npm after publishing."; exit 1; }
+          echo "::notice::Published ${VERSION} with dist-tag '${DIST_TAG}'. Verified against the registry."
 
       - name: Ensure release tag exists
         env:
