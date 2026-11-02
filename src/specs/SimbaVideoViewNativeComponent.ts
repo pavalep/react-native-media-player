@@ -75,8 +75,11 @@ export interface NativeProps extends ViewProps {
    *  - `cover`   - fill the view, cropping the overflow, aspect preserved.
    *  - `stretch` - fill the view, aspect ignored.
    *
-   * Maps onto mpv's `video-zoom` (0 / 1 / 2) rather than being reimplemented,
-   * so it inherits mpv's own scaling and rounding behaviour.
+   * The MODE NAME crosses into the native side, which owns the mapping onto
+   * mpv's own properties (`video-zoom` + `keepaspect` + `panscan`). mpv's
+   * `video-zoom` is a log2 **scale factor** (`0` unscaled, `1` twice the
+   * size, `2` four times the size), so it is not a fit / fill / stretch enum
+   * and is never sent one.
    */
   resizeMode?: WithDefault<string, 'contain'>;
 }

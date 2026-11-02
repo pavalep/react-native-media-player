@@ -58,48 +58,31 @@ data class PictureFrame(val left: Int, val top: Int, val right: Int, val bottom:
  * ## What this decides
  *
  * Given the picture view's rect in window coordinates, the video's own aspect
- * ratio, and the zoom the picture is rendered with, answer: **which rect of
- * the window is the video?**
+ * ratio, and whether the picture FILLS its view, answer: **which rect of the
+ * window is the video?**
  *
- * ## The zoom modes
+ * ## The one fact it asks for
  *
- * `videoZoom` is the zoom the picture is being rendered with, which this
- * codebase carries as a numeric string (`contain` → "0", `cover` → "1",
- * `stretch` → "2"; see `SimbaVideo.tsx` and `MpvRenderViewManager.setResizeMode`).
+ * `fillsView` is the one fact this arithmetic needs, and it is a fact about
+ * the VISIBLE REGION rather than about the engine's internals:
  *
- * ## What those numbers are in mpv — and why this file does not care
- *
- * mpv's `video-zoom` is a log2 **scale factor**, not a fit / fill / stretch
- * enum: `0` is unscaled, `1` is twice the size, `2` is four times the size.
- * So the app's `cover` renders as a 2x magnified, cropped picture and its
- * `stretch` as a 4x magnified one. (That is an open bug in the app's tracker;
- * the fix is mpv's `panscan` / `keepaspect`.)
- *
- * The arithmetic here does not change, because it asks a question about the
- * VISIBLE REGION rather than about the engine's internals: a picture that is
- * magnified still covers every pixel of the view it is drawn in, so the
- * region of the window the video occupies is the whole view either way. The
- * only mode whose visible region is smaller than the view is the one that
- * leaves bars around the picture — the unscaled fit.
- *
- *  - **"0" — contain.** The picture is FITTED into the view, so the visible
- *    video is the LARGEST rect of the video's shape that FITS INSIDE the
- *    view, centred. Bars sit above/below (wider video) or left/right
- *    (narrower video).
- *  - **"1" — cover.** The picture FILLS the view, so everything the user can
- *    see is the view itself. The frame IS the view rect.
- *  - **"2" — stretch.** The picture FILLS the view too, so again the frame
- *    IS the view rect.
+ *  - **Fills the view** (`cover`, `stretch`) — the picture covers every pixel
+ *    of the view it is drawn in, so the region of the window the video
+ *    occupies IS the view. The frame IS the view rect, and there is no
+ *    letterbox / pillarbox inset to subtract.
+ *  - **Fits inside the view** (`contain`) — the picture is the largest rect
+ *    of the video's own shape that FITS INSIDE the view, centred. Bars sit
+ *    above/below (wider video) or left/right (narrower video).
  *
  * The two filling modes answer the same rect, and that is not a
  * coincidence: a picture that fills the view covers every pixel of it, so
  * the region of the window the video occupies IS the view — whatever the
  * engine does with the shape behind it.
  *
- * Anything else — an unrecognised mode, a blank string — is treated as
- * contain. The app's default `resizeMode` is `contain`, so contain is the
- * mode the video is actually rendering with in the common case, and it is
- * the mode that keeps the frame's shape equal to the video's shape.
+ * The fact comes from `MpvRenderView.currentFillsView`, which publishes what
+ * the engine is ACTUALLY rendering with. It is NOT the zoom: mpv's
+ * `video-zoom` is a log2 scale factor, and a magnified picture still covers
+ * every pixel of the view it is drawn in.
  *
  * ## Why the guards return `null`
  *
@@ -110,15 +93,6 @@ data class PictureFrame(val left: Int, val top: Int, val right: Int, val bottom:
  */
 object PipSourceRect {
 
-    /** The "contain" mode: the picture is fitted inside the view. */
-    const val ZOOM_FIT = "0"
-
-    /** The "cover" mode: the picture fills the view. */
-    const val ZOOM_FILL = "1"
-
-    /** The "stretch" mode: the picture fills the view. */
-    const val ZOOM_STRETCH = "2"
-
     /**
      * The window rect the video occupies, or `null` when there is no such
      * rect to point at.
@@ -128,8 +102,8 @@ object PipSourceRect {
      * @param viewWidth   The picture view's width, in pixels.
      * @param viewHeight  The picture view's height, in pixels.
      * @param videoAspect The video's own width / height.
-     * @param videoZoom   The zoom mode the picture is rendered with, as a
-     *                    numeric string ("0" contain · "1" cover · "2" stretch).
+     * @param fillsView   Whether the picture FILLS the view (`cover`,
+     *                    `stretch`) or FITS inside it (`contain`).
      */
     fun frameInWindow(
         viewLeft: Int,
@@ -137,7 +111,7 @@ object PipSourceRect {
         viewWidth: Int,
         viewHeight: Int,
         videoAspect: Float,
-        videoZoom: String,
+        fillsView: Boolean,
     ): PictureFrame? {
         // A view with no area has no video in it.
         if (viewWidth <= 0 || viewHeight <= 0) return null
@@ -147,18 +121,19 @@ object PipSourceRect {
         // through into the arithmetic below.
         if (!videoAspect.isFinite() || videoAspect <= 0f) return null
 
-        return when (videoZoom.trim()) {
-            // Cover and stretch both fill the view, so in both cases the
-            // visible picture IS the view's rect.
-            ZOOM_FILL, ZOOM_STRETCH -> PictureFrame(
+        return if (fillsView) {
+            // The picture covers the whole view, so the visible picture IS
+            // the view's rect.
+            PictureFrame(
                 viewLeft,
                 viewTop,
                 viewLeft + viewWidth,
                 viewTop + viewHeight,
             )
-
-            // Contain, and anything this code does not recognise.
-            else -> fitFrame(viewLeft, viewTop, viewWidth, viewHeight, videoAspect)
+        } else {
+            // The picture is fitted inside the view, so the frame is the
+            // video's own shape, centred in it.
+            fitFrame(viewLeft, viewTop, viewWidth, viewHeight, videoAspect)
         }
     }
 

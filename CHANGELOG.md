@@ -1,4 +1,56 @@
 
+## [3.0.3] - 2026-11-02
+
+### Fixed
+
+- **`resizeMode` now means what its name says.**
+
+  The mode was translated into mpv's `video-zoom` — `contain` → `"0"`,
+  `cover` → `"1"`, `stretch` → `"2"` — and mpv's `video-zoom` is a **log2
+  scale factor**, not a fit / fill / stretch enum (`0` is unscaled, `1` is
+  twice the size, `2` is four times the size). So `cover` rendered as a
+  **2x magnified crop** and `stretch` as a **4x magnified crop**, and the
+  aspect was never ignored — neither was what its name said.
+
+  The **mode NAME** now crosses into the native side unchanged, and a new
+  pure `ResizeMode` object owns the mapping onto mpv's own properties:
+
+  | mode | `video-zoom` | `keepaspect` | `panscan` | fills the view? |
+  |---|---|---|---|---|
+  | `contain` | `"0"` | `"yes"` | `"0"` | no |
+  | `cover` | `"0"` | `"yes"` | `"1.0"` | **yes** |
+  | `stretch` | `"0"` | `"no"` | `"0"` | **yes** |
+
+  mpv's own manual is the authority: `--panscan` "can only zoom in until
+  either the video width or height fills the window", and
+  `--keepaspect=no` "will always stretch the video to window size". All
+  three properties are written **every time**, because mpv's properties
+  persist — going back to `contain` has to put `panscan` back to `0` and
+  `keepaspect` back to `yes`.
+
+  An unrecognised mode falls back to `contain` in ONE owner (the native
+  side) instead of two.
+
+  `ResizeMode` carries no Android and no React Native type, on purpose:
+  the module's Robolectric suites are `@Ignore`d because they cannot run
+  offline, so a decision that lived behind an Android type would ship
+  untested. The mapping is plain JUnit and actually executes.
+
+- **The PiP source rect now asks the right question.**
+
+  It used to ask *"what zoom is the picture rendered with?"*, and the
+  bridge answered with `view.currentVideoZoom`. It now asks **"does the
+  picture fill its view?"** — the fact the engine is ACTUALLY rendering
+  with — because a magnified picture still covers every pixel of the view
+  it is drawn in. `cover` and `stretch` fill the view, so the frame IS the
+  view's rect; `contain` fits inside it, so the frame is the video's own
+  shape, centred.
+
+### Internal
+
+- `MpvRenderView` publishes the mode it is rendering with, and the fact
+  that mode implies, so the bridge asks a fact rather than a zoom.
+
 ## [3.0.2] - 2026-11-02
 
 ### Fixed

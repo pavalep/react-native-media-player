@@ -2349,8 +2349,9 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      *    UI-thread API and this code runs on the bridge thread.
      *  - the video's shape — `currentVideoAspect()`, the same `width` /
      *    `height` properties `getVideoParams` reads.
-     *  - the zoom — `MpvRenderView.currentVideoZoom`, the `video-zoom` mpv
-     *    is rendering with right now.
+     *  - the fill — `MpvRenderView.currentFillsView`, whether the picture
+     *    mpv is rendering with right now FILLS its view (`cover`, `stretch`)
+     *    or FITS inside it (`contain`, the default).
      *
      * ## Why every step can answer `null`
      *
@@ -2374,7 +2375,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             bounds.width,
             bounds.height,
             aspect,
-            view.currentVideoZoom,
+            view.currentFillsView,
         )
     }
 
@@ -2421,12 +2422,14 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             // hinted region to the window non-proportionally when the two
             // shapes differ, and the video visibly arrives stretched.
             //
-            // The frame's shape is the video's own shape whenever the
-            // picture is rendered with `contain`, which is the app's
-            // default: the frame inside the view IS the video, letterboxed
-            // into the view's own shape. So the window's shape does not
-            // change here — only the hint does, from `null` (a black
-            // rectangle) to a real rect that points at the picture.
+            // The frame's shape follows the picture's mode: with `contain`
+            // (the app's default) the frame inside the view IS the video,
+            // letterboxed into the view's own shape; with `cover` or
+            // `stretch` the picture fills the view, so the frame IS the
+            // view's rect and the window takes the view's shape. Either way
+            // the window's shape does not change here — only the hint does,
+            // from `null` (a black rectangle) to a real rect that points at
+            // the picture.
             val frame = pipSourceRectInWindow()
             val aspect = frame?.aspect ?: (currentVideoAspect() ?: (16f / 9f))
             val params = com.simba.player.PipManager.buildPipParams(

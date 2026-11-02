@@ -91,13 +91,15 @@ class MpvRenderView(context: Context) : SurfaceView(context),
     var pendingVolume: Float = 100f
 
     /**
-     * The zoom mode, as it is carried to mpv's `video-zoom` property:
-     * `0` contain · `1` cover · `2` stretch.
+     * The resize mode, as its NAME, held until a handle exists.
      *
-     * The MODE names are this codebase's (see `SimbaVideo.tsx`); the numbers
-     * are what the engine is asked for.
+     * The name is what crosses the bridge from JS (`contain` / `cover` /
+     * `stretch`); the mpv properties it means are derived by [ResizeMode],
+     * which is the only owner of that mapping. Nothing is translated into a
+     * zoom here — mpv's `video-zoom` is a log2 scale factor, and "cover" as
+     * a zoom factor is a 2x magnification, not a cover.
      */
-    private var pendingVideoZoom: String? = PipSourceRect.ZOOM_FIT
+    private var pendingResizeMode: String = ResizeMode.CONTAIN
 
     /**
      * The view's rect in **window** coordinates, as of the last layout pass.
@@ -122,19 +124,32 @@ class MpvRenderView(context: Context) : SurfaceView(context),
         private set
 
     /**
-     * The `video-zoom` mpv is rendering with **right now**.
+     * The resize mode the engine is ACTUALLY rendering with **right now**.
      *
      * Not the pending one. A `resizeMode` that arrives before the mpv handle
      * exists is recorded and applied later, so publishing the pending value
-     * would let the PiP source rect be computed against a zoom the engine
-     * has never rendered with — a rect describing a letterboxed picture when
-     * the picture is actually stretched.
+     * would let the PiP source rect be computed against a mode the engine
+     * has never rendered with.
      *
-     * `0` (contain) until a zoom is applied, because that is the app's
-     * default `resizeMode` and the mode this module starts in.
+     * `contain` until a mode is applied, because that is the app's default
+     * `resizeMode` and the mode this module starts in.
      */
     @Volatile
-    var currentVideoZoom: String = PipSourceRect.ZOOM_FIT
+    var currentResizeMode: String = ResizeMode.CONTAIN
+        private set
+
+    /**
+     * Whether the picture the engine is rendering with **fills its view**.
+     *
+     * This is the fact the PiP source rect needs, and it is NOT the zoom: a
+     * picture that is magnified still covers every pixel of the view it is
+     * drawn in, while a picture that is fitted inside the view leaves
+     * letterbox / pillarbox bars that the hint has to describe.
+     *
+     * `false` (contain — fitted inside the view) until a mode is applied.
+     */
+    @Volatile
+    var currentFillsView: Boolean = false
         private set
 
     fun nativePtrHandle(): Long = nativePtr
@@ -330,36 +345,46 @@ class MpvRenderView(context: Context) : SurfaceView(context),
         if (pendingPaused) MPVLib.nativePause(nativePtr) else MPVLib.nativePlay(nativePtr)
         MPVLib.nativeSetMuted(nativePtr, pendingMuted)
         MPVLib.nativeSetVolume(nativePtr, pendingVolume.toDouble().coerceIn(0.0, 100.0))
-        pendingVideoZoom?.let {
-            MPVLib.setPropertyString(nativePtr, "video-zoom", it)
-            // The zoom that was held is applied NOW, so it is the one the
-            // engine renders with. Publishing it here is what keeps
-            // `currentVideoZoom` from describing a zoom that was never
-            // applied.
-            currentVideoZoom = it
-        }
+        applyResizeSettings(ResizeMode.settingsFor(pendingResizeMode))
     }
 
     /**
-     * Record and apply mpv's `video-zoom`.
+     * Record and apply a resize mode.
      *
      * Routed through the pending field so a `resizeMode` prop that lands
      * before the handle exists is not silently lost against an uninitialised
      * instance.
+     *
+     * The mode's NAME is what arrives here. [ResizeMode] turns it into the
+     * mpv properties that mean it.
      */
-    fun applyVideoZoom(zoom: String?) {
-        pendingVideoZoom = zoom
+    fun applyResizeMode(mode: String?) {
+        val settings = ResizeMode.settingsFor(mode)
+        pendingResizeMode = settings.mode
         if (nativePtr == 0L) return
-        MPVLib.setPropertyString(nativePtr, "video-zoom", zoom)
-        // Applied, so it is current. A zoom recorded WITHOUT a handle is
-        // not published here — it is published by `reapplyPendingProps`,
-        // at the moment it actually reaches the engine.
-        //
-        // A null zoom resets the engine's property, and the module's own
-        // default for a reset zoom is "0" (contain) — the same answer the
-        // pending field starts with, so the reader never sees a zoom that
-        // was never applied.
-        currentVideoZoom = zoom ?: PipSourceRect.ZOOM_FIT
+        applyResizeSettings(settings)
+    }
+
+    /**
+     * Write the mpv properties a mode means, and publish the state the
+     * engine is now rendering with.
+     *
+     * ALL THREE properties are written every time, because mpv's properties
+     * **persist**. Switching from `cover` back to `contain` has to put
+     * `panscan` back to `0`, and switching from `stretch` back to `contain`
+     * has to put `keepaspect` back to `yes`. Writing only what the new mode
+     * "uses" would leave the previous mode's property behind.
+     */
+    private fun applyResizeSettings(settings: ResizeMode.MpvSettings) {
+        if (nativePtr == 0L) return
+        MPVLib.setPropertyString(nativePtr, ResizeMode.PROP_VIDEO_ZOOM, settings.videoZoom)
+        MPVLib.setPropertyString(nativePtr, ResizeMode.PROP_KEEP_ASPECT, settings.keepAspect)
+        MPVLib.setPropertyString(nativePtr, ResizeMode.PROP_PANSCAN, settings.panScan)
+        // Applied, so it is current. A mode recorded WITHOUT a handle is
+        // not published here — it is published by `reapplyPendingProps`, at
+        // the moment it actually reaches the engine.
+        currentResizeMode = settings.mode
+        currentFillsView = settings.fillsView
     }
 
     /**

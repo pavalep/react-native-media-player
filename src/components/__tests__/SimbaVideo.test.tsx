@@ -82,28 +82,48 @@ describe('SimbaVideo', () => {
     });
   });
 
-  describe('resizeMode maps onto mpv video-zoom', () => {
-    it('contain is the default and maps to 0 (fit, letterboxed)', async () => {
-      expect((await renderNative()).resizeMode).toBe('0');
+  describe('resizeMode crosses into the native side as its NAME', () => {
+    // mpv's `video-zoom` is a log2 SCALE FACTOR - "0" unscaled, "1" twice
+    // the size, "2" four times the size - not a fit / fill / stretch enum.
+    // Translating the mode into it here made "cover" a 2x magnification and
+    // "stretch" a 4x one. The native side owns the mapping now; this side
+    // sends the mode's name and nothing else.
+    it('contain is the default and crosses as "contain"', async () => {
+      expect((await renderNative()).resizeMode).toBe('contain');
     });
 
-    it('contain → 0 when asked for explicitly', async () => {
-      expect((await renderNative({ resizeMode: 'contain' })).resizeMode).toBe('0');
+    it('contain crosses as "contain" when asked for explicitly', async () => {
+      expect((await renderNative({ resizeMode: 'contain' })).resizeMode).toBe(
+        'contain',
+      );
     });
 
-    it('cover → 1 (fill, cropping, aspect preserved)', async () => {
-      expect((await renderNative({ resizeMode: 'cover' })).resizeMode).toBe('1');
+    it('cover crosses as "cover" — not as a zoom factor', async () => {
+      expect((await renderNative({ resizeMode: 'cover' })).resizeMode).toBe(
+        'cover',
+      );
     });
 
-    it('stretch → 2 (fill, aspect ignored)', async () => {
-      expect((await renderNative({ resizeMode: 'stretch' })).resizeMode).toBe('2');
+    it('stretch crosses as "stretch" — not as a zoom factor', async () => {
+      expect((await renderNative({ resizeMode: 'stretch' })).resizeMode).toBe(
+        'stretch',
+      );
     });
 
-    it('falls back to fit for an unrecognised mode', async () => {
-      // mpv would reject an unknown video-zoom value; a wrong-but-valid
-      // letterbox is recoverable, a rejected property is not.
+    it('never sends a zoom factor to the native side', async () => {
+      for (const mode of ['contain', 'cover', 'stretch'] as const) {
+        const p = await renderNative({ resizeMode: mode });
+        expect(p.resizeMode).not.toBe('0');
+        expect(p.resizeMode).not.toBe('1');
+        expect(p.resizeMode).not.toBe('2');
+      }
+    });
+
+    it('sends an unrecognised mode through — the native side owns the fallback', async () => {
+      // The native mapping treats anything it does not know as `contain`.
+      // Rewriting it here would put the fallback in two places.
       const p = await renderNative({ resizeMode: 'bogus' as never });
-      expect(p.resizeMode).toBe('0');
+      expect(p.resizeMode).toBe('bogus');
     });
   });
 

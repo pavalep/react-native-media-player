@@ -8,7 +8,8 @@ import org.junit.Test
 import java.io.File
 
 /**
- * B-036 — "PiP entry grows out of a black rectangle".
+ * B-036 — "PiP entry grows out of a black rectangle" — and B-045, which
+ * changed what this arithmetic is asked.
  *
  * ## The defect
  *
@@ -23,11 +24,28 @@ import java.io.File
  * The replacement reads the LIVE picture view
  * (`MpvRenderViewRegistry.current()`) and asks where the VIDEO is inside it.
  *
+ * ## What B-045 changed here
+ *
+ * The arithmetic used to be asked about the ZOOM the picture was rendered
+ * with, because the mode was translated into mpv's `video-zoom` — which is a
+ * log2 **scale factor**, not a fit / fill / stretch enum. So `cover` was a
+ * 2x magnification and `stretch` a 4x one.
+ *
+ * The modes are now mpv's own properties (`video-zoom` + `keepaspect` +
+ * `panscan`, owned by [ResizeMode]), and the fact this arithmetic needs is
+ * the one the PiP hint actually depends on: does the picture FILL its view,
+ * or FIT inside it?
+ *
+ *  - **Fills the view** (`cover`, `stretch`) — the picture covers every pixel
+ *    of the view, so the visible region IS the view's rect.
+ *  - **Fits inside the view** (`contain`) — the visible region is the
+ *    largest rect of the video's own shape that fits inside the view.
+ *
  * ## What this test can and cannot prove
  *
- * The DECISION is pure — given the view's rect, the video's aspect and the
- * zoom mode, what rect of the window does the video occupy? — so it is
- * tested here as plain JUnit.
+ * The DECISION is pure — given the view's rect, the video's aspect and
+ * whether the picture fills the view, what rect of the window does the video
+ * occupy? — so it is tested here as plain JUnit.
  *
  * Plain JUnit, on purpose: this module's Robolectric tests are `@Ignore`d
  * because they cannot run offline. A test that is skipped proves nothing,
@@ -42,7 +60,7 @@ import java.io.File
  */
 class PipSourceRectTest {
 
-    // ── Fit ("0") — the letterbox / pillarbox arithmetic ─────────────────
+    // ── Fit (the picture FITS inside the view) ───────────────────────────
 
     @Test
     fun `fit letterboxes a video that is wider than the view`() {
@@ -55,7 +73,7 @@ class PipSourceRectTest {
             viewWidth = 1200,
             viewHeight = 1600,
             videoAspect = 16f / 9f,
-            videoZoom = "0",
+            fillsView = false,
         )
 
         assertNotNull("a wide video must have a frame", frame)
@@ -79,7 +97,7 @@ class PipSourceRectTest {
             viewWidth = 1200,
             viewHeight = 1600,
             videoAspect = 16f / 9f,
-            videoZoom = "0",
+            fillsView = false,
         )
 
         assertNotNull("a wide video must have a frame", frame)
@@ -97,7 +115,7 @@ class PipSourceRectTest {
             viewWidth = 1600,
             viewHeight = 1200,
             videoAspect = 9f / 16f,
-            videoZoom = "0",
+            fillsView = false,
         )
 
         assertNotNull("a narrow video must have a frame", frame)
@@ -118,7 +136,7 @@ class PipSourceRectTest {
             viewWidth = 1920,
             viewHeight = 1080,
             videoAspect = 16f / 9f,
-            videoZoom = "0",
+            fillsView = false,
         )
 
         assertNotNull("a matching video must have a frame", frame)
@@ -141,7 +159,7 @@ class PipSourceRectTest {
             viewWidth = 1200,
             viewHeight = 1600,
             videoAspect = 16f / 9f,
-            videoZoom = "0",
+            fillsView = false,
         )
 
         assertNotNull("a wide video must have a frame", frame)
@@ -163,7 +181,7 @@ class PipSourceRectTest {
             viewWidth = 1200,
             viewHeight = 1600,
             videoAspect = 16f / 9f,
-            videoZoom = "0",
+            fillsView = false,
         )
 
         assertNotNull("a wide video must have a frame", frame)
@@ -172,7 +190,7 @@ class PipSourceRectTest {
         assertEquals(91 + 462, f.top)
     }
 
-    // ── Fill ("1") and stretch ("2") ─────────────────────────────────────
+    // ── Fill (the picture FILLS the view) ─────────────────────────────────
 
     @Test
     fun `fill crops the video, so the visible region is the whole view`() {
@@ -182,7 +200,7 @@ class PipSourceRectTest {
             viewWidth = 1200,
             viewHeight = 1600,
             videoAspect = 16f / 9f,
-            videoZoom = "1",
+            fillsView = true,
         )
 
         assertNotNull("a filled video must have a frame", frame)
@@ -201,7 +219,7 @@ class PipSourceRectTest {
             viewWidth = 1200,
             viewHeight = 1600,
             videoAspect = 16f / 9f,
-            videoZoom = "2",
+            fillsView = true,
         )
 
         assertNotNull("a stretched video must have a frame", frame)
@@ -212,44 +230,68 @@ class PipSourceRectTest {
         assertEquals(1607, f.bottom)
     }
 
-    // ── Unknown zoom ─────────────────────────────────────────────────────
+    // ── The mode decides the fact ────────────────────────────────────────
 
     @Test
-    fun `an unrecognised zoom behaves like fit`() {
-        // The app's default `resizeMode` is `contain`, so fit is the mode
-        // the picture is actually rendering with. A mode this code does not
-        // understand must not silently become "the whole view".
-        val fit = PipSourceRect.frameInWindow(0, 0, 1200, 1600, 16f / 9f, "0")
-        val unknown = PipSourceRect.frameInWindow(0, 0, 1200, 1600, 16f / 9f, "bogus")
+    fun `contain fits inside the view and cover fills it`() {
+        // The mode is the only thing that decides the fact, and the fact is
+        // the only thing this arithmetic needs. So the mode has to reach
+        // this far — a zoom cannot decide it.
+        val fit = PipSourceRect.frameInWindow(0, 0, 1200, 1600, 16f / 9f, ResizeMode.fillsView(ResizeMode.CONTAIN))
+        val fill = PipSourceRect.frameInWindow(0, 0, 1200, 1600, 16f / 9f, ResizeMode.fillsView(ResizeMode.COVER))
 
-        assertNotNull("an unknown zoom must still answer a frame", unknown)
-        assertEquals(fit, unknown)
+        assertNotNull("contain must have a frame", fit)
+        assertNotNull("cover must have a frame", fill)
+        assertEquals(675, fit!!.height)
+        assertEquals(1600, fill!!.height)
+        assertEquals(1200, fill.width)
     }
 
     @Test
-    fun `a blank zoom behaves like fit`() {
-        val fit = PipSourceRect.frameInWindow(0, 0, 1200, 1600, 16f / 9f, "0")
+    fun `stretch fills the view`() {
+        val fill = PipSourceRect.frameInWindow(0, 0, 1200, 1600, 16f / 9f, ResizeMode.fillsView(ResizeMode.STRETCH))
 
-        assertEquals(fit, PipSourceRect.frameInWindow(0, 0, 1200, 1600, 16f / 9f, ""))
-        assertEquals(fit, PipSourceRect.frameInWindow(0, 0, 1200, 1600, 16f / 9f, "   "))
+        assertNotNull("stretch must have a frame", fill)
+        assertEquals(1200, fill!!.width)
+        assertEquals(1600, fill.height)
+    }
+
+    @Test
+    fun `an unrecognised mode fits inside the view`() {
+        // The app's default `resizeMode` is `contain`, so fit is the mode
+        // the picture is actually rendering with. A mode this code does not
+        // understand must not silently become "the whole view".
+        val contain = PipSourceRect.frameInWindow(0, 0, 1200, 1600, 16f / 9f, ResizeMode.fillsView(ResizeMode.CONTAIN))
+        val unknown = PipSourceRect.frameInWindow(0, 0, 1200, 1600, 16f / 9f, ResizeMode.fillsView("bogus"))
+
+        assertNotNull("an unknown mode must still answer a frame", unknown)
+        assertEquals(contain, unknown)
     }
 
     // ── The guards ───────────────────────────────────────────────────────
 
     @Test
     fun `a view with no area has no frame`() {
-        assertNull(PipSourceRect.frameInWindow(0, 0, 0, 1600, 16f / 9f, "0"))
-        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 0, 16f / 9f, "0"))
-        assertNull(PipSourceRect.frameInWindow(0, 0, -1200, 1600, 16f / 9f, "0"))
-        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, -1600, 16f / 9f, "0"))
+        assertNull(PipSourceRect.frameInWindow(0, 0, 0, 1600, 16f / 9f, false))
+        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 0, 16f / 9f, false))
+        assertNull(PipSourceRect.frameInWindow(0, 0, -1200, 1600, 16f / 9f, false))
+        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, -1600, 16f / 9f, false))
+        // The guard is about the VIEW, not about the mode: a picture that
+        // fills a view with no area still has no rect to point at.
+        assertNull(PipSourceRect.frameInWindow(0, 0, 0, 1600, 16f / 9f, true))
+        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 0, 16f / 9f, true))
     }
 
     @Test
     fun `an aspect that is not a shape has no frame`() {
-        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 1600, 0f, "0"))
-        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 1600, -16f / 9f, "0"))
-        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 1600, Float.NaN, "0"))
-        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 1600, Float.POSITIVE_INFINITY, "0"))
+        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 1600, 0f, false))
+        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 1600, -16f / 9f, false))
+        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 1600, Float.NaN, false))
+        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 1600, Float.POSITIVE_INFINITY, false))
+        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 1600, 0f, true))
+        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 1600, -16f / 9f, true))
+        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 1600, Float.NaN, true))
+        assertNull(PipSourceRect.frameInWindow(0, 0, 1200, 1600, Float.POSITIVE_INFINITY, true))
     }
 
     @Test
@@ -258,19 +300,18 @@ class PipSourceRectTest {
         // a frame whose width or height rounds away to zero is exactly that.
         val viewSizes = listOf(1 to 1, 1 to 100, 100 to 1, 3 to 7, 320 to 240, 1080 to 2400)
         val aspects = listOf(0.01f, 0.5f, 1f, 1.7777778f, 2.35f, 9f / 16f, 100f)
-        val zooms = listOf("0", "1", "2", "bogus", "")
 
         for ((w, h) in viewSizes) {
             for (aspect in aspects) {
-                for (zoom in zooms) {
-                    val frame = PipSourceRect.frameInWindow(0, 0, w, h, aspect, zoom)
+                for (fillsView in listOf(false, true)) {
+                    val frame = PipSourceRect.frameInWindow(0, 0, w, h, aspect, fillsView)
                         ?: continue
                     assertTrue(
-                        "width must be > 0 for ${w}x$h @ $aspect zoom '$zoom'",
+                        "width must be > 0 for ${w}x$h @ $aspect fillsView=$fillsView",
                         frame.width > 0,
                     )
                     assertTrue(
-                        "height must be > 0 for ${w}x$h @ $aspect zoom '$zoom'",
+                        "height must be > 0 for ${w}x$h @ $aspect fillsView=$fillsView",
                         frame.height > 0,
                     )
                 }
@@ -305,6 +346,25 @@ class PipSourceRectTest {
             "the source rect must be the video's frame inside the picture, " +
                 "computed by the pure helper",
             source.contains("PipSourceRect.frameInWindow("),
+        )
+    }
+
+    @Test
+    fun `the bridge asks the published FILL fact, not the zoom`() {
+        // The zoom cannot answer this: mpv's `video-zoom` is a log2 scale
+        // factor, and a magnified picture still covers every pixel of the
+        // view it is drawn in. The fact the hint depends on is whether the
+        // picture fills the view.
+        val source = bridgeSource().readText()
+
+        assertTrue(
+            "the bridge must ask the picture view whether it fills the view",
+            source.contains("view.currentFillsView"),
+        )
+        assertTrue(
+            "the zoom is not a fit / fill / stretch enum and must not be " +
+                "used as one",
+            !source.contains("currentVideoZoom"),
         )
     }
 

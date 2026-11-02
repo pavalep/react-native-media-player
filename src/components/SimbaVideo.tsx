@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { StyleSheet } from 'react-native';
 
 import { getMpvPlayerModule } from '../bridge/MpvPlayerModule';
@@ -9,23 +9,18 @@ export type SimbaVideoResizeMode = 'contain' | 'cover' | 'stretch';
 
 export interface SimbaVideoProps extends NativeSimbaVideoViewProps {
   /**
-   * How the picture fills this view. Maps onto mpv's `video-zoom`
-   * (0 / 1 / 2) rather than being reimplemented.
+   * How the picture fills this view.
    *
-   * ## The mapping is currently WRONG for `cover` and `stretch`
+   *  - `contain` - fit inside the view, letterboxed / pillarboxed.
+   *  - `cover`   - fill the view, cropping the overflow, aspect preserved.
+   *  - `stretch` - fill the view, aspect ignored.
    *
-   * mpv's `video-zoom` is a log2 **scale factor**, not a fit / fill / stretch
-   * enum: `0` is unscaled, `1` is twice the size, `2` is four times the size.
-   * So `cover` renders as a 2x magnified, cropped picture and `stretch` as a
-   * 4x magnified one — neither is what its name says, and the aspect is never
-   * ignored.
-   *
-   * `contain` is correct: `0` is unscaled, so the picture keeps its aspect
-   * and is letterboxed into the view.
-   *
-   * The fix is mpv's `panscan` (`1.0` for cover) and `keepaspect` (`no` for
-   * stretch), which is a change in the native half. Until that lands, treat
-   * `cover` and `stretch` as "a magnified fit", not as a cover and a stretch.
+   * The MODE NAME crosses into the native side, which owns the mapping to
+   * mpv's own properties (`video-zoom` + `keepaspect` + `panscan`). Nothing
+   * is translated here: mpv's `video-zoom` is a log2 **scale factor** (`0` is
+   * unscaled, `1` is twice the size, `2` is four times the size), so sending
+   * it a zoom for "cover" would magnify the picture instead of filling the
+   * view.
    *
    * @default 'contain'
    */
@@ -101,18 +96,6 @@ export function SimbaVideo(props: SimbaVideoProps): React.ReactElement {
    */
   const resolvedPtr = nativePtr ?? getMpvPlayerModule().getNativePtr();
 
-  const videoZoom = useMemo(() => {
-    switch (resizeMode) {
-      case 'cover':
-        return '1';
-      case 'stretch':
-        return '2';
-      case 'contain':
-      default:
-        return '0';
-    }
-  }, [resizeMode]);
-
   return (
     <NativeSimbaVideoView
       {...rest}
@@ -120,7 +103,7 @@ export function SimbaVideo(props: SimbaVideoProps): React.ReactElement {
       paused={paused ?? false}
       muted={muted ?? false}
       volume={volume ?? 100}
-      resizeMode={videoZoom}
+      resizeMode={resizeMode}
       style={[styles.fill, style]}
     />
   );
