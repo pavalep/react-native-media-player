@@ -1,7 +1,6 @@
 package com.simba.player.mpv
 
 import android.app.Activity
-import android.graphics.Rect
 import android.os.Looper
 import android.util.Log
 import android.view.View
@@ -40,12 +39,14 @@ import java.lang.ref.WeakReference
  * they are left with no writer, and reviving one would put the hazard back
  * in reach.
  *
- * [boundsInWindow] is the PiP source-rect hint. It reads [viewRef] too, so
- * it answers `null` and PiP entry has no rect to animate from. Fixing that
- * is a separate piece of work: the old rect was sized by [setBounds] /
- * [fillBounds], so it matched the video's own shape by construction, and the
- * Yoga-sized picture does not carry that guarantee. See the app's master
- * plan, bug `B-036`.
+ * The PiP source-rect hint does NOT live here. It used to be
+ * [boundsInWindow], which read [viewRef] — and [viewRef] has no writer in
+ * this architecture, so it answered `null` forever and PiP entry grew out of
+ * a black rectangle. The hint is built from the LIVE picture view instead
+ * (`MpvRenderViewRegistry`), because the picture's real on-screen bounds are
+ * the only thing that can say where the video is; and it is the video's FRAME
+ * inside that view, not the view's box. See `MpvBridgeModule`'s
+ * `pipSourceRectInWindow`.
  *
  * ## Why this file exists
  *
@@ -225,46 +226,6 @@ object PlayerSurface {
     /** Show or hide the surface; hidden is the correct state for audio-only playback. */
     fun setVisible(visible: Boolean): Boolean =
         withSurface("setVisible") { it.setSurfaceVisible(visible) }
-
-    /**
-     * The surface's current rect in window coordinates, or `null` when it has
-     * no on-screen area.
-     *
-     * This is the `setSourceRectHint` Android wants at PiP entry. With it the
-     * system animates the real video frame into the PiP window; without it the
-     * window grows out of a black rectangle.
-     *
-     * The hint must describe a rect of the *same shape* as the PiP aspect
-     * ratio, or the system scales the frame non-proportionally to fit and the
-     * video visibly arrives stretched or squashed. Because this rect is the
-     * surface itself and the surface is sized by [setBounds] / [fillBounds]
-     * with the video's own shape, the two agree by construction rather than by
-     * being kept in sync by hand.
-     *
-     * `null` is the honest answer while the surface is `GONE` or zero-sized --
-     * there is no video rect to animate from, and returning a zero rect would
-     * ask the system to animate from nothing. Null degrades to the no-hint
-     * behaviour, which costs a black transition but never a distorted one.
-     */
-    @JvmStatic
-    fun boundsInWindow(): Rect? {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            Log.e(TAG, "boundsInWindow refused: must be called from the main thread")
-            return null
-        }
-        val view = viewRef.get() ?: return null
-        if (view.visibility != View.VISIBLE || view.width <= 0 || view.height <= 0) {
-            return null
-        }
-        val location = IntArray(2)
-        view.getLocationInWindow(location)
-        return Rect(
-            location[0],
-            location[1],
-            location[0] + view.width,
-            location[1] + view.height,
-        )
-    }
 
     /**
      * Run [block] against the surface on the main thread.

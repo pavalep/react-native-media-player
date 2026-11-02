@@ -105,11 +105,30 @@ class MpvRenderViewManager : SimpleViewManager<MpvRenderView>() {
    * mpv's `video-zoom`, carried as a string because mpv properties are strings
    * and the spec declares this prop as `WithDefault<string, 'contain'>`.
    *
-   *   `0` fit / letterbox · `1` fill / crop · `2` fill, aspect ignored
+   *   `0` unscaled · `1` twice the size · `2` four times the size
    *
    * Applied through [MpvRenderView] so a value that arrives before the handle
    * is held and re-applied on bind, instead of being silently lost against an
    * uninitialised mpv instance.
+   *
+   * ## What these numbers actually are
+   *
+   * mpv's `video-zoom` is **not** a fit / fill / stretch enum. It is a
+   * **log2 scale factor**: `0` is unscaled, `1` is twice the size, `2` is
+   * four times the size (mpv's manual, `--video-zoom`). So the three values
+   * are three magnified fits, and the mode names they carry in this codebase
+   * (`contain` / `cover` / `stretch`) do not describe what the engine renders:
+   *
+   *  - `0` — a fit. The picture keeps its aspect and is letterboxed into the
+   *    view. This one matches its name.
+   *  - `1` — a **2x** magnification, cropped by the view. It is not a cover.
+   *  - `2` — a **4x** magnification, cropped by the view. The aspect is
+   *    **not** ignored, so it is not a stretch.
+   *
+   * The app asks for `cover` on its mini-player dock, so the dock is today a
+   * 2x magnified, cropped picture. The app's own bug tracker carries this as
+   * an open bug: the fix is mpv's `panscan` (`1.0` for cover) and
+   * `keepaspect` (`no` for stretch), not `video-zoom`.
    */
   @ReactProp(name = "resizeMode")
   fun setResizeMode(view: MpvRenderView, resizeMode: String?) {

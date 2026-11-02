@@ -90,8 +90,52 @@ class MpvRenderView(context: Context) : SurfaceView(context),
     /** @see MpvRenderViewManager.setVolume */
     var pendingVolume: Float = 100f
 
-    /** mpv `video-zoom`: `0` fit · `1` fill/crop · `2` fill ignoring aspect. */
-    private var pendingVideoZoom: String? = "0"
+    /**
+     * The zoom mode, as it is carried to mpv's `video-zoom` property:
+     * `0` contain · `1` cover · `2` stretch.
+     *
+     * The MODE names are this codebase's (see `SimbaVideo.tsx`); the numbers
+     * are what the engine is asked for.
+     */
+    private var pendingVideoZoom: String? = PipSourceRect.ZOOM_FIT
+
+    /**
+     * The view's rect in **window** coordinates, as of the last layout pass.
+     *
+     * This is the geometry the PiP source-rect hint is built from. It is
+     * cached rather than read on demand because
+     * `View.getLocationInWindow()` is a UI-thread API and the PiP code that
+     * needs the rect runs on the bridge thread — so the UI thread publishes
+     * it here and the bridge thread reads it.
+     *
+     * A plain field would not do. The writer is the UI thread and the reader
+     * is the bridge thread, and without `@Volatile` the reader could see a
+     * stale rect — or a half-written one — with nothing in the logs to say
+     * so. `@Volatile` makes the publication safe.
+     *
+     * `null` means "no rect to point at": the view has not been laid out
+     * yet, or it has no area. The caller degrades to the platform's no-hint
+     * behaviour rather than pointing at a region that does not exist.
+     */
+    @Volatile
+    var cachedWindowBounds: PictureFrame? = null
+        private set
+
+    /**
+     * The `video-zoom` mpv is rendering with **right now**.
+     *
+     * Not the pending one. A `resizeMode` that arrives before the mpv handle
+     * exists is recorded and applied later, so publishing the pending value
+     * would let the PiP source rect be computed against a zoom the engine
+     * has never rendered with — a rect describing a letterboxed picture when
+     * the picture is actually stretched.
+     *
+     * `0` (contain) until a zoom is applied, because that is the app's
+     * default `resizeMode` and the mode this module starts in.
+     */
+    @Volatile
+    var currentVideoZoom: String = PipSourceRect.ZOOM_FIT
+        private set
 
     fun nativePtrHandle(): Long = nativePtr
 
@@ -109,6 +153,50 @@ class MpvRenderView(context: Context) : SurfaceView(context),
         // required for PiP. Do NOT call setZOrderOnTop or setZOrderMediaOverlay.
         isFocusable = false
         isClickable = false
+    }
+
+    // ── Window geometry (the PiP source rect's raw material) ─────────────
+
+    /**
+     * Publish the view's rect in window coordinates.
+     *
+     * Always called from a layout callback, so it runs on the UI thread —
+     * which is the only thread allowed to ask a `View` where it is.
+     */
+    private fun refreshWindowBounds() {
+        // `getLocationInWindow()` answers (0, 0) for a view that is not
+        // attached to a window yet. That is a lie, and believing it would
+        // put the PiP hint in the top-left corner of the screen. No
+        // attachment, no rect.
+        if (!isAttachedToWindow || width <= 0 || height <= 0) {
+            cachedWindowBounds = null
+            return
+        }
+        val location = IntArray(2)
+        getLocationInWindow(location)
+        cachedWindowBounds = PictureFrame(
+            location[0],
+            location[1],
+            location[0] + width,
+            location[1] + height,
+        )
+    }
+
+    /**
+     * Refresh the cached window rect after every layout pass.
+     *
+     * `super.onLayout(...)` first: the view's own position is only final
+     * once the layout pass has run, so the rect is read afterwards.
+     */
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        refreshWindowBounds()
+    }
+
+    /** Refresh the cached window rect when the view's size changes. */
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        refreshWindowBounds()
     }
 
     // ── Bounds (V21) ──────────────────────────────────────────────────────
@@ -244,6 +332,11 @@ class MpvRenderView(context: Context) : SurfaceView(context),
         MPVLib.nativeSetVolume(nativePtr, pendingVolume.toDouble().coerceIn(0.0, 100.0))
         pendingVideoZoom?.let {
             MPVLib.setPropertyString(nativePtr, "video-zoom", it)
+            // The zoom that was held is applied NOW, so it is the one the
+            // engine renders with. Publishing it here is what keeps
+            // `currentVideoZoom` from describing a zoom that was never
+            // applied.
+            currentVideoZoom = it
         }
     }
 
@@ -258,6 +351,15 @@ class MpvRenderView(context: Context) : SurfaceView(context),
         pendingVideoZoom = zoom
         if (nativePtr == 0L) return
         MPVLib.setPropertyString(nativePtr, "video-zoom", zoom)
+        // Applied, so it is current. A zoom recorded WITHOUT a handle is
+        // not published here — it is published by `reapplyPendingProps`,
+        // at the moment it actually reaches the engine.
+        //
+        // A null zoom resets the engine's property, and the module's own
+        // default for a reset zoom is "0" (contain) — the same answer the
+        // pending field starts with, so the reader never sees a zoom that
+        // was never applied.
+        currentVideoZoom = zoom ?: PipSourceRect.ZOOM_FIT
     }
 
     /**
@@ -340,6 +442,18 @@ class MpvRenderView(context: Context) : SurfaceView(context),
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         ensureSurfaceAttached("onAttachedToWindow")
+        // The view may have been laid out before it was attached, in which
+        // case the cached rect is missing; refresh it now that the window
+        // is there to be located in.
+        refreshWindowBounds()
+    }
+
+    override fun onDetachedFromWindow() {
+        // The cached rect describes a position in a window this view is no
+        // longer in. Leaving it published would point the PiP hint at
+        // somewhere the picture is not.
+        cachedWindowBounds = null
+        super.onDetachedFromWindow()
     }
 
     override fun onVisibilityChanged(changedView: View, visibility: Int) {

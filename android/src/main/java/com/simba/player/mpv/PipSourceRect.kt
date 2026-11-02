@@ -1,0 +1,214 @@
+package com.simba.player.mpv
+
+/**
+ * A rectangle in **window** coordinates.
+ *
+ * `left` / `top` are the rect's origin in window space; `right` / `bottom`
+ * are its far edge, which is the exclusive convention `android.graphics.Rect`
+ * uses, so the conversion is a straight copy with no off-by-one to argue about.
+ *
+ * ## Why this exists
+ *
+ * Android's `setSourceRectHint` wants the region of the window where the
+ * video actually is, so PiP entry animates the real frame into the PiP
+ * window instead of growing out of a black rectangle.
+ *
+ * That region is **not** the picture view's box. The app's picture fills its
+ * lane (`StyleSheet.absoluteFill`), so the view's rect is the whole window,
+ * and handing the view's box to the system would tell it to make the PiP
+ * window the shape of the window — portrait on a phone — with the video
+ * arriving tiny and letterboxed inside it.
+ *
+ * So the rect has to be the video's FRAME inside the view: the largest rect
+ * of the video's own shape that fits inside the view (letterbox / pillarbox
+ * bars around it), or the whole view when the picture is filling it.
+ *
+ * ## Why the arithmetic is pure
+ *
+ * There is no Android framework type in this file's arithmetic on purpose.
+ * The module's Robolectric tests are `@Ignore`d because they cannot run
+ * offline, so a decision that lived behind an Android type would ship
+ * untested. Keeping the decision here means the unit test is plain JUnit and
+ * actually EXECUTES.
+ *
+ * The Android-side half — where the picture view is and how big it is — lives
+ * in `MpvRenderView`; the question "what rect of that view does the video
+ * occupy" lives here. One owner per fact.
+ */
+data class PictureFrame(val left: Int, val top: Int, val right: Int, val bottom: Int) {
+
+    /** The rect's width. Never negative for a frame this module builds. */
+    val width: Int get() = right - left
+
+    /** The rect's height. Never negative for a frame this module builds. */
+    val height: Int get() = bottom - top
+
+    /**
+     * The rect's shape, as width / height.
+     *
+     * `0` when the rect has no height — the honest answer for a degenerate
+     * rect, and the reason callers must not divide by this themselves.
+     */
+    val aspect: Float get() = if (height > 0) width.toFloat() / height.toFloat() else 0f
+}
+
+/**
+ * The PiP source-rect arithmetic.
+ *
+ * ## What this decides
+ *
+ * Given the picture view's rect in window coordinates, the video's own aspect
+ * ratio, and the zoom the picture is rendered with, answer: **which rect of
+ * the window is the video?**
+ *
+ * ## The zoom modes
+ *
+ * `videoZoom` is the zoom the picture is being rendered with, which this
+ * codebase carries as a numeric string (`contain` → "0", `cover` → "1",
+ * `stretch` → "2"; see `SimbaVideo.tsx` and `MpvRenderViewManager.setResizeMode`).
+ *
+ * ## What those numbers are in mpv — and why this file does not care
+ *
+ * mpv's `video-zoom` is a log2 **scale factor**, not a fit / fill / stretch
+ * enum: `0` is unscaled, `1` is twice the size, `2` is four times the size.
+ * So the app's `cover` renders as a 2x magnified, cropped picture and its
+ * `stretch` as a 4x magnified one. (That is an open bug in the app's tracker;
+ * the fix is mpv's `panscan` / `keepaspect`.)
+ *
+ * The arithmetic here does not change, because it asks a question about the
+ * VISIBLE REGION rather than about the engine's internals: a picture that is
+ * magnified still covers every pixel of the view it is drawn in, so the
+ * region of the window the video occupies is the whole view either way. The
+ * only mode whose visible region is smaller than the view is the one that
+ * leaves bars around the picture — the unscaled fit.
+ *
+ *  - **"0" — contain.** The picture is FITTED into the view, so the visible
+ *    video is the LARGEST rect of the video's shape that FITS INSIDE the
+ *    view, centred. Bars sit above/below (wider video) or left/right
+ *    (narrower video).
+ *  - **"1" — cover.** The picture FILLS the view, so everything the user can
+ *    see is the view itself. The frame IS the view rect.
+ *  - **"2" — stretch.** The picture FILLS the view too, so again the frame
+ *    IS the view rect.
+ *
+ * The two filling modes answer the same rect, and that is not a
+ * coincidence: a picture that fills the view covers every pixel of it, so
+ * the region of the window the video occupies IS the view — whatever the
+ * engine does with the shape behind it.
+ *
+ * Anything else — an unrecognised mode, a blank string — is treated as
+ * contain. The app's default `resizeMode` is `contain`, so contain is the
+ * mode the video is actually rendering with in the common case, and it is
+ * the mode that keeps the frame's shape equal to the video's shape.
+ *
+ * ## Why the guards return `null`
+ *
+ * A source rect that describes nothing is worse than no source rect at all:
+ * the system would animate the PiP window out of a region that does not
+ * contain the video. `null` degrades to the platform's no-hint behaviour,
+ * which costs a black transition but never a distorted one.
+ */
+object PipSourceRect {
+
+    /** The "contain" mode: the picture is fitted inside the view. */
+    const val ZOOM_FIT = "0"
+
+    /** The "cover" mode: the picture fills the view. */
+    const val ZOOM_FILL = "1"
+
+    /** The "stretch" mode: the picture fills the view. */
+    const val ZOOM_STRETCH = "2"
+
+    /**
+     * The window rect the video occupies, or `null` when there is no such
+     * rect to point at.
+     *
+     * @param viewLeft    The picture view's left edge, in window coordinates.
+     * @param viewTop     The picture view's top edge, in window coordinates.
+     * @param viewWidth   The picture view's width, in pixels.
+     * @param viewHeight  The picture view's height, in pixels.
+     * @param videoAspect The video's own width / height.
+     * @param videoZoom   The zoom mode the picture is rendered with, as a
+     *                    numeric string ("0" contain · "1" cover · "2" stretch).
+     */
+    fun frameInWindow(
+        viewLeft: Int,
+        viewTop: Int,
+        viewWidth: Int,
+        viewHeight: Int,
+        videoAspect: Float,
+        videoZoom: String,
+    ): PictureFrame? {
+        // A view with no area has no video in it.
+        if (viewWidth <= 0 || viewHeight <= 0) return null
+
+        // NaN and infinity are not shapes. `NaN <= 0f` is false, so the
+        // finiteness check has to come first or a NaN aspect would sail
+        // through into the arithmetic below.
+        if (!videoAspect.isFinite() || videoAspect <= 0f) return null
+
+        return when (videoZoom.trim()) {
+            // Cover and stretch both fill the view, so in both cases the
+            // visible picture IS the view's rect.
+            ZOOM_FILL, ZOOM_STRETCH -> PictureFrame(
+                viewLeft,
+                viewTop,
+                viewLeft + viewWidth,
+                viewTop + viewHeight,
+            )
+
+            // Contain, and anything this code does not recognise.
+            else -> fitFrame(viewLeft, viewTop, viewWidth, viewHeight, videoAspect)
+        }
+    }
+
+    /**
+     * The largest rect of the video's shape that fits inside the view,
+     * centred in it.
+     *
+     * Two cases, and they are not interchangeable:
+     *
+     *  - The video is WIDER than the view → the frame is the view's full
+     *    width and a proportionally shorter height, centred vertically.
+     *    Letterbox bars above and below.
+     *  - The video is NARROWER than the view → the frame is the view's full
+     *    height and a proportionally narrower width, centred horizontally.
+     *    Pillarbox bars left and right.
+     */
+    private fun fitFrame(
+        viewLeft: Int,
+        viewTop: Int,
+        viewWidth: Int,
+        viewHeight: Int,
+        videoAspect: Float,
+    ): PictureFrame? {
+        val viewAspect = viewWidth.toFloat() / viewHeight.toFloat()
+
+        val fittedWidth: Int
+        val fittedHeight: Int
+        if (videoAspect > viewAspect) {
+            fittedWidth = viewWidth
+            fittedHeight = Math.round(viewWidth / videoAspect)
+        } else {
+            fittedHeight = viewHeight
+            fittedWidth = Math.round(viewHeight * videoAspect)
+        }
+
+        // A fit that rounds away to nothing has no rect to point at.
+        if (fittedWidth <= 0 || fittedHeight <= 0) return null
+
+        // Float rounding can push the fitted edge a pixel past the view's
+        // edge. The frame has to stay INSIDE the picture, or the hint would
+        // describe a region that is not on screen.
+        val width = fittedWidth.coerceAtMost(viewWidth)
+        val height = fittedHeight.coerceAtMost(viewHeight)
+        if (width <= 0 || height <= 0) return null
+
+        // Integer division centres the frame: the odd leftover pixel stays
+        // on the far side, which is the same choice the platform's own
+        // letterboxing makes and one pixel nobody can see.
+        val left = viewLeft + (viewWidth - width) / 2
+        val top = viewTop + (viewHeight - height) / 2
+        return PictureFrame(left, top, left + width, top + height)
+    }
+}

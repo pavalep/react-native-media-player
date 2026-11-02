@@ -2,6 +2,7 @@ package com.simba.player.mpv
 
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.media.MediaMetadataRetriever
 import android.util.Log
 import java.io.File
@@ -2324,6 +2325,60 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     /**
+     * The rect of the window the video actually occupies, or `null` when
+     * there is no such rect.
+     *
+     * ## What the rect is
+     *
+     * Android's `setSourceRectHint` wants the region of the window where the
+     * video is, so PiP entry animates the real frame into the PiP window
+     * instead of growing out of a black rectangle.
+     *
+     * It is **not** the picture view's box. The picture fills its lane
+     * (`StyleSheet.absoluteFill`), so the view's rect is the whole window,
+     * and hinting that would make the PiP window take the window's shape —
+     * portrait on a phone — with the video arriving tiny and letterboxed
+     * inside it. The rect has to be the video's FRAME inside the view: the
+     * largest rect of the video's own shape that fits inside it, or the
+     * whole view when the picture is filling it.
+     *
+     * ## Where the numbers come from
+     *
+     *  - the view's rect — `MpvRenderView.cachedWindowBounds`, published by
+     *    the UI thread on layout, because `getLocationInWindow()` is a
+     *    UI-thread API and this code runs on the bridge thread.
+     *  - the video's shape — `currentVideoAspect()`, the same `width` /
+     *    `height` properties `getVideoParams` reads.
+     *  - the zoom — `MpvRenderView.currentVideoZoom`, the `video-zoom` mpv
+     *    is rendering with right now.
+     *
+     * ## Why every step can answer `null`
+     *
+     * `null` is the honest answer when there is no video rect to point at:
+     * no live picture, no layout yet, or no video dimensions. It degrades to
+     * the platform's no-hint behaviour, which costs a black transition but
+     * never a distorted one.
+     *
+     * The reader this replaces (`PlayerSurface.boundsInWindow`) answered
+     * `null` **unconditionally** — it read a registry the V22 architecture
+     * has no writer for — so PiP entry always grew out of a black
+     * rectangle. That was the bug.
+     */
+    private fun pipSourceRectInWindow(): PictureFrame? {
+        val view = MpvRenderViewRegistry.current() ?: return null
+        val bounds = view.cachedWindowBounds ?: return null
+        val aspect = currentVideoAspect() ?: return null
+        return PipSourceRect.frameInWindow(
+            bounds.left,
+            bounds.top,
+            bounds.width,
+            bounds.height,
+            aspect,
+            view.currentVideoZoom,
+        )
+    }
+
+    /**
      * Push the PiP params the SYSTEM will use onto the Activity.
      *
      * `Activity.setPictureInPictureParams` is what the platform reads
@@ -2361,11 +2416,23 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                 )
                 return
             }
-            val aspect = currentVideoAspect() ?: (16f / 9f)
+            // The window's shape and the source rect hint are taken from the
+            // SAME frame, so they can never disagree. The system scales the
+            // hinted region to the window non-proportionally when the two
+            // shapes differ, and the video visibly arrives stretched.
+            //
+            // The frame's shape is the video's own shape whenever the
+            // picture is rendered with `contain`, which is the app's
+            // default: the frame inside the view IS the video, letterboxed
+            // into the view's own shape. So the window's shape does not
+            // change here — only the hint does, from `null` (a black
+            // rectangle) to a real rect that points at the picture.
+            val frame = pipSourceRectInWindow()
+            val aspect = frame?.aspect ?: (currentVideoAspect() ?: (16f / 9f))
             val params = com.simba.player.PipManager.buildPipParams(
                 context = activity,
                 aspect = aspect,
-                sourceRectHint = PlayerSurface.boundsInWindow(),
+                sourceRectHint = frame?.let { Rect(it.left, it.top, it.right, it.bottom) },
                 autoEnter = true,
             )
             activity.runOnUiThread {
@@ -2432,30 +2499,43 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         //
         // Read from the same `width` / `height` properties `getVideoParams`
         // already reads, rather than adding a second, parallel way to ask
-        // mpv about dimensions.
-        val aspect = currentVideoAspect()
-        if (aspect == null) {
+        // mpv about dimensions. The frame below is where the shape is
+        // actually taken from when there is one; this is the fallback.
+        val videoAspect = currentVideoAspect()
+        if (videoAspect == null) {
             Log.w(
                 TAG,
                 "[PlaybackTrace][Bridge][enterPip] no video dimensions loaded " +
                     "(no file, or audio-only); PiP window will use 16:9",
             )
         }
-        // Source rect hint: where the video actually is right now, in window
-        // coordinates. This is what makes PiP entry animate the real frame into
-        // the window instead of growing out of a black rectangle.
+        // Source rect hint: the region of the window where the video
+        // actually is, so PiP entry animates the real frame into the PiP
+        // window instead of growing out of a black rectangle.
         //
-        // The hint's shape has to match the aspect ratio above, or the system
-        // scales the frame non-proportionally to fit and the video visibly
-        // arrives stretched. Both come from the same place -- the surface is
-        // sized with the video's own shape by `setVideoBounds` / `fillBounds`,
-        // and `boundsInWindow()` reports that same surface -- so they agree by
-        // construction instead of being kept in sync by hand.
+        // It is NOT the picture view's box. The picture fills its lane, so
+        // the view's rect is the whole window, and hinting that would make
+        // the PiP window take the window's shape - portrait on a phone -
+        // with the video arriving tiny and letterboxed inside it. It is the
+        // video's FRAME inside the view: the largest rect of the video's own
+        // shape that fits inside it, or the whole view when the picture is
+        // filling it.
         //
-        // Null when the surface is hidden or zero-sized: no video rect to
-        // animate from. That degrades to the no-hint behaviour, which costs a
-        // black transition but never a distorted one.
-        val sourceRect = PlayerSurface.boundsInWindow()
+        // The hint's shape has to match the aspect ratio below, or the
+        // system scales the frame non-proportionally to fit and the video
+        // visibly arrives stretched. So the aspect is taken FROM THE SAME
+        // FRAME: the two agree by construction instead of being kept in
+        // sync by hand.
+        //
+        // Null when there is no video rect to point at - no live picture, no
+        // layout yet, or no video dimensions. That degrades to the no-hint
+        // behaviour, which costs a black transition but never a distorted
+        // one.
+        val frame = pipSourceRectInWindow()
+        val sourceRect = frame?.let { Rect(it.left, it.top, it.right, it.bottom) }
+        // The PiP window's shape. Taken from the frame when there is one, so
+        // it matches the hint exactly; the video's own aspect otherwise.
+        val aspect = frame?.aspect ?: videoAspect ?: (16f / 9f)
         // `return try`, not a bare `try`. A `try`/`catch` in STATEMENT
         // position is not this function's return value in Kotlin — not
         // even as the last statement of a function with a non-`Unit`
@@ -2467,7 +2547,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 val pipParams = com.simba.player.PipManager.buildPipParams(
                     context = activity,
-                    aspect = aspect ?: (16f / 9f),
+                    aspect = aspect,
                     sourceRectHint = sourceRect,
                     chapterTitle = title,
                     progressPercentage = pct,

@@ -1,4 +1,60 @@
 
+## [3.0.1] - 2026-11-02
+
+### Fixed
+
+- **The PiP source rect was always `null`, so PiP entry grew out of a black
+  rectangle.**
+
+  `MpvBridgeModule` built Android's `sourceRectHint` from
+  `PlayerSurface.boundsInWindow()`, which read the `PlayerSurface` registry
+  — whose only writer, `PlayerSurface.mount()`, the V21/V22 architecture
+  never calls. The live picture views live in `MpvRenderViewRegistry`. So
+  the hint was not "sometimes wrong": it was **always** `null`, and the
+  black transition was the only behaviour the bug had ever produced.
+
+  The hint is now built from the **live** Fabric picture view, and it
+  describes the video's **frame** rather than the view's box — the picture
+  fills its lane, so the view's rect is the whole window, and hinting that
+  would make the PiP window take the window's shape with the video tiny and
+  letterboxed inside it.
+
+  The PiP window's aspect is now taken from **the same rect** as the hint,
+  so the two can never disagree — a disagreement is what makes the system
+  scale the frame non-proportionally and the video arrive stretched.
+
+  The arithmetic lives in a new, pure `PipSourceRect` object with no
+  Android types in it, so it is unit-tested as plain JUnit (16 tests) and
+  actually executes; the module's Robolectric suites cannot run offline.
+
+- **`resizeMode` now says what mpv actually does.**
+
+  mpv's `video-zoom` is a **log2 scale factor**, not a fit / fill / stretch
+  enum: `0` is unscaled, `1` is twice the size, `2` is four times the size.
+  The library's docblocks claimed `1` was "fill / crop" and `2` was "fill,
+  aspect ignored". Neither was true, and the second was not even close.
+
+  **The behaviour is unchanged** — this release corrects the claims, not
+  the rendering. `contain` is correct (`0` is unscaled, so the picture keeps
+  its aspect and is letterboxed into the view). `cover` renders as a 2x
+  magnified, cropped picture and `stretch` as a 4x magnified one, so a
+  consumer that relies on `cover` or `stretch` is not getting what the
+  names say. The fix is mpv's `panscan` (`1.0` for cover) and `keepaspect`
+  (`no` for stretch), which is a change in the native half and is tracked
+  in the consumer app's bug tracker.
+
+### Removed
+
+- **`PlayerSurface.boundsInWindow()`** — it had no readers left, and it
+  answered `null` unconditionally, so keeping it was a false promise.
+
+### Internal
+
+- `MpvRenderView` publishes its rect in window coordinates from the UI
+  thread (`getLocationInWindow()` is a UI-thread API and the PiP code runs
+  on the bridge thread), and publishes the zoom the engine is **actually**
+  rendering with, not the one that is merely pending.
+
 ## [3.0.0] - 2026-11-02
 
 ### Removed (breaking)
