@@ -1,4 +1,39 @@
 
+## [3.0.2] - 2026-11-02
+
+### Fixed
+
+- **The progress context no longer changes on every native cache tick.**
+
+  `onCacheState` fires **827 times across a cold start** (the library's own
+  device measurement), and every arrival used to publish a NEW
+  `cacheRanges` array — so every `usePlayerProgress()` consumer
+  re-rendered, and the buffered band was redrawn for a movement of a
+  fraction of a layout unit.
+
+  The published ranges are now **quantised** onto the grid the scrub bar is
+  drawn at: the timeline is cut into `durationMs / 1000` equal cells and
+  every range boundary is snapped to the nearest cell boundary. The rule
+  lives in a new pure module, `quantiseCacheRanges`, and the quantisation
+  happens on the publish path and only there.
+
+  The published value is now **IDENTICAL** for two raw inputs that land in
+  the same cell — which is the proof the context stopped changing.
+  Measured in the test: **200 native arrivals → 9 context changes**,
+  against 200 before.
+
+  The duration-relative grid is the normal path, because the duration is
+  already on the publish path. A live stream (`durationMs === 0`) has no
+  duration to be relative to, so it falls back to a fixed one-second grid,
+  which still bounds the publish RATE to one per second of media time.
+
+### Internal
+
+- `quantiseCacheRanges` is pure: it does not mutate its input, it clamps
+  every boundary to the timeline in exactly one place, and it collapses an
+  inverted range to zero length rather than dropping it — dropping it
+  would make the range COUNT flicker, which is the churn itself.
+
 ## [3.0.1] - 2026-11-02
 
 ### Fixed

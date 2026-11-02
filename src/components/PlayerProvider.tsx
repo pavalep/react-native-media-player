@@ -30,6 +30,7 @@ import {
   removeAllListeners,
   subscribePlayerEvent,
 } from '../bridge/MpvPlayerModule';
+import { quantiseCacheRanges } from './quantiseCacheRanges';
 
 /**
  * React Context carrying the resolved PlayerConfig. Consumers should
@@ -692,13 +693,39 @@ export function PlayerProvider({
       const unsub = subscribePlayerEvent(
         event,
         (payload: PlayerEventPayloads[typeof event]) => {
-          const { state: nextState, progress: nextProgress } =
-            applyPlayerEvent(
-              stateRef.current,
-              progressRef.current,
-              event,
-              payload,
-            );
+          const applied = applyPlayerEvent(
+            stateRef.current,
+            progressRef.current,
+            event,
+            payload,
+          );
+          const nextState = applied.state;
+          // The buffered band is painted on a ~300 dp scrub bar, so the
+          // published ranges only need the resolution that bar can show.
+          // mpv ticks `demuxer-cache-state` continuously (827 arrivals in
+          // the lib's own device measurement over one playback window) and
+          // every arrival used to publish a NEW `cacheRanges` array, so
+          // every `usePlayerProgress()` consumer re-rendered and the band
+          // was redrawn for a movement of a fraction of a layout unit.
+          //
+          // Quantise HERE — on the publish path, and only here — so the
+          // progress context stops changing on every native tick. The rule
+          // itself lives in `quantiseCacheRanges.ts`; this file does not
+          // re-implement any of it.
+          //
+          // `applied.progress.durationMs` is the duration the progress
+          // context currently holds — the same duration the consumer scales
+          // the band with — so the grid is the one the band is drawn at.
+          const nextProgress =
+            event === 'onCacheState'
+              ? {
+                  ...applied.progress,
+                  cacheRanges: quantiseCacheRanges(
+                    applied.progress.cacheRanges,
+                    applied.progress.durationMs,
+                  ),
+                }
+              : applied.progress;
           // Skip the setState when no FIELD changed. This must be a field-wise
           // compare, not a reference compare: `applyPlayerEvent` always
           // returns a freshly-spread object, so `nextState !== stateRef.current`

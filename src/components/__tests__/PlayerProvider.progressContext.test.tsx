@@ -162,8 +162,15 @@ describe('PlayerProvider progress context keeps the duration', () => {
     });
 
     expect(result.current.progress.durationMs).toBe(DURATION_MS);
+    // The published range is QUANTISED onto the grid the buffered band is
+    // drawn at: one cell is `durationMs / 1000` = 7673.792 ms on this
+    // film, and 130713.917 ms falls in cell 17, whose boundary sits at
+    // 130454.464 ms. The 259 ms difference is ~0.03 % of the timeline —
+    // about a tenth of a dp on a ~300 dp track — and the point of the
+    // quantisation is that the range is PUBLISHED, not dropped. (Before
+    // the quantisation this assertion was the raw 130713.917.)
     expect(result.current.progress.cacheRanges).toEqual([
-      { start: 0, end: 130713.917 },
+      { start: 0, end: 130454.464 },
     ]);
 
     await unmount();
