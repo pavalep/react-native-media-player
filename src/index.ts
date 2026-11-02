@@ -41,9 +41,26 @@
  * the surface and the consumer's controls, and **nothing else** when
  * `renderControls` is absent.
  *
- * This is a **breaking** change, hence the major version. `<PlayerRoot>`
- * without `renderControls` renders no controls after 2.0.0, where it
- * rendered `DefaultControls` before.
+ * This is a **breaking** change, hence the major version.
+ *
+ * ## v3.0.0 — the vestigial root and surface are gone
+ *
+ * `<PlayerRoot>` and `<PlayerSurface>` are **removed**. They were the
+ * JS-side remainder of an arrangement that ended in 2.0.0: a native
+ * `SurfaceView` pinned to the Activity root, with a transparent React box
+ * standing in for it so a controls overlay had a rectangle to anchor to.
+ *
+ * The picture is `<SimbaVideo>` now — a Fabric component in the
+ * consumer's own tree, with React Native owning its layout, its z-order
+ * and its lifecycle — so there is no surface for a placeholder to
+ * reserve. Neither component had an importer: in this package and in its
+ * host app, the only reference to either was its own export.
+ *
+ * A consumer that used `<PlayerRoot>` for its **launch** — the one job it
+ * still had — loses nothing: `useLaunchPlayback` is still exported, and
+ * it is still the once-per-payload load. A consumer that used it for the
+ * **overlay** composes the same thing from a `View` and its own
+ * `renderControls`.
  */
 
 export {
@@ -55,15 +72,11 @@ export {
   type RenderControlsFn,
 } from './components/PlayerProvider';
 
-export { PlayerRoot } from './components/PlayerRoot';
-
 export {
   SimbaVideo,
   type SimbaVideoProps,
   type SimbaVideoResizeMode,
 } from './components/SimbaVideo';
-
-export { PlayerSurface, type PlayerSurfaceProps } from './components/PlayerSurface';
 
 export {
   type AudioConfig,
@@ -142,11 +155,11 @@ export {
   DEFAULT_FRAME_QUALITY,
   type CaptureFrameOptions,
 } from './hooks/useResumeThumbnail';
-// V21 F5 — the load half of `<PlayerRoot>`, and the in-window launch
-// primitive. Video no longer starts an Activity, so a consumer that
-// wants to play media into its own already-mounted surface drives it
-// from here: pass the payload, and `useLaunchPlayback` loads it exactly
-// once. See its docstring for the once-per-payload contract.
+// V21 F5 — the in-window launch primitive. Video no longer starts an
+// Activity, so a consumer that wants to play media into its own
+// already-mounted surface drives it from here: pass the payload, and
+// `useLaunchPlayback` loads it exactly once. See its docstring for the
+// once-per-payload contract.
 export {useLaunchPlayback} from './hooks/useLaunchPlayback';
 
 export {

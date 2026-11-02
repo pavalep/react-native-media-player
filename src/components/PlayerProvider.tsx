@@ -50,7 +50,7 @@ const PlayerConfigContext = createContext<ResolvedPlayerConfig | null>(null);
  * Returns the React tree to render as the player's chrome.
  *
  * Why a function (not a component): the parent decides WHEN to call
- * it (typically inside a `PlayerRoot` component), which lets us
+ * it (typically in the consumer's own tree), which lets us
  * wrap the result in error boundaries / suspense fallbacks in a
  * future phase without changing the consumer's API.
  */
@@ -114,8 +114,8 @@ export function useTheme(): PlayerTheme {
  * that wants controls renders them and passes them here.
  *
  * Returns `null` (not throws) when used outside a provider, because
- * `<PlayerRoot>` needs to render without chrome in that case. The
- * other hooks (`usePlayerConfig` / `useTheme`) throw because they
+ * a consumer's own root needs to render without chrome in that case.
+ * The other hooks (`usePlayerConfig` / `useTheme`) throw because they
  * have no useful fallback value.
  *
  * @example
@@ -479,8 +479,8 @@ export interface PlayerProviderProps {
  * The `renderControls` slot is intentionally NOT pushed to the native
  * side — it's a JS-only concept (a function reference can't be
  * serialised to JSON). Consumer apps wrap their PlayerActivity's JS
- * tree with `<PlayerProvider renderControls={...}>` and the
- * `<PlayerRoot>` component reads it via `useRenderControls()`.
+ * tree with `<PlayerProvider renderControls={...}>` and their own
+ * component reads it via `useRenderControls()`.
  *
  * V13 Phase 51: in addition to config + renderControls, the provider
  * now holds the live player state. The state is updated by:

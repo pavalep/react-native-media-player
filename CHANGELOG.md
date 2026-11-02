@@ -1,4 +1,42 @@
 
+## [3.0.0] - 2026-11-02
+
+### Removed (breaking)
+
+- **`<PlayerRoot>` and `<PlayerSurface>` are gone.**
+
+  They were the JS-side remainder of an arrangement that ended in
+  2.0.0: a native `SurfaceView` pinned to the Activity root, with a
+  transparent React box standing in for it so a controls overlay had a
+  rectangle to anchor to.
+
+  Since 2.0.0 the picture is `<SimbaVideo>` — a Fabric component in the
+  consumer's own React tree, with React Native owning its layout, its
+  z-order and its lifecycle. **Neither the library nor a host app mounts
+  a surface at the Activity root any more**, so there was nothing left
+  for a placeholder to reserve: `<PlayerSurface>` was a transparent
+  `flex: 1` box, and `<PlayerRoot>` was that box plus the consumer's
+  controls plus one `useLaunchPlayback` call.
+
+  **Neither component had an importer.** In this package and in its host
+  app, the only reference to either was its own export. They were public
+  API that nothing used — and a public package cannot quietly drop a
+  public export, so the removal is a **major version**.
+
+  **What a consumer loses, and what it does not.**
+  - The **launch**: nothing. `useLaunchPlayback` is still exported, and
+    it is still the once-per-payload load — a consumer that used
+    `<PlayerRoot>` to start playback calls it directly.
+  - The **overlay**: nothing. It was a `View` with the consumer's
+    `renderControls()` output positioned absolutely over it. A consumer
+    that wants it composes the same two lines from a `View` and its own
+    controls.
+  - The **surface**: nothing. There is no native surface to reserve any
+    more; the picture is a view in the tree.
+
+  The library's own README and the package's public surface carry no
+  other mention of either component.
+
 ## [2.1.0] - 2026-10-30
 
 ### Fixed
