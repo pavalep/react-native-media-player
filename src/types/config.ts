@@ -51,7 +51,18 @@ export const DEFAULT_THEME: PlayerTheme = {
 export interface PipConfig {
   /** Master switch — when false, all PiP entry requests are ignored. */
   enabled: boolean;
-  /** When true, pressing home / recents / app-switcher auto-enters PiP. */
+  /**
+   * When true, the library reports that the user is leaving the app, through
+   * the `onUserLeaveHint` event, and the CONSUMER enters PiP itself.
+   *
+   * The library deliberately does NOT arm Android's own auto-enter switch
+   * (`PictureInPictureParams.Builder.setAutoEnterEnabled`): that makes the OS
+   * transition the Activity without giving the app a chance to remove its own
+   * chrome, and an Activity in Picture-in-Picture does not redraw — so the
+   * chrome is frozen into the PiP window as a dead layer. See the README's
+   * Picture-in-Picture section for the two lines of Kotlin and the JS that
+   * go with it.
+   */
   autoEnterOnLeave: boolean;
 }
 

@@ -1479,6 +1479,7 @@ export function applyPlayerEvent(
     case 'onPipPlayPause':
     case 'onPipExpand':
     case 'onPipClose':
+    case 'onUserLeaveHint':
       // No state-field mapping for these in the V13 surface (PiP state
       // is owned by the activity; reconfig signals a video-parameter
       // change that's already covered by onVideoParamsChanged).

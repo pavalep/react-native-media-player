@@ -1,6 +1,7 @@
 package com.simba.player.mpv
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -17,21 +18,48 @@ import java.io.File
  * whole RESOLVED config into a map — and it sat there unread while the
  * README described a feature that could not happen.
  *
+ * ## V22 W23 (2026-11-03) — who performs the auto-enter, and why it moved
+ *
+ * The flag was then made to work by arming the PLATFORM's own switch,
+ * `PictureInPictureParams.Builder.setAutoEnterEnabled` (API 31+). That
+ * made the SYSTEM transition the activity into PiP when the user left the
+ * app, with the consumer unable to do anything first.
+ *
+ * That is the wrong order for a consumer that draws its own chrome over
+ * the picture, because **an Activity in PiP does not redraw**: whatever
+ * its window held at the moment of the transition is what the PiP window
+ * keeps showing. Measured on device on 2026-11-03, the consumer's full
+ * expanded chrome (header band, scrub row, ±10 buttons, the big pause
+ * button) was painted into the PiP window, its buttons were DEAD (tapping
+ * pause did not pause — their views were gone) and its clock was FROZEN at
+ * 51:09 while the real position was 54:15 (the pixels were stale).
+ *
+ * So the auto-enter is now the CONSUMER's to perform, in the only order
+ * that works: remove the chrome, let the frame that drew it go by, and
+ * only then ask the OS for the window. The library's job is to say
+ * **WHEN** — the `onUserLeaveHint` event — and to keep the params it
+ * hands the platform free of the platform's own auto-enter switch.
+ *
+ * The public config keeps its meaning: `pip.autoEnterOnLeave: true` still
+ * means "enter PiP when the user leaves the app". Only the performer
+ * changed.
+ *
  * ## What this test can and cannot prove
  *
  * The DECISION is pure and is fully tested here: given a config map,
- * what should the Activity be told?
+ * what should the consumer be told?
  *
  * The APPLICATION needs an Android runtime (`Activity`, the UI thread,
  * `Build.VERSION`), and this module's Robolectric tests are `@Ignore`d
- * because they cannot run offline. So the part that actually calls
- * `activity.setAutoEnterEnabled(...)` is pinned by inspecting the
- * SOURCE, which is where the defect lived in the first place: the bug
- * was literally "the value is never read", and that is a property of
- * the source, not of a runtime value.
+ * because they cannot run offline. So the part that actually tells the
+ * consumer is pinned by inspecting the SOURCE — which is where the
+ * defect lived in the first place: the bug was literally "the value is
+ * never read", and that is a property of the source, not of a runtime
+ * value.
  *
  * These are guard tests, not a device proof. The device proof is that
- * pressing home on Android 12+ enters PiP.
+ * pressing home on Android 12+ enters PiP with the picture and nothing
+ * else in the window.
  */
 class PipAutoEnterPolicyTest {
 
@@ -65,7 +93,7 @@ class PipAutoEnterPolicyTest {
     }
 
     @Test
-    fun `a config that says nothing about auto-enter leaves the Activity alone`() {
+    fun `a config that says nothing about auto-enter leaves the consumer alone`() {
         // `null` is NOT `false`. "Nobody asked" must not switch the
         // feature off.
         assertNull(PipAutoEnterPolicy.desiredAutoEnter(null))
@@ -109,53 +137,13 @@ class PipAutoEnterPolicyTest {
         val source = bridgeSource().readText()
 
         assertTrue(
-            "MpvBridgeModule must ask the policy what the Activity should be told",
+            "MpvBridgeModule must ask the policy what the consumer should be told",
             source.contains("PipAutoEnterPolicy.desiredAutoEnter("),
         )
         assertTrue(
             "MpvBridgeModule must remember the decision - the flag is what the " +
-                "params and the manual entry are built from",
+                "consumer is told about when the user leaves",
             source.contains("pipAutoEnter = desired"),
-        )
-    }
-
-    @Test
-    fun `the platform's OWN switch is used - PictureInPictureParams, not a made-up Activity method`() {
-        val manager = pipManagerSource().readText()
-
-        // `Activity.setAutoEnterEnabled` DOES NOT EXIST - it was a
-        // plausible-sounding API that the SDK's own android.jar does not
-        // contain. The real switch is
-        // `PictureInPictureParams.Builder.setAutoEnterEnabled`, which the
-        // SDK's api-versions.xml records as `since="31"`.
-        assertTrue(
-            "PipManager must set the flag on the params builder - " +
-                "PictureInPictureParams.Builder.setAutoEnterEnabled is the " +
-                "platform's switch (API 31+)",
-            manager.contains("builder.setAutoEnterEnabled(autoEnter)"),
-        )
-        assertTrue(
-            "the params must only carry the flag on Android 12+",
-            manager.contains("Build.VERSION_CODES.S"),
-        )
-    }
-
-    @Test
-    fun `the activity's params carry the flag so the SYSTEM can auto-enter`() {
-        val source = bridgeSource().readText()
-
-        // `enterPictureInPictureMode(params)` describes a MANUAL entry.
-        // The swipe-home auto-enter reads the activity's OWN params, set
-        // via `setPictureInPictureParams` - so without this the flag
-        // would never reach the path it was written for.
-        assertTrue(
-            "the bridge must push the params onto the activity - that is " +
-                "what the system reads when it auto-enters PiP on swipe-home",
-            source.contains("activity.setPictureInPictureParams(params)"),
-        )
-        assertTrue(
-            "the activity's params must be built WITH the auto-enter flag",
-            source.contains("autoEnter = true"),
         )
     }
 
@@ -170,61 +158,152 @@ class PipAutoEnterPolicyTest {
         )
     }
 
+    // ── The consumer is TOLD, not the platform ────────────────────────────
+
+    @Test
+    fun `the bridge tells the CONSUMER that the user is leaving`() {
+        val source = bridgeSource().readText()
+
+        // The consumer's Activity calls this from `onUserLeaveHint()`.
+        // The consumer then removes its own chrome and enters PiP itself,
+        // in the only order that works.
+        assertTrue(
+            "the bridge must expose a way for the consumer's Activity to " +
+                "report that the user is leaving",
+            source.contains("fun notifyUserLeaveHint()"),
+        )
+        assertTrue(
+            "the consumer must be told through the `onUserLeaveHint` event - " +
+                "that is the name the TypeScript event union declares",
+            source.contains("\"onUserLeaveHint\""),
+        )
+    }
+
+    @Test
+    fun `the policy is MIRRORED where the companion can read it`() {
+        val source = bridgeSource().readText()
+
+        // `notifyUserLeaveHint()` is a COMPANION function: it is called
+        // from the consumer's Activity, which has no reference to the
+        // module instance, so it cannot read the instance field. The
+        // instance has to write a copy the companion can see — the same
+        // pattern `debugLoggingEnabled` uses.
+        assertTrue(
+            "the companion must be able to read the auto-enter policy",
+            source.contains("pipAutoEnterForCompanion"),
+        )
+        assertTrue(
+            "the instance must WRITE the companion's copy when it applies the policy",
+            source.contains("pipAutoEnterForCompanion = desired"),
+        )
+    }
+
+    @Test
+    fun `the consumer is only told when the policy says yes`() {
+        val source = bridgeSource().readText()
+
+        // A consumer that does not want auto-enter must not be told to
+        // enter PiP when the user leaves.
+        assertTrue(
+            "the companion must check the policy before telling the consumer",
+            source.contains("if (!pipAutoEnterForCompanion)"),
+        )
+    }
+
+    // ── The platform's OWN switch must NOT be armed ───────────────────────
+
+    @Test
+    fun `the platform's OWN auto-enter switch is NOT used`() {
+        val manager = pipManagerSource().readText()
+
+        // `PictureInPictureParams.Builder.setAutoEnterEnabled` is the
+        // platform's switch (API 31+), and it makes the SYSTEM transition
+        // the activity without the consumer being able to remove its
+        // chrome first. An Activity in PiP does not redraw, so that
+        // froze the consumer's chrome into the PiP window as a dead,
+        // stale layer — measured on device on 2026-11-03.
+        //
+        // So the params this library hands the platform must NOT carry it.
+        //
+        // The CALL form is what is checked, not the bare name: the prose in
+        // `PipManager` deliberately NAMES the platform API it refuses to
+        // use, and a guard that tripped on a comment would have to delete
+        // the explanation instead of the code. A call always has the
+        // parenthesis.
+        assertFalse(
+            "PipManager must NOT call the platform's auto-enter switch - the " +
+                "consumer enters PiP itself, after removing its chrome",
+            manager.contains(".setAutoEnterEnabled("),
+        )
+    }
+
+    @Test
+    fun `the platform's auto-enter switch is not armed anywhere in the bridge`() {
+        val source = bridgeSource().readText()
+
+        assertFalse(
+            "the bridge must not call the platform's auto-enter switch",
+            source.contains(".setAutoEnterEnabled("),
+        )
+        assertFalse(
+            "the bridge must not stash auto-enter params on the activity - " +
+                "the platform's own auto-enter path is gone",
+            source.contains(".setPictureInPictureParams("),
+        )
+        assertFalse(
+            "the function that pushed those params must be gone too - " +
+                "dead code that arms a broken path is a trap",
+            source.contains("applyActivityPipParams"),
+        )
+    }
+
+    @Test
+    fun `the manual entry carries no auto-enter flag`() {
+        val source = bridgeSource().readText()
+
+        // The manual entry (`enterPip`) is the path the CONSUMER drives.
+        // Its params must describe the window and nothing else: a flag
+        // that makes the platform transition on its own would put the
+        // consumer's chrome back into the frozen PiP window on the NEXT
+        // leave.
+        assertFalse(
+            "the manual entry's params must not carry an auto-enter flag",
+            source.contains("autoEnter = pipAutoEnter"),
+        )
+        assertFalse(
+            "the params builder must not even accept an auto-enter flag",
+            pipManagerSource().readText().contains("autoEnter: Boolean"),
+        )
+    }
+
     @Test
     fun `the aspect ratio is refreshed when the video changes`() {
         val source = bridgeSource().readText()
 
-        // The params the system reads for an auto-enter carry the aspect
-        // ratio. If they were set once, at config time, the auto-entered
-        // window would have the shape of the PREVIOUS video.
-        assertTrue(
-            "the params must be refreshed when mpv reports new video " +
-                "dimensions (the `videoReconfig` event)",
-            source.contains("\"videoReconfig\"") && source.contains("applyActivityPipParams()"),
+        // The params the CONSUMER's entry carries are built at the moment
+        // the consumer asks for the window, so the video's current shape
+        // is read then — there is nothing to refresh ahead of time.
+        //
+        // What must NOT happen is the platform's own auto-enter reading
+        // params stashed at config time, which would give the
+        // auto-entered window the shape of the PREVIOUS video.
+        assertFalse(
+            "the bridge must not stash params on the activity for a " +
+                "platform-initiated auto-enter - that path is gone",
+            source.contains("applyActivityPipParams"),
         )
     }
 
     @Test
-    fun `the manual entry carries the flag too`() {
-        val source = bridgeSource().readText()
-        assertTrue(
-            "the params `enterPip` builds must carry the auto-enter flag, " +
-                "so the two paths agree",
-            source.contains("autoEnter = pipAutoEnter"),
-        )
-    }
-
-    @Test
-    fun `the API level is checked before the platform call`() {
+    fun `the bridge says out loud that the CONSUMER performs the entry`() {
         val source = bridgeSource().readText()
 
-        // `setAutoEnterEnabled` is API 31+. Calling it below that is a
-        // NoSuchMethodError at runtime, so the guard has to be IN the
-        // source, not implied.
+        // The library ships no Activity, so the consumer's Activity has to
+        // report the leave. The honest thing is to say so, not to leave a
+        // consumer wondering why pressing home does nothing.
         assertTrue(
-            "the bridge must check the API level before setting the " +
-                "auto-enter flag (API 31+ / Android 12)",
-            source.contains("VERSION_CODES.S"),
-        )
-        val sdkCheck = source.indexOf("VERSION_CODES.S")
-        val call = source.indexOf("activity.setPictureInPictureParams(params)")
-        assertTrue(
-            "the API-level check must come BEFORE the platform call",
-            sdkCheck > 0 && call > 0 && sdkCheck < call,
-        )
-    }
-
-    @Test
-    fun `the bridge says out loud that below Android 12 it stays manual`() {
-        val source = bridgeSource().readText()
-
-        // The library ships no Activity, so below API 31 there is no
-        // platform switch to throw. The honest thing is to say so, not
-        // to pretend the feature works.
-        assertTrue(
-            "the bridge must tell the log that PiP entry stays manual " +
-                "below Android 12",
-            source.contains("PiP entry stays manual"),
+            "the bridge must tell the log that the consumer performs the entry",
+            source.contains("companion.notifyUserLeaveHint"),
         )
     }
 

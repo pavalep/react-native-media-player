@@ -112,7 +112,16 @@ export interface LaunchParams {
   readonly requestId?: string;
 }
 
-/** All 26 events emitted by the Kotlin bridge. */
+/**
+ * All 27 events emitted by the Kotlin bridge.
+ *
+ * `onUserLeaveHint` is the 27th: the native side telling the consumer
+ * that the user is leaving the app. It exists because a consumer that
+ * draws its own chrome over the picture has to be able to remove that
+ * chrome BEFORE the Activity enters Picture-in-Picture. See
+ * `PipManager`'s note on why the OS-initiated transition cannot be used
+ * for that.
+ */
 export type PlayerEventName =
   | 'onFileLoaded'
   | 'onLoadRequested'
@@ -139,7 +148,8 @@ export type PlayerEventName =
   | 'onPipModeChanged'
   | 'onPipPlayPause'
   | 'onPipExpand'
-  | 'onPipClose';
+  | 'onPipClose'
+  | 'onUserLeaveHint';
 
 /** Typed payload map for each event. */
 export interface PlayerEventPayloads {
@@ -198,6 +208,17 @@ export interface PlayerEventPayloads {
   onPipPlayPause: Record<string, never>;
   onPipExpand: Record<string, never>;
   onPipClose: Record<string, never>;
+  /**
+   * The user is leaving the app (home, recents, app switcher).
+   *
+   * A consumer that owns its own chrome over the picture uses this to
+   * remove that chrome and THEN enter Picture-in-Picture itself. The
+   * order is not negotiable: an Activity in PiP does not redraw, so
+   * whatever its window contained at the moment of the transition is
+   * what the PiP window keeps showing — frozen, dead and scaled down.
+   * See `PipManager`'s note on the same thing.
+   */
+  onUserLeaveHint: Record<string, never>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1054,7 +1075,7 @@ export function removeAllListeners(event?: PlayerEventName): void {
 }
 
 /**
- * All 26 player event names — the ONE owner of this list.
+ * All 27 player event names — the ONE owner of this list.
  *
  * `<PlayerProvider>` imports it to subscribe to every event on mount,
  * `removeAllListeners()` iterates it when no event is named, and the
@@ -1088,4 +1109,5 @@ export const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
   'onPipPlayPause',
   'onPipExpand',
   'onPipClose',
+  'onUserLeaveHint',
 ];

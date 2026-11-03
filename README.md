@@ -139,6 +139,10 @@ Your launcher Activity has to opt in:
 `resizeableActivity="true"` is not optional. An Activity that is not resizeable cannot enter
 Picture-in-Picture.
 
+If `config.pip.autoEnterOnLeave` is on, the Activity also has to forward the platform’s leave
+hint to the library — see [Picture-in-Picture](#picture-in-picture) for the two lines of Kotlin
+and the JS that goes with them.
+
 ### Background audio
 
 ```xml

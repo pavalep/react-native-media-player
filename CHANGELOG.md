@@ -1,4 +1,54 @@
 
+## [3.0.5] - 2026-11-03
+
+### Changed
+
+- **The CONSUMER performs the PiP auto-enter; the platform's own switch is
+  gone.** `pip.autoEnterOnLeave` used to be honoured by arming
+  `PictureInPictureParams.Builder.setAutoEnterEnabled` (API 31+), which makes
+  the SYSTEM transition the activity into PiP when the user leaves the app,
+  with the consumer unable to do anything first. That is the wrong order for a
+  consumer that draws its own chrome over the picture, because **an Activity in
+  PiP does not redraw**: whatever its window held at the transition is what
+  the PiP window keeps showing. Measured on device on 2026-11-03, the
+  consumer's full expanded chrome was painted into the PiP window, its
+  buttons were dead, and its clock was frozen three minutes behind the real
+  position.
+
+  The library now says **WHEN** — through the new `onUserLeaveHint` event —
+  and the consumer removes its chrome, lets the frame that drew it go by, and
+  asks for the window itself. `pip.autoEnterOnLeave: true` keeps its public
+  meaning; only the performer changed. The consumer's side is two lines of
+  Kotlin (forward `onUserLeaveHint()` from the Activity) plus a subscription
+  to the `onUserLeaveHint` event in JS; both are in the README's
+  Picture-in-Picture section.
+
+  A side effect worth knowing: auto-enter now works on **every** API level.
+  The platform's switch never existed below Android 12; `onUserLeaveHint()`
+  does.
+
+- **`onUserLeaveHint` is the 27th player event.** It is emitted with an empty
+  payload, and only when the auto-enter policy says yes — a consumer that
+  turned auto-enter off is never asked to enter PiP.
+
+- **The bridge no longer stashes PiP params on the Activity.**
+  `Activity.setPictureInPictureParams` and the helper that pushed them
+  (`applyActivityPipParams`) are gone: they existed only to give the
+  platform's own auto-enter a shape to use, and that path no longer exists.
+  The params are now built at the moment the consumer asks for the window, so
+  the window's shape is the CURRENT video's shape.
+
+### Fixed
+
+- **The PiP window could show the consumer's own chrome, frozen and dead.**
+  This is the library's half of that fix: it no longer arms the platform's
+  switch, so a consumer can remove its chrome before the window is asked for.
+  The consumer's half — hide the chrome, let one frame go by, then enter — is
+  the app's.
+
+No public TypeScript API was removed. The config type, the command surface and
+the event union are unchanged apart from the added event.
+
 ## [3.0.4] - 2026-11-03
 
 ### Changed

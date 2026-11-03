@@ -68,7 +68,6 @@ object PipManager {
         sourceRectHint: Rect? = null,
         chapterTitle: String? = null,
         progressPercentage: String? = null,
-        autoEnter: Boolean = false,
     ): PictureInPictureParams {
         val actions = mutableListOf<RemoteAction>()
 
@@ -133,17 +132,33 @@ object PipManager {
             builder.setSeamlessResizeEnabled(true)
         }
 
-        // Auto-enter PiP when the user leaves the app (Android 12+).
+        // NO `setAutoEnterEnabled` HERE, and that is deliberate.
         //
-        // This is the platform's OWN switch: with it set, the system
-        // transitions the activity into PiP when the user swipes home,
-        // instead of the app having to request it. Below API 31 the
-        // platform has no equivalent - an app would have to override
-        // `onUserLeaveHint()` in its own Activity, and this library ships
-        // no Activity - so PiP entry stays manual there.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            builder.setAutoEnterEnabled(autoEnter)
-        }
+        // The platform's auto-enter switch makes the SYSTEM transition the
+        // activity into PiP when the user leaves the app, without the app
+        // being able to do anything first. That is the wrong order for a
+        // consumer that draws its own chrome over the picture: an Activity
+        // in PiP does not redraw, so whatever the window held at the
+        // moment of the transition is what the PiP window keeps showing -
+        // frozen, dead and scaled down.
+        //
+        // Measured on device on 2026-11-03: the consumer's full expanded
+        // chrome (header band, scrub row, +-10 buttons, the big pause
+        // button) was painted into the PiP window, its buttons were DEAD
+        // (tapping pause did not pause) and its clock was FROZEN at
+        // 51:09 while the real position was 54:15 - while the consumer's
+        // own state already said `pipActive: true` and `isExpanded:
+        // false`.
+        //
+        // So auto-enter on leave is the CONSUMER's to perform, in the only
+        // order that works: remove the chrome, let the frame that drew it
+        // go by, and only then ask for the window. The library's part is
+        // to tell the consumer WHEN the user is leaving - the
+        // `onUserLeaveHint` event - and to keep the params it hands the
+        // platform free of the platform's own auto-enter switch.
+        //
+        // The consumer's Activity overrides `onUserLeaveHint()`, which
+        // works on every API level, unlike the platform switch (API 31+).
 
         // Source rect hint for smooth entry animation (Android 12+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && sourceRectHint != null) {

@@ -130,6 +130,20 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     private var pipAutoEnter: Boolean = false
 
         /**
+         * The same policy, mirrored where the COMPANION can read it.
+         *
+         * `notifyUserLeaveHint()` is a companion function: it is called
+         * from the consumer's Activity, which has no reference to this
+         * module instance, so it cannot read the instance field above.
+         * The instance writes this mirror when it applies the policy.
+         *
+         * The same pattern `debugLoggingEnabled` uses.
+         */
+        @Volatile
+        var pipAutoEnterForCompanion: Boolean = false
+            private set
+
+        /**
          * Phase 21: recursive JSONObject → Kotlin Map converter. Used
          * by [setConfig] so the stored config can be consumed
          * without going through `WritableMap`. Keeps nested objects
@@ -196,6 +210,51 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                 Log.i(TAG, "companion.onPictureInPictureModeChanged: emit succeeded")
             } catch (e: Exception) {
                 Log.w(TAG, "onPictureInPictureModeChanged: emit threw", e)
+            }
+        }
+
+        /**
+         * Called from the consumer's `Activity.onUserLeaveHint()` - the
+         * user is leaving the app (home, recents, app switcher).
+         *
+         * The consumer needs this because the PiP ENTRY has to be in the
+         * consumer's hands, not the platform's: an Activity in PiP does
+         * not redraw, so a consumer that draws its own chrome over the
+         * picture has to remove that chrome BEFORE the window is frozen.
+         * The platform's own auto-enter switch cannot give it that
+         * chance - see `PipManager.buildPipParams` for the measurement.
+         *
+         * So the library's job is to say WHEN, and the consumer decides
+         * whether to act: it removes its chrome, lets the frame that drew
+         * it go by, and then asks the OS for the window itself.
+         *
+         * The auto-enter policy is the consumer's own `pip.autoEnterOnLeave`
+         * config, so this is a no-op when the consumer does not want
+         * auto-enter.
+         */
+        fun notifyUserLeaveHint() {
+            Log.i(
+                TAG,
+                "companion.notifyUserLeaveHint: autoEnter=$pipAutoEnterForCompanion " +
+                    "instance=${instance != null}",
+            )
+            if (!pipAutoEnterForCompanion) {
+                Log.i(
+                    TAG,
+                    "companion.notifyUserLeaveHint: auto-enter is off; not telling the consumer",
+                )
+                return
+            }
+            val ctx = instance ?: run {
+                Log.w(TAG, "notifyUserLeaveHint: module instance not initialized yet")
+                return
+            }
+            try {
+                ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("onUserLeaveHint", Arguments.createMap())
+                Log.i(TAG, "companion.notifyUserLeaveHint: emit succeeded")
+            } catch (e: Exception) {
+                Log.w(TAG, "notifyUserLeaveHint: emit threw", e)
             }
         }
     }
@@ -301,13 +360,13 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                 "surfaceAttached"   -> "onSurfaceAttached"
                 else                -> event
             }
-            // The video's dimensions just changed. The params the SYSTEM
-            // reads for an auto-enter carry the aspect ratio, so they
-            // have to be refreshed with the new one - otherwise the
-            // auto-entered window has the shape of the previous video.
-            if (event == "videoReconfig") {
-                applyActivityPipParams()
-            }
+            // The video's dimensions just changed. Nothing has to be
+            // refreshed here any more: the params the platform reads are
+            // the ones the CONSUMER's entry carries, and the consumer
+            // builds them at the moment it asks for the window - by then
+            // it knows the video's current shape. (The platform's own
+            // auto-enter switch, which used to read params stashed on the
+            // activity, is gone: see `PipManager.buildPipParams`.)
             try {
                 val payload = JsonUtil.jsonStringToReactMap(jsonPayload)
                 eventEmitter.emit(jsEvent, payload)
@@ -2294,20 +2353,30 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     }
 
     /**
-     * Apply `pip.autoEnterOnLeave` to the Activity.
+     * Apply `pip.autoEnterOnLeave` — remember the policy, and tell the
+     * CONSUMER when the user leaves.
      *
-     * `Activity.setAutoEnterEnabled(true)` (API 31+ / Android 12) is the
-     * platform's own switch for "enter PiP when the user leaves the app".
+     * What this does NOT do any more: arm the platform's own switch
+     * (`PictureInPictureParams.Builder.setAutoEnterEnabled`, API 31+).
+     * The platform's switch makes the SYSTEM transition the activity into
+     * PiP without the consumer being able to do anything first, and an
+     * Activity in PiP does not redraw — so a consumer that draws its own
+     * chrome over the picture had that chrome frozen into the PiP
+     * window, dead and scaled down. Measured on device on 2026-11-03.
+     * See `PipManager.buildPipParams` for the full account.
      *
-     * Below API 31 there is NO platform equivalent: an app has to
-     * override `onUserLeaveHint()` in its own Activity, and this library
-     * ships NO Activity - the consumer's launcher Activity hosts
-     * playback (the one-Activity architecture). So below Android 12 this
-     * is a documented no-op and PiP entry stays manual.
+     * What it does now: the policy is remembered (so
+     * `notifyUserLeaveHint()` can decide whether to speak at all), and
+     * when the consumer's Activity reports that the user is leaving, the
+     * consumer is told through the `onUserLeaveHint` event. The consumer
+     * then removes its chrome, lets the frame that drew it go by, and
+     * asks the OS for the window itself.
      *
-     * The consumer's Activity must also declare
-     * `android:supportsPictureInPicture="true"` for the OS to honour it.
-     * That is the consumer's manifest, not this library's.
+     * The consumer's Activity must override `onUserLeaveHint()` and
+     * declare `android:supportsPictureInPicture="true"`. Both are the
+     * consumer's, not this library's — it ships no Activity (the
+     * one-Activity architecture). `onUserLeaveHint()` works on EVERY API
+     * level, unlike the platform switch, which needed API 31+.
      *
      * @param config the RESOLVED config map, as parsed by `setConfig`.
      */
@@ -2315,7 +2384,15 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         try {
             val desired = PipAutoEnterPolicy.desiredAutoEnter(config) ?: return
             pipAutoEnter = desired
-            applyActivityPipParams()
+            // The policy is remembered so `notifyUserLeaveHint()` knows
+            // whether to tell the consumer that it should enter PiP. The
+            // platform's OWN auto-enter switch is NOT armed: the system
+            // would transition the activity without the consumer being
+            // able to remove its chrome first, and an Activity in PiP
+            // does not redraw - so the consumer's chrome would be frozen
+            // into the PiP window as a dead layer. See
+            // `PipManager.buildPipParams` for the measurement.
+            pipAutoEnterForCompanion = desired
         } catch (t: Throwable) {
             // Never let this reject the `setConfig` promise: the config
             // itself was stored fine, and a rejected promise would tell
@@ -2377,77 +2454,6 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             aspect,
             view.currentFillsView,
         )
-    }
-
-    /**
-     * Push the PiP params the SYSTEM will use onto the Activity.
-     *
-     * `Activity.setPictureInPictureParams` is what the platform reads
-     * when it transitions the activity into PiP BY ITSELF - which is
-     * exactly the swipe-home path that `pip.autoEnterOnLeave` asks for.
-     * The params `enterPip` passes to `enterPictureInPictureMode` only
-     * describe a MANUAL entry.
-     *
-     * So the auto-enter flag has to live on the activity's params, and
-     * it has to carry the video's CURRENT aspect ratio - a stale aspect
-     * means the auto-entered window has the shape of the previous video.
-     * That is why this runs again on every `videoReconfig`: that is the
-     * moment mpv reports new dimensions.
-     *
-     * `Activity.setAutoEnterEnabled` does NOT exist - the platform's
-     * switch is `PictureInPictureParams.Builder.setAutoEnterEnabled`,
-     * which is API 31+. Below that the OS cannot auto-enter at all.
-     */
-    private fun applyActivityPipParams() {
-        try {
-            if (!pipAutoEnter) return
-            val activity = reactApplicationContext.currentActivity
-            if (activity == null) {
-                Log.w(
-                    TAG,
-                    "[PlaybackTrace][Bridge][pip] no activity yet; auto-enter PiP not applied",
-                )
-                return
-            }
-            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) {
-                Log.w(
-                    TAG,
-                    "[PlaybackTrace][Bridge][pip] auto-enter PiP needs Android 12 (API 31)+; " +
-                        "below that the OS cannot auto-enter, so PiP entry stays manual",
-                )
-                return
-            }
-            // The window's shape and the source rect hint are taken from the
-            // SAME frame, so they can never disagree. The system scales the
-            // hinted region to the window non-proportionally when the two
-            // shapes differ, and the video visibly arrives stretched.
-            //
-            // The frame's shape follows the picture's mode: with `contain`
-            // (the app's default) the frame inside the view IS the video,
-            // letterboxed into the view's own shape; with `cover` or
-            // `stretch` the picture fills the view, so the frame IS the
-            // view's rect and the window takes the view's shape. Either way
-            // the window's shape does not change here — only the hint does,
-            // from `null` (a black rectangle) to a real rect that points at
-            // the picture.
-            val frame = pipSourceRectInWindow()
-            val aspect = frame?.aspect ?: (currentVideoAspect() ?: (16f / 9f))
-            val params = com.simba.player.PipManager.buildPipParams(
-                context = activity,
-                aspect = aspect,
-                sourceRectHint = frame?.let { Rect(it.left, it.top, it.right, it.bottom) },
-                autoEnter = true,
-            )
-            activity.runOnUiThread {
-                activity.setPictureInPictureParams(params)
-                Log.i(
-                    TAG,
-                    "[PlaybackTrace][Bridge][pip] activity PiP params set, autoEnter=true",
-                )
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG, "[PlaybackTrace][Bridge][pip] applying activity params failed", t)
-        }
     }
 
     // ── Picture-in-Picture ─────────────────────────────────────────────────
@@ -2554,7 +2560,6 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                     sourceRectHint = sourceRect,
                     chapterTitle = title,
                     progressPercentage = pct,
-                    autoEnter = pipAutoEnter,
                 )
                 // `enterPictureInPictureMode` ANSWERS whether the OS
                 // accepted the request, and the answer was being

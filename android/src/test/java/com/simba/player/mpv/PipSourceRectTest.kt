@@ -373,6 +373,13 @@ class PipSourceRectTest {
         // If the two could disagree, the system would scale the hinted
         // region to the window non-proportionally and the video would
         // visibly arrive stretched.
+        //
+        // There is now exactly ONE entry path in this module: the
+        // consumer drives it, because the platform's own auto-enter switch
+        // is not armed (see `PipAutoEnterPolicyTest`). So the contract is
+        // not "both paths agree" but "the ONE path cannot disagree with
+        // itself" - the hint and the aspect are read from the same `frame`
+        // value, computed once.
         val source = bridgeSource().readText()
 
         assertTrue(
@@ -380,8 +387,13 @@ class PipSourceRectTest {
             source.contains("frame?.aspect"),
         )
         assertTrue(
-            "both PiP entry paths must use the frame's aspect",
-            source.split("frame?.aspect").size - 1 >= 2,
+            "the frame must be computed ONCE and shared by the hint and " +
+                "the aspect - two computations could disagree",
+            source.contains("val frame = pipSourceRectInWindow()"),
+        )
+        assertTrue(
+            "the hint must be the SAME frame the aspect came from",
+            source.contains("frame?.let { Rect(it.left, it.top, it.right, it.bottom) }"),
         )
     }
 
