@@ -24,14 +24,25 @@ import com.facebook.react.bridge.ReactContext
  *  - Notification text with chapter title + progress percentage (Android 12+)
  *  - No NEXT/PREV actions (removed for simplicity)
  *
- * V12 Phase 9: relocated from the consumer app to the module so
- * `PlayerActivity` can call `buildPipParams(...)` directly without
- * crossing the Gradle module boundary. The consumer app's
- * `MainActivity` continues to register / unregister [PipActionReceiver]
- * (since `MainActivity` is the activity that owns the foreground
- * during in-app video browsing — PiP can be entered from there too).
- * Both activities share the same `com.simba.player.PipManager` FQN,
- * which Gradle resolves to the module's copy at app build time.
+ * ## Who owns the action receiver
+ *
+ * THIS LIBRARY owns it, end to end: [registerActionReceiver] registers
+ * [PipActionReceiver] on the application context, once per process. The
+ * consumer app does NOT register it and does not need to know the class
+ * exists.
+ *
+ * That ownership is not a preference — it is what makes the buttons
+ * work. See [buildRemoteAction] for the measured reason the broadcast
+ * has to be IMPLICIT, and [registerActionReceiver] for why there must be
+ * exactly ONE registration (two would deliver every action twice, and a
+ * play/pause that toggles twice leaves playback exactly where it was —
+ * buttons that look alive and do nothing).
+ *
+ * V12 Phase 9 relocated this object from the consumer app to the module
+ * so the consumer's Activity can call `buildPipParams(...)` without
+ * crossing the Gradle module boundary. Both sides share the same
+ * `com.simba.player.PipManager` FQN, which Gradle resolves to the
+ * module's copy at app build time.
  */
 @RequiresApi(Build.VERSION_CODES.N)
 object PipManager {
@@ -69,6 +80,17 @@ object PipManager {
         chapterTitle: String? = null,
         progressPercentage: String? = null,
     ): PictureInPictureParams {
+        // The params carry the three RemoteActions, and the platform's PiP
+        // action row is the ONLY way they can ever be fired. So the
+        // receiver that serves them has to exist before these params do.
+        //
+        // Registering here — at the single place the params are built —
+        // makes it impossible to hand the platform a set of buttons that
+        // nothing is listening for. That was the measured defect on
+        // 2026-11-03: the row rendered three buttons at the right size
+        // and none of them did anything.
+        registerActionReceiver(context)
+
         val actions = mutableListOf<RemoteAction>()
 
         // Play/Pause
@@ -137,10 +159,16 @@ object PipManager {
         // The platform's auto-enter switch makes the SYSTEM transition the
         // activity into PiP when the user leaves the app, without the app
         // being able to do anything first. That is the wrong order for a
-        // consumer that draws its own chrome over the picture: an Activity
-        // in PiP does not redraw, so whatever the window held at the
-        // moment of the transition is what the PiP window keeps showing -
-        // frozen, dead and scaled down.
+        // consumer that draws its own chrome over the picture.
+        //
+        // The reason is NOT that the window freezes - an Activity in PiP is
+        // "paused, but rendering" (source.android.com/docs/core/display/
+        // pip). What stops is REACT: RN pauses the React scheduler when
+        // the Activity is paused, so a React commit cannot land and no
+        // frame is produced. The switch transitions the Activity before
+        // the consumer can unmount its chrome, so the chrome is still
+        // mounted when the PiP window is created - and with no frame
+        // coming, it stays there: dead and scaled down.
         //
         // Measured on device on 2026-11-03: the consumer's full expanded
         // chrome (header band, scrub row, +-10 buttons, the big pause
@@ -184,9 +212,36 @@ object PipManager {
         action: String,
         requestCode: Int,
     ): RemoteAction {
-        val intent = Intent(action).apply {
-            setClass(context, PipActionReceiver::class.java)
-        }
+        // The intent is IMPLICIT — it carries the action and NOTHING else.
+        //
+        // It used to name the component explicitly
+        // (`setClass(context, PipActionReceiver::class.java)`). THAT was
+        // the reason the PiP buttons did NOTHING, measured on
+        // emulator-5554 (API 37) on 2026-11-03:
+        //
+        //   * The platform's PiP action row rendered at the correct size,
+        //     right beside the platform's own settings / expand / close
+        //     buttons — and all three of THOSE worked.
+        //   * Tapping ours produced NO broadcast at all:
+        //     `dumpsys activity broadcasts` held no record of the action,
+        //     and the platform's own gear button opened the PiP settings
+        //     screen in the very same gesture.
+        //
+        // The cause is how the framework resolves an EXPLICIT broadcast:
+        // it looks the component up through the MANIFEST.
+        // `PipActionReceiver` is not declared there — it is a runtime
+        // registration — so the explicit broadcast resolved to no
+        // receiver and was dropped before it was ever dispatched
+        // (`dumpsys` showed `dispatchTime=--`, foreground and background
+        // alike).
+        //
+        // The same action sent IMPLICITLY was dispatched in 0 ms, and
+        // that is the proof: the receiver was registered and matching the
+        // whole time. Only the component was the problem.
+        //
+        // An implicit intent is matched by ACTION, which is exactly what
+        // the runtime registration filters on.
+        val intent = Intent(action)
         val pendingIntent = PendingIntent.getBroadcast(
             context,
             requestCode,
@@ -203,13 +258,57 @@ object PipManager {
 
     // ── Intent Filter ──────────────────────────────────────────────────────
 
-    fun intentFilter(): IntentFilter {
+    /**
+     * The filter the runtime registration matches on.
+     *
+     * `internal` on purpose: registering the receiver is THIS library's
+     * job (see [registerActionReceiver]), and a public helper would
+     * only invite a consumer to register a second receiver for the same
+     * three actions. Two receivers means every action is delivered
+     * twice, and a play/pause that toggles twice leaves playback exactly
+     * where it was — a row of buttons that look alive and do nothing.
+     */
+    internal fun intentFilter(): IntentFilter {
         return IntentFilter().apply {
             addAction(ACTION_PLAY_PAUSE)
             addAction(ACTION_EXPAND)
             addAction(ACTION_CLOSE)
         }
     }
+
+    // ── Receiver registration ─────────────────────────────────────────────
+
+    /**
+     * Registers [PipActionReceiver] for the three PiP actions — ONCE per
+     * process.
+     *
+     * The application context is used on purpose: the receiver has to
+     * outlive any Activity, because the platform's PiP action row can
+     * fire while the consumer's Activity is paused inside PiP, and long
+     * after a configuration change has replaced it.
+     *
+     * The once-per-process guard matters because the React context — and
+     * with it this module — can be recreated (a debug reload, a process
+     * restart), and registering again would deliver every action twice.
+     */
+    internal fun registerActionReceiver(context: Context) {
+        val appContext = context.applicationContext
+        synchronized(registrationLock) {
+            if (registered) return
+            val receiver = PipActionReceiver()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                appContext.registerReceiver(receiver, intentFilter(), Context.RECEIVER_EXPORTED)
+            } else {
+                appContext.registerReceiver(receiver, intentFilter())
+            }
+            registered = true
+        }
+    }
+
+    private val registrationLock = Any()
+
+    @Volatile
+    private var registered = false
 }
 
 // ── BroadcastReceiver for PiP Actions ──────────────────────────────────────
@@ -218,17 +317,25 @@ object PipManager {
  * Receives PiP RemoteAction broadcasts and forwards them to the React Native
  * event layer via [com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter].
  *
- * Registered/unregistered in `MainActivity.onCreate` / `onDestroy` (since
- * `MainActivity` is where the in-app foreground session lives; `PlayerActivity`
- * shares the receiver registration via the merged module manifest).
+ * Registered by THIS library, once per process, on the application context
+ * — see [PipManager.registerActionReceiver]. The consumer app does not
+ * register it and does not need to know the class exists.
  *
- * V12: receiver class lives in the module (same FQN `com.simba.player.PipActionReceiver`).
- * The consumer app's `MainActivity` instantiates / registers it without any
- * import changes — Gradle merges the module's class into the app at build time.
+ * It is a RUNTIME registration on purpose: the three action strings are
+ * owned by [PipManager] as Kotlin constants, and a manifest declaration
+ * would have to repeat them as literals — two owners for one fact. The
+ * broadcast those constants feed is implicit, so it matches a runtime
+ * registration by action. (An EXPLICIT broadcast would need a manifest
+ * declaration instead; see [PipManager.buildRemoteAction] for the
+ * measured reason that shape never worked.)
  *
  * v3: Handles 3 actions — play/pause, expand (restore fullscreen), close (end session).
  */
 class PipActionReceiver : BroadcastReceiver() {
+
+    private companion object {
+        const val TAG = "PipActionReceiver"
+    }
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
@@ -250,9 +357,15 @@ class PipActionReceiver : BroadcastReceiver() {
             reactContext
                 .getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
                 ?.emit(eventName, params)
-        } catch (_: Exception) {
-            // React context not available — receiver may be triggered after
-            // the JS bundle has unloaded. Silently swallow (no UI to update).
+        } catch (e: Exception) {
+            // The React context is not available — the broadcast can arrive
+            // after the JS bundle has unloaded, and there is no UI to update
+            // in that case.
+            //
+            // It is still LOGGED, and that is the point. A silent catch
+            // here is how the PiP action row could render three buttons
+            // that did nothing, with not one line in the log to say so.
+            android.util.Log.w(TAG, "cannot emit $eventName: no React context", e)
         }
     }
 

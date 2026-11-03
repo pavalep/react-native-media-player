@@ -1,4 +1,51 @@
 
+## [3.1.0] - 2026-11-03
+
+### Fixed
+
+- **The Picture-in-Picture action row did nothing.** The three platform buttons — Play/Pause,
+  Expand and Close — rendered at the correct size, right beside the platform's own settings /
+  expand / close buttons, and pressing ours produced no broadcast at all. The action's
+  `PendingIntent` carried an intent that named `PipActionReceiver` explicitly, and an
+  explicit broadcast is resolved through the **manifest**; the receiver was a runtime
+  registration, so the broadcast resolved to nothing and was dropped before it was ever
+  dispatched. Measured on emulator-5554 (API 37) on 2026-11-03: the same action sent
+  explicitly was never dispatched (`dispatchTime=--`, in the foreground and in PiP alike),
+  while the same action sent implicitly was dispatched in 0 ms. The action intent is now
+  implicit, which is what the runtime registration matches on.
+- **A failure to deliver a PiP action was invisible.** `PipActionReceiver` swallowed the
+  exception silently — which is how a row of dead buttons could leave not one line in the
+  log. The failure is now logged, under the tag `PipActionReceiver`.
+
+### Changed
+
+- **The library owns the PiP action receiver.** It is registered at runtime, once per
+  process, on the application context, at the moment the Picture-in-Picture parameters are
+  built — so the platform can never be handed a set of buttons that nothing is listening
+  for. Consumers no longer register it, and no longer need to know the class exists.
+
+  **Action required:** if you registered `PipActionReceiver` yourself, remove that
+  registration. Two registrations deliver every action twice, and a play/pause that toggles
+  twice leaves playback exactly where it was — the same dead-button symptom with a
+  different cause. `PipManager.intentFilter()` is now `internal`, so the compiler points
+  at the registration instead of letting it reach a runtime double-delivery bug.
+
+### Documentation
+
+- The README described the **removed** mechanism: Android's own auto-enter switch, an API 31+
+  floor for auto-enter, a PiP action receiver "declared in the manifest", and 26 named
+  events where there are 27. It also pointed at a section for "the two lines of Kotlin and
+  the JS that goes with them" that did not contain them. All corrected; the auto-enter
+  section now carries the Kotlin and the JS a consumer needs, and explains why the consumer
+  performs the entry.
+
+### Added
+
+- `PipActionDeliveryTest` — eight guard tests pinning the contract above: the intent stays
+  implicit, the library registers the receiver, the registration cannot happen twice, the
+  consumer cannot make it happen twice, a delivery failure is logged, and the manifest
+  neither declares the receiver nor duplicates the action strings.
+
 ## [3.0.5] - 2026-11-03
 
 ### Changed

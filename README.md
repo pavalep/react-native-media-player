@@ -62,7 +62,8 @@ video, and the two lanes meet in the same bridge:
 - **MediaSession and foreground service.** Title, artist and album reach the lock screen and the
   media notification; play, pause, stop, next, previous and seek are advertised to the session, so
   headset buttons and Bluetooth controls work.
-- **Picture-in-Picture.** Manual entry on demand, and OS-level auto-enter on leave from Android 12.
+- **Picture-in-Picture.** Manual entry on demand, and auto-enter on leave on every Android
+  version - your app performs the entry itself, after taking its own chrome off screen.
 - **Typed surface.** Config, state, commands and hooks are all typed.
 
 ## What this is not
@@ -112,8 +113,13 @@ so re-running `npm install` is safe. Set `SKIP_DOWNLOAD_NATIVE=1` to skip the do
 
 ## Consumer setup
 
-The package's own manifest declares a foreground service and a PiP action receiver. It declares no
-Activity: playback happens in the Activity your app already has.
+The package's own manifest declares a foreground service and the media button receiver. It
+declares no Activity: playback happens in the Activity your app already has.
+
+The Picture-in-Picture action receiver is registered by this package at runtime, once per
+process. You do not register it, and you must not: a second registration would deliver every
+PiP action twice, and a play/pause that toggles twice does nothing at all.
+
 
 ### Picture-in-Picture
 
@@ -330,8 +336,11 @@ import {PlayerProvider} from '@simba-dev/react-native-media-player';
 ```
 
 The resolved config is pushed to the native bridge as JSON. The native side acts on the PiP
-section (it drives the auto-enter switch); the remaining sections are values your app reads back
-with `usePlayerConfig()` and applies itself. `DEFAULT_PLAYER_CONFIG` and `DEFAULT_THEME` are
+section (it decides whether your app is told that the user is leaving); the remaining
+sections are values your app reads back with `usePlayerConfig()` and applies itself.
+`DEFAULT_PLAYER_CONFIG` and `DEFAULT_THEME` are exported if you would rather spread and patch.
+
+
 exported if you would rather spread and patch.
 
 ## Picture-in-Picture
@@ -347,14 +356,47 @@ commands.exitPipAndFinish();
 `enterPip()` calls `enterPictureInPictureMode()` on the current Activity, so the Activity has to
 declare `android:supportsPictureInPicture="true"` (see [Consumer setup](#consumer-setup)).
 
-**Auto-enter on leave** is `config.pip.autoEnterOnLeave` (default `true`). It maps onto the
-Android 12 / API 31 platform feature `PictureInPictureParams.Builder.setAutoEnterEnabled`: the
-OS enters Picture-in-Picture for you when the user leaves the app. **Below API 31 the platform
-has no such feature** — the OS cannot auto-enter Picture-in-Picture there, and entry stays manual
-through `commands.enterPip()`.
+**Auto-enter on leave** is `config.pip.autoEnterOnLeave` (default `true`): it means "enter
+Picture-in-Picture when the user leaves the app".
+
+**Your app performs the entry.** The library does not arm Android's own auto-enter switch
+(`PictureInPictureParams.Builder.setAutoEnterEnabled`), because an Activity in
+Picture-in-Picture does not redraw: whatever its window held at the moment of the transition is
+what the PiP window keeps showing. Letting the OS transition the Activity first froze the
+app's own controls into the PiP window, scaled down and dead - measured on device on
+2026-11-03.
+
+So the order is yours to keep: take your chrome off screen, let the frame that drew it go by,
+and only then ask for the window. The library tells you WHEN, with two pieces.
+
+```kotlin
+// android/app/src/main/java/.../MainActivity.kt
+override fun onUserLeaveHint() {
+  super.onUserLeaveHint()
+  com.simba.player.mpv.MpvBridgeModule.notifyUserLeaveHint()
+}
+```
+
+```ts
+// the consumer's JS - remove your chrome, then ask for the window
+import {subscribePlayerEvent} from '@simba-dev/react-native-media-player';
+
+useEffect(() => {
+  return subscribePlayerEvent('onUserLeaveHint', () => {
+    setChromeVisible(false);        // your chrome, your state
+    requestAnimationFrame(() => {
+      commands.enterPip();          // only now
+    });
+  });
+}, [commands]);
+```
+
+This works on **every** Android version - `onUserLeaveHint()` exists everywhere, and the
+platform's own switch never existed below Android 12.
 
 The two PiP flags combine: auto-enter needs `pip.enabled` and `pip.autoEnterOnLeave` to both be
 true.
+
 
 The Picture-in-Picture action row has three buttons: **Play/Pause**, **Expand** and **Close**.
 They arrive in JS as the `onPipPlayPause`, `onPipExpand` and `onPipClose` events, next to
@@ -442,7 +484,7 @@ that position in that file. The defaults are 640×360 at quality 80, exported as
 
 `getMpvPlayerModule()` returns the native module, or a no-op stand-in when the native side is
 not wired (Jest, web previews) so consumer code stays renderable.
-`subscribePlayerEvent(name, handler)` subscribes to one of the 26 named events and returns an
+`subscribePlayerEvent(name, handler)` subscribes to one of the 27 named events and returns an
 unsubscribe function; `removeAllListeners()`, `setDebugLogging()` and
 `dumpObservedProperties()` are also exported. The event names are typed as `PlayerEventName`.
 
@@ -458,8 +500,16 @@ unsubscribe function; `removeAllListeners()`, `setDebugLogging()` and
 before launching, and check `commands.isSurfaceMounted()`.
 
 **Picture-in-Picture does not start.** The Activity is missing
-`android:supportsPictureInPicture="true"` or `android:resizeableActivity="true"`. Auto-enter on
-leave additionally needs API 31+ — below that, enter PiP yourself with `commands.enterPip()`.
+`android:supportsPictureInPicture="true"` or `android:resizeableActivity="true"`. If auto-enter
+on leave does nothing, the Activity is not forwarding `onUserLeaveHint()` - see
+[Picture-in-Picture](#picture-in-picture).
+
+**The Picture-in-Picture action row shows three buttons and none of them work.** That was the
+explicit-broadcast bug, fixed in 3.1.0: the action's PendingIntent named the receiver's
+component, and an explicit broadcast is resolved through the manifest, where the receiver was
+never declared. Check that you have not registered a receiver for the PiP actions yourself -
+this package registers one, and a second registration delivers every action twice.
+
 
 **Gradle fails with `libmpv.so not found at android/src/main/jniLibs/…`.** The postinstall
 download did not run. Re-run `npm install` in the app, or run the script by hand; `SKIP_DOWNLOAD_NATIVE=1`
@@ -477,11 +527,13 @@ Call `commands.requestNotificationPermission()`.
 
 - **Android only.** There is no iOS implementation.
 - **No controls.** The library ships none; see [Controls](#controls).
-- **Auto-enter Picture-in-Picture needs Android 12 (API 31) or newer.** Below that the OS cannot
-  do it and entry is manual.
+- **Auto-enter on leave is the consumer's to perform.** The library tells your Activity when the
+  user is leaving; taking your chrome off screen before asking for the window is your app's
+  job, and it has to happen before the Activity is paused.
 - **Most config sections are consumed in JavaScript.** The native side receives the resolved
-  config as JSON and acts on the PiP auto-enter switch; the rest are values your app reads back
+  config as JSON and acts on the PiP auto-enter policy; the rest are values your app reads back
   through `usePlayerConfig()`.
+- **`notifications.channelId` is not read natively.**
 - **`notifications.channelId` is not read natively.** The foreground service creates its own
   notification channel, `simba_player_media_playback`.
 - **The bundled native binaries carry their own licence.** They are built by the mpv-android

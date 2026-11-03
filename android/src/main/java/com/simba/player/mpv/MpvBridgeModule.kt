@@ -2359,10 +2359,13 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * What this does NOT do any more: arm the platform's own switch
      * (`PictureInPictureParams.Builder.setAutoEnterEnabled`, API 31+).
      * The platform's switch makes the SYSTEM transition the activity into
-     * PiP without the consumer being able to do anything first, and an
-     * Activity in PiP does not redraw — so a consumer that draws its own
-     * chrome over the picture had that chrome frozen into the PiP
-     * window, dead and scaled down. Measured on device on 2026-11-03.
+     * PiP without the consumer being able to do anything first. The
+     * Activity in PiP is "paused, but rendering" - what stops is REACT:
+     * its scheduler is paused with the Activity, so no commit lands and
+     * no frame is produced. So a consumer that draws its own chrome over
+     * the picture still had that chrome mounted when the PiP window was
+     * created, and with no frame coming it stayed there: dead and scaled
+     * down. Measured on device on 2026-11-03.
      * See `PipManager.buildPipParams` for the full account.
      *
      * What it does now: the policy is remembered (so
@@ -2387,10 +2390,10 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             // The policy is remembered so `notifyUserLeaveHint()` knows
             // whether to tell the consumer that it should enter PiP. The
             // platform's OWN auto-enter switch is NOT armed: the system
-            // would transition the activity without the consumer being
-            // able to remove its chrome first, and an Activity in PiP
-            // does not redraw - so the consumer's chrome would be frozen
-            // into the PiP window as a dead layer. See
+            // would transition the activity before the consumer could
+            // remove its chrome, and React cannot commit a frame while
+            // the Activity is paused - so the consumer's chrome would be
+            // still mounted in the PiP window, dead and scaled down. See
             // `PipManager.buildPipParams` for the measurement.
             pipAutoEnterForCompanion = desired
         } catch (t: Throwable) {

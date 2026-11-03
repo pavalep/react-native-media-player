@@ -26,9 +26,12 @@ import java.io.File
  * app, with the consumer unable to do anything first.
  *
  * That is the wrong order for a consumer that draws its own chrome over
- * the picture, because **an Activity in PiP does not redraw**: whatever
- * its window held at the moment of the transition is what the PiP window
- * keeps showing. Measured on device on 2026-11-03, the consumer's full
+ * the picture. An Activity in PiP is "paused, but rendering" - what stops
+ * is REACT: RN pauses the React scheduler when the Activity is paused, so
+ * a commit cannot land and no frame is produced. The switch transitions
+ * the Activity before the consumer can unmount its chrome, so the chrome
+ * is still on screen when the PiP window is created, and with no frame
+ * coming it stays. Measured on device on 2026-11-03, the consumer's full
  * expanded chrome (header band, scrub row, ±10 buttons, the big pause
  * button) was painted into the PiP window, its buttons were DEAD (tapping
  * pause did not pause — their views were gone) and its clock was FROZEN at
@@ -219,9 +222,12 @@ class PipAutoEnterPolicyTest {
         // `PictureInPictureParams.Builder.setAutoEnterEnabled` is the
         // platform's switch (API 31+), and it makes the SYSTEM transition
         // the activity without the consumer being able to remove its
-        // chrome first. An Activity in PiP does not redraw, so that
-        // froze the consumer's chrome into the PiP window as a dead,
-        // stale layer — measured on device on 2026-11-03.
+        // chrome first. The Activity in PiP is "paused, but rendering" -
+        // what stops is REACT: its scheduler is paused with the Activity,
+        // so no commit lands and no frame is produced. So the chrome was
+        // still mounted when the PiP window was created, and with no frame
+        // coming it stayed there: dead and scaled down - measured on
+        // device on 2026-11-03.
         //
         // So the params this library hands the platform must NOT carry it.
         //
