@@ -24,8 +24,8 @@ import {
   PlayerStateContext,
 } from '../types/player';
 import {
+  ALL_PLAYER_EVENTS,
   getMpvPlayerModule,
-  PlayerEventName,
   PlayerEventPayloads,
   removeAllListeners,
   subscribePlayerEvent,
@@ -185,42 +185,14 @@ function PlayerStateProvider({
 }
 
 /**
- * All 26 player event names. Must match `PlayerEventName` in
- * `MpvPlayerModule.ts` (and the Kotlin `MpvBridgeModule.kt`
- * `RCTDeviceEventEmitter` strings).
- *
- * Kept here (not in the bridge module) to avoid pulling the React
- * context machinery into a pure-types module; the provider is the
- * only consumer of this constant anyway.
+ * The event names are NOT declared here. `ALL_PLAYER_EVENTS` is
+ * imported from `../bridge/MpvPlayerModule` (see the import above),
+ * where it is the single owner of the list. This module used to keep
+ * its own copy of the list — a second owner for the same fact — while
+ * the test suite kept a third, hand-written one that had already
+ * dropped `onLoadRequested` (the test now derives its expectation from
+ * the bridge's list instead).
  */
-const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
-  'onFileLoaded',
-  'onLoadRequested',
-  'onPlaybackStateChanged',
-  'onPositionChanged',
-  'onDurationChanged',
-  'onPropertyChanged',
-  'onTracksChanged',
-  'onChapterChanged',
-  'onVideoParamsChanged',
-  'onError',
-  'onBuffering',
-  'onCacheFill',
-  'onCacheState',
-  'onSeekable',
-  'onSeeking',
-  'onEndFile',
-  'onPlaybackRestart',
-  'onEndReached',
-  'onAudioDeviceChanged',
-  'onVolumeChanged',
-  'onSpeedChanged',
-  'videoReconfig',
-  'onPipModeChanged',
-  'onPipPlayPause',
-  'onPipExpand',
-  'onPipClose',
-];
 
 /**
  * mpv properties the provider observes, and the JS event each one backs

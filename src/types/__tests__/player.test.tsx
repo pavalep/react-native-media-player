@@ -427,42 +427,25 @@ describe('usePlayer (inside PlayerProvider)', () => {
     expect(result.current.state.durationMs).toBe(0);
   });
 
-  it('subscribes to all 22 mpv events on mount', async () => {
+  it('subscribes to all 26 mpv events on mount', async () => {
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <PlayerProvider>{children}</PlayerProvider>
     );
     await renderHook(() => usePlayer(), { wrapper });
-    // Every PlayerEventName should have at least one captured handler.
-    const expectedEvents = [
-      'onFileLoaded',
-      'onPlaybackStateChanged',
-      'onPositionChanged',
-      'onDurationChanged',
-      'onPropertyChanged',
-      'onTracksChanged',
-      'onChapterChanged',
-      'onVideoParamsChanged',
-      'onError',
-      'onBuffering',
-      'onCacheFill',
-      'onCacheState',
-      'onSeekable',
-      'onSeeking',
-      'onEndFile',
-      'onPlaybackRestart',
-      'onEndReached',
-      'onAudioDeviceChanged',
-      'onVolumeChanged',
-      'onSpeedChanged',
-      'videoReconfig',
-      'onPipModeChanged',
-      'onPipPlayPause',
-      'onPipExpand',
-      'onPipClose',
-    ];
-    for (const event of expectedEvents) {
+    // The list has ONE owner: `ALL_PLAYER_EVENTS` in
+    // src/bridge/MpvPlayerModule.ts, which `<PlayerProvider>`
+    // imports. So this is a real contract, not a tautology — if the
+    // provider stops subscribing to an event, that event has no
+    // captured handler and the assertion below fails. It used to be
+    // a hand-written copy kept here, which had already dropped
+    // `onLoadRequested` while the title still said 22.
+    for (const event of BridgeModule.ALL_PLAYER_EVENTS) {
       expect(subs.handlers.get(event)?.length ?? 0).toBeGreaterThan(0);
     }
+    // The count is pinned so the canonical list cannot silently grow
+    // or shrink: a new event added to the bridge has to come with a
+    // subscription here, and a removed one has to come out of both.
+    expect(BridgeModule.ALL_PLAYER_EVENTS).toHaveLength(26);
   });
 
   it('updates state when an onPlaybackStateChanged event fires', async () => {

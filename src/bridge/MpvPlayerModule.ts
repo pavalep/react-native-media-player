@@ -1053,8 +1053,15 @@ export function removeAllListeners(event?: PlayerEventName): void {
   }
 }
 
-/** All 26 player event names — used by `removeAllListeners()` to iterate when no event is specified. */
-const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
+/**
+ * All 26 player event names — the ONE owner of this list.
+ *
+ * `<PlayerProvider>` imports it to subscribe to every event on mount,
+ * `removeAllListeners()` iterates it when no event is named, and the
+ * test suite derives its expectation from it. A second hand-written
+ * copy of this list is how the count drifted in the first place.
+ */
+export const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
   'onFileLoaded',
   'onLoadRequested',
   'onPlaybackStateChanged',

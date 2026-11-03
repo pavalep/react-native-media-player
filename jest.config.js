@@ -34,18 +34,15 @@ module.exports = {
     '!src/**/*.d.ts',
     '!src/index.ts',
     '!src/README.example.tsx',
-    // v2.0.0: PlayerRoot.tsx and PlayerSurface.tsx are back in the
-    // covered set. The exclusion they carried was sized for a
-    // component that wrapped the native view manager `MpvPlayerView`
-    // — that manager does not exist any more (the picture is the
-    // Fabric component `SimbaVideoView`), and neither component
-    // touches a native view any more: `PlayerSurface` is a plain
-    // transparent View, and `PlayerRoot` is a plain View tree plus
-    // the consumer's own controls. They are unit-tested in
-    // src/components/__tests__/PlayerRoot.test.tsx.
-    // (A deleted UI kit leaves its GEOMETRY behind — an exclusion is
-    // geometry too, and it was sized for a component that no longer
-    // looks like this one.)
+    // v3.0.0: `<PlayerRoot>` and `<PlayerSurface>` were REMOVED, so
+    // there is nothing left to exclude for them — neither file
+    // exists any more. The picture is `<SimbaVideo>`
+    // (src/components/SimbaVideo.tsx), which IS in the covered set
+    // and IS unit-tested in src/components/__tests__/SimbaVideo.test.tsx.
+    // (History: the exclusion those two components carried was sized
+    // for a component that wrapped the native view manager
+    // `MpvPlayerView` — that manager does not exist any more, the
+    // picture is the Fabric component `SimbaVideoView`.)
     // The Fabric codegen spec is a type declaration plus one
     // `codegenNativeComponent` call whose implementation only exists after
     // codegen runs against a native toolchain. There is no runtime branch to
@@ -62,7 +59,6 @@ module.exports = {
     // consumer app + Robolectric on-device. Excluded here so the
     // global threshold reflects the actually-testable surface.
     '!src/hooks/SimbaPlayer.tsx',
-    '!src/hooks/SimbaPlayerRoot.tsx',
     // Intent / Filesystem / Linking handlers — they wire
     // `Linking.addEventListener('url', ...)` and the Android
     // FileProvider grant flow. These bindings are platform-only
@@ -111,13 +107,18 @@ module.exports = {
     // delegation tests, integration tests for the platform-bound
     // hooks), bump these up.
     //
-    // v2.0.0: the achievement is now 69.57% statements / 76.22%
-    // branches / 47.44% functions / 69.35% lines (measured, with
-    // `jest --coverage`). The old figures in this comment (~52 / ~51
-    // / ~38 / ~52) went stale the moment the `PlayerRoot.tsx` and
-    // `PlayerSurface.tsx` exclusions were removed — the two files
-    // came back into the covered set at 100%. The thresholds are
-    // raised accordingly, with headroom left below the measurement.
+    // v3.0.0 (measured 2026-11-03, with `jest --coverage`): the
+    // achievement is now 71.08% statements / 78.71% branches /
+    // 47.44% functions / 70.92% lines. The thresholds are raised
+    // accordingly, with headroom left below the measurement.
+    //
+    // History: at v2.0.0 the achievement was 69.57% statements /
+    // 76.22% branches / 47.44% functions / 69.35% lines, and the
+    // figures before that (~52 / ~51 / ~38 / ~52) went stale the
+    // moment the `PlayerRoot.tsx` and `PlayerSurface.tsx` exclusions
+    // were removed — the two files came back into the covered set
+    // at 100%. Both components were removed in 3.0.0, so neither
+    // file exists now.
     global: {
       statements: 60,
       branches: 65,
