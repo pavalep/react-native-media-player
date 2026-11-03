@@ -451,52 +451,85 @@ jobs:
 
           # ── the registry's READ path can be STALE ─────────────────────
           #
-          # `npm view` and a plain GET can both be answered by a CDN edge
-          # whose packument predates the publish that just happened. Two
-          # separate failures came out of that:
+          # `npm view` and a plain GET of the PACKUMENT can both be
+          # answered by a CDN edge whose copy predates the publish that
+          # just happened. Three separate failures came out of that:
           #
           #  - 3.0.3: `npm view @...@3.0.3 version` returned 404 and the
           #    version list stopped at 3.0.2, while `npm publish` refused
           #    with "You cannot publish over the previously published
           #    versions: 3.0.3" — which PROVED 3.0.3 was already out.
           #  - 3.0.4: the publish LANDED (the packument now lists
-          #    3.0.4), but the post-publish check below read a stale edge,
+          #    3.0.4), but the post-publish check read a stale edge,
           #    reported FAILURE for a publish that had succeeded, and —
           #    because the GitHub Release comes after this step — the
           #    release was never created either.
+          #  - 3.0.5: the same again. The publish itself was fine — the
+          #    version IS on npm — but the check read a stale edge for
+          #    25 seconds (5 attempts x 5s) and gave up, so the step
+          #    failed and the GitHub Release was never created.
+          #    Measured on 2026-11-03: the packument still had no 3.0.5
+          #    about TWO MINUTES after the publish, and served it about
+          #    EIGHT minutes after. A 25-second window cannot see that.
           #
-          # So neither check may use `npm view`. Both ask the registry
-          # DIRECTLY, with a cache-busting query, and RETRY rather than
-          # failing on the first answer: a packument that has not
-          # propagated yet is not the same thing as a publish that did
-          # not land, and only the second one may fail the build.
-          published() {
-            local version="$1" attempt
-            for attempt in 1 2 3 4 5; do
-              if curl -fsS \
-                   "https://registry.npmjs.org/@simba-dev%2Freact-native-media-player?cb=$(date +%s%3N)" \
-                 | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{process.exit(JSON.parse(d).versions[process.argv[1]]?0:1)}catch(e){process.exit(1)}})" \
-                   "${version}"; then
-                return 0
-              fi
-              echo "::notice::The registry has not served version ${version} yet (attempt ${attempt}/5); retrying."
-              sleep 5
-            done
-            return 1
+          # So the question asked is the VERSION-SPECIFIC one —
+          # `GET /<pkg>/<version>` — which a publish CREATES. It is a
+          # small document rather than a big cached packument, and the
+          # answer is checked AGAINST the version that was asked for, so
+          # a stale copy of a different version cannot pass for this one.
+          #
+          # And a publish that refuses with "you cannot publish over the
+          # previously published versions" is not a failure: it is the
+          # registry saying the version IS out, which is exactly what
+          # this step wanted. Treating it as a failure is what broke the
+          # 3.0.3 re-run.
+          version_published() {
+            curl -fsS \
+              "https://registry.npmjs.org/@simba-dev%2Freact-native-media-player/${1}?cb=$(date +%s%3N)" \
+              2>/dev/null \
+              | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{process.exit(JSON.parse(d).version===process.argv[1]?0:1)}catch(e){process.exit(1)}})" \
+              "${1}"
           }
 
-          if published "${VERSION}"; then
-            echo "::notice::Version ${VERSION} is already published to npm. Skipping publish step."
+          if version_published "${VERSION}"; then
+            echo "::notice::Version ${VERSION} is already on the registry. Skipping the publish."
             echo "skipped=true" >> "$GITHUB_OUTPUT"
           else
-            npm publish --tag="${DIST_TAG}"
+            PUBLISH_LOG="$(mktemp)"
+            if npm publish --tag="${DIST_TAG}" > "${PUBLISH_LOG}" 2>&1; then
+              echo "::notice::npm publish succeeded."
+            elif grep -q "cannot publish over the previously published versions" "${PUBLISH_LOG}"; then
+              # The registry's read path was behind, and `npm publish`
+              # found the version already there. That is the outcome
+              # this step wanted, so it is a SUCCESS.
+              echo "::notice::npm publish reported that ${VERSION} is already published. Treating that as success."
+            else
+              cat "${PUBLISH_LOG}"
+              echo "::error::npm publish FAILED for ${VERSION}."
+              exit 1
+            fi
+            rm -f "${PUBLISH_LOG}"
             echo "skipped=false" >> "$GITHUB_OUTPUT"
           fi
-          # Belt and braces: prove the version is actually on npm, from
-          # the registry, in THIS step. A publish that reports success but
-          # left nothing behind must not pass.
-          published "${VERSION}" \
-            || { echo "::error::Version ${VERSION} is NOT on npm after publishing."; exit 1; }
+
+          # Belt and braces: prove the version is actually on the
+          # registry, from the registry, in THIS step. A publish that
+          # reports success but left nothing behind must not pass.
+          #
+          # The window is GENEROUS, because the registry's read path is
+          # allowed to lag a publish by MINUTES — measured at up to eight
+          # minutes for 3.0.5. Failing inside a shorter window would fail
+          # builds whose publish was perfectly fine.
+          for attempt in $(seq 1 15); do
+            if version_published "${VERSION}"; then
+              echo "::notice::Version ${VERSION} is on the registry (attempt ${attempt}/15)."
+              break
+            fi
+            echo "::notice::The registry has not served version ${VERSION} yet (attempt ${attempt}/15); the read path is behind. Retrying in 20s."
+            sleep 20
+          done
+          version_published "${VERSION}" \
+            || { echo "::error::Version ${VERSION} is NOT on the registry five minutes after the publish."; exit 1; }
           echo "::notice::Published ${VERSION} with dist-tag '${DIST_TAG}'. Verified against the registry."
 
       - name: Ensure release tag exists
