@@ -448,7 +448,44 @@ jobs:
           VERSION="${{ steps.resolve.outputs.version }}"
           DIST_TAG="${{ inputs.npm_dist_tag }}"
           DIST_TAG="${DIST_TAG:-latest}"
-          if npm view "@simba-dev/react-native-media-player@${VERSION}" version >/dev/null 2>&1; then
+
+          # ── the registry's READ path can be STALE ─────────────────────
+          #
+          # `npm view` and a plain GET can both be answered by a CDN edge
+          # whose packument predates the publish that just happened. Two
+          # separate failures came out of that:
+          #
+          #  - 3.0.3: `npm view @...@3.0.3 version` returned 404 and the
+          #    version list stopped at 3.0.2, while `npm publish` refused
+          #    with "You cannot publish over the previously published
+          #    versions: 3.0.3" — which PROVED 3.0.3 was already out.
+          #  - 3.0.4: the publish LANDED (the packument now lists
+          #    3.0.4), but the post-publish check below read a stale edge,
+          #    reported FAILURE for a publish that had succeeded, and —
+          #    because the GitHub Release comes after this step — the
+          #    release was never created either.
+          #
+          # So neither check may use `npm view`. Both ask the registry
+          # DIRECTLY, with a cache-busting query, and RETRY rather than
+          # failing on the first answer: a packument that has not
+          # propagated yet is not the same thing as a publish that did
+          # not land, and only the second one may fail the build.
+          published() {
+            local version="$1" attempt
+            for attempt in 1 2 3 4 5; do
+              if curl -fsS \
+                   "https://registry.npmjs.org/@simba-dev%2Freact-native-media-player?cb=$(date +%s%3N)" \
+                 | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{process.exit(JSON.parse(d).versions[process.argv[1]]?0:1)}catch(e){process.exit(1)}})" \
+                   "${version}"; then
+                return 0
+              fi
+              echo "::notice::The registry has not served version ${version} yet (attempt ${attempt}/5); retrying."
+              sleep 5
+            done
+            return 1
+          }
+
+          if published "${VERSION}"; then
             echo "::notice::Version ${VERSION} is already published to npm. Skipping publish step."
             echo "skipped=true" >> "$GITHUB_OUTPUT"
           else
@@ -458,7 +495,7 @@ jobs:
           # Belt and braces: prove the version is actually on npm, from
           # the registry, in THIS step. A publish that reports success but
           # left nothing behind must not pass.
-          npm view "@simba-dev/react-native-media-player@${VERSION}" version \
+          published "${VERSION}" \
             || { echo "::error::Version ${VERSION} is NOT on npm after publishing."; exit 1; }
           echo "::notice::Published ${VERSION} with dist-tag '${DIST_TAG}'. Verified against the registry."
 
