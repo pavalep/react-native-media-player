@@ -1,4 +1,58 @@
 
+## [3.0.4] - 2026-11-03
+
+### Changed
+
+- **The README and the docblocks now say what the code does.** The
+  consumer-facing prose had drifted from the source. The "Controls"
+  section still documented `<PlayerRoot>` and `<PlayerSurface>`, both
+  removed in 3.0.0; the launch identity was documented as
+  `(uri, startPositionMs)` when the key is the
+  `(requestId, uri, startPositionMs)` triple; four places said the bridge
+  emits 22 or 23 events when it emits 26; the package header named
+  `@simba/react-native-media-player` instead of
+  `@simba-dev/react-native-media-player`; the header attributed 4 Hz to
+  the whole native event stream when only `time-pos` is coalesced (at
+  250 ms); and "volume" was listed as a field of the progress context,
+  which it is not. The `resizeMode` section now carries the table of
+  mpv's own properties per mode, and the progress section says the
+  buffered ranges are quantised onto the scrub bar's grid.
+
+- **`CHANGELOG.md` now ships.** It was not in the `files` allow-list, so
+  it never reached the tarball while the README pointed at it for
+  per-version notes.
+
+- **`src/README.example.tsx` is type-checked again.** The file exists to
+  catch drift between the README's snippets and the public API, and
+  `tsconfig.json` excluded it — the detector was switched off, which is
+  how the file came to still import `<PlayerRoot>` and `<PlayerSurface>`
+  with nothing failing. The exclusion is gone, the file is now a mirror
+  of the README's snippets written against the real public surface, and
+  `npm run typecheck` really does check it.
+
+- **`ALL_PLAYER_EVENTS` has one owner.** The list of the 26 event names
+  was declared twice — once in the bridge module and once in
+  `<PlayerProvider>` — and a third, hand-written copy in the test suite
+  had already dropped `onLoadRequested` while its title still said 22
+  and its comment claimed every `PlayerEventName` had a captured
+  handler. The bridge module owns the list and exports it, the provider
+  imports it, and the test derives its expectation from it with the
+  count pinned at 26.
+
+### Fixed
+
+- **`jest.config.js` described files that no longer exist.** It excluded
+  `src/hooks/SimbaPlayerRoot.tsx`, which was deleted in 3.0.0, and
+  explained itself with a paragraph about `PlayerRoot.tsx` and
+  `PlayerSurface.tsx` as if they did, including a reference to
+  `src/components/__tests__/PlayerRoot.test.tsx`, which was also
+  deleted. The dead exclude is gone and the comments describe the
+  current surface. The coverage thresholds are unchanged (60 / 65 / 40 /
+  60); the measured achievement they leave headroom under is now 71.08%
+  statements / 78.71% branches / 47.44% functions / 70.92% lines.
+
+No runtime behaviour changed and no native file was touched.
+
 ## [3.0.3] - 2026-11-02
 
 ### Fixed
