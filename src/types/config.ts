@@ -52,18 +52,43 @@ export interface PipConfig {
   /** Master switch — when false, all PiP entry requests are ignored. */
   enabled: boolean;
   /**
-   * When true, the library reports that the user is leaving the app, through
-   * the `onUserLeaveHint` event, and the CONSUMER enters PiP itself.
+   * When true, the library enters Picture-in-Picture ITSELF when the user
+   * leaves the app (home, recents, app switcher).
+   *
+   * The entry happens in native code, inside the Activity's
+   * `onUserLeaveHint()`, because by then React Native has already paused the
+   * React scheduler with the Activity: a React commit cannot land and there
+   * is no frame clock, so a JS-driven entry cannot hide anything in time.
+   * Measured on emulator-5554 (API 37) on 2026-11-03: the JS handler ran
+   * immediately, the effect that would have driven the entry ran 5.7 s late,
+   * and the `requestAnimationFrame` never fired.
    *
    * The library deliberately does NOT arm Android's own auto-enter switch
    * (`PictureInPictureParams.Builder.setAutoEnterEnabled`): that makes the OS
-   * transition the Activity without giving the app a chance to remove its own
-   * chrome, and an Activity in Picture-in-Picture does not redraw — so the
-   * chrome is frozen into the PiP window as a dead layer. See the README's
-   * Picture-in-Picture section for the two lines of Kotlin and the JS that
-   * go with it.
+   * transition the Activity with no chance to remove the app's own chrome. An
+   * Activity in Picture-in-Picture is "paused, but rendering" — what stops is
+   * REACT, not the window — so chrome that is still mounted when the
+   * transition happens stays in the PiP window, dead and scaled down. See the
+   * README's Picture-in-Picture section for the two lines of Kotlin that go
+   * with it.
    */
   autoEnterOnLeave: boolean;
+  /**
+   * The `nativeID` of the consumer's chrome root — the view the library hides
+   * natively when it enters PiP on the HOME path.
+   *
+   * The literal belongs to the CONSUMER: the library stores it and uses it,
+   * and never hardcodes one of its own. Put the same string on the
+   * consumer's chrome `<View nativeID="...">`.
+   *
+   * Omit it when the consumer draws no chrome of its own — then the library
+   * enters PiP without hiding anything.
+   *
+   * When it IS set and no view carries that `nativeID`, the library REFUSES
+   * the entry and logs a warning naming the id: entering PiP with the chrome
+   * still mounted paints the app's dead chrome into the PiP window.
+   */
+  chromeNativeId?: string;
 }
 
 /** Audio playback configuration. */

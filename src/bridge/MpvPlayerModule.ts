@@ -113,14 +113,12 @@ export interface LaunchParams {
 }
 
 /**
- * All 27 events emitted by the Kotlin bridge.
+ * All 26 events emitted by the Kotlin bridge.
  *
- * `onUserLeaveHint` is the 27th: the native side telling the consumer
- * that the user is leaving the app. It exists because a consumer that
- * draws its own chrome over the picture has to be able to remove that
- * chrome BEFORE the Activity enters Picture-in-Picture. See
- * `PipManager`'s note on why the OS-initiated transition cannot be used
- * for that.
+ * The HOME path is NOT one of them. The library enters Picture-in-Picture
+ * itself on that path (see `pip.autoEnterOnLeave`), so there is no "the
+ * user is leaving" event for a consumer to react to — the event's only
+ * consumer was the JS-driven entry the library took over.
  */
 export type PlayerEventName =
   | 'onFileLoaded'
@@ -148,8 +146,7 @@ export type PlayerEventName =
   | 'onPipModeChanged'
   | 'onPipPlayPause'
   | 'onPipExpand'
-  | 'onPipClose'
-  | 'onUserLeaveHint';
+  | 'onPipClose';
 
 /** Typed payload map for each event. */
 export interface PlayerEventPayloads {
@@ -208,17 +205,6 @@ export interface PlayerEventPayloads {
   onPipPlayPause: Record<string, never>;
   onPipExpand: Record<string, never>;
   onPipClose: Record<string, never>;
-  /**
-   * The user is leaving the app (home, recents, app switcher).
-   *
-   * A consumer that owns its own chrome over the picture uses this to
-   * remove that chrome and THEN enter Picture-in-Picture itself. The
-   * order is not negotiable: an Activity in PiP does not redraw, so
-   * whatever its window contained at the moment of the transition is
-   * what the PiP window keeps showing — frozen, dead and scaled down.
-   * See `PipManager`'s note on the same thing.
-   */
-  onUserLeaveHint: Record<string, never>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -539,6 +525,19 @@ export interface MpvPlayerModuleBridge {
    * happen — the native side has the answer (`enterPictureInPictureMode`
    * returns it) and the caller needs it, because a caller that hides its
    * chrome on a refused request has no way to bring it back.
+   *
+   * The ORDER still matters, and the reason is REACT, not the window: an
+   * Activity in Picture-in-Picture is "paused, but rendering" (AOSP), so the
+   * PiP window keeps whatever the Activity's window held at the transition —
+   * but React Native pauses the React scheduler with the Activity, so a
+   * React commit cannot land and no frame is produced. Chrome that is still
+   * mounted at that moment therefore stays in the PiP window, dead and
+   * scaled down.
+   *
+   * This is the MANUAL path — the consumer's own button. The HOME path is
+   * the library's own: it hides the consumer's chrome natively, inside
+   * `onUserLeaveHint()`, and enters PiP from there, because by then no React
+   * commit can land at all.
    */
   enterPip(chapterTitle?: string | null, progressPct?: string | null): boolean;
   /** Exit PiP by bringing the activity to the front. */
@@ -1075,7 +1074,7 @@ export function removeAllListeners(event?: PlayerEventName): void {
 }
 
 /**
- * All 27 player event names — the ONE owner of this list.
+ * All 26 player event names — the ONE owner of this list.
  *
  * `<PlayerProvider>` imports it to subscribe to every event on mount,
  * `removeAllListeners()` iterates it when no event is named, and the
@@ -1109,5 +1108,4 @@ export const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
   'onPipPlayPause',
   'onPipExpand',
   'onPipClose',
-  'onUserLeaveHint',
 ];

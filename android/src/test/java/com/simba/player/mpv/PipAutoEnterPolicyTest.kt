@@ -18,7 +18,7 @@ import java.io.File
  * whole RESOLVED config into a map — and it sat there unread while the
  * README described a feature that could not happen.
  *
- * ## V22 W23 (2026-11-03) — who performs the auto-enter, and why it moved
+ * ## V22 W23 (2026-11-03) - who performs the auto-enter, and why it moved
  *
  * The flag was then made to work by arming the PLATFORM's own switch,
  * `PictureInPictureParams.Builder.setAutoEnterEnabled` (API 31+). That
@@ -28,24 +28,31 @@ import java.io.File
  * That is the wrong order for a consumer that draws its own chrome over
  * the picture. An Activity in PiP is "paused, but rendering" - what stops
  * is REACT: RN pauses the React scheduler when the Activity is paused, so
- * a commit cannot land and no frame is produced. The switch transitions
- * the Activity before the consumer can unmount its chrome, so the chrome
- * is still on screen when the PiP window is created, and with no frame
- * coming it stays. Measured on device on 2026-11-03, the consumer's full
- * expanded chrome (header band, scrub row, ±10 buttons, the big pause
+ * a commit cannot land and no frame is produced. The switch transitions the
+ * Activity before the consumer can unmount its chrome, so the chrome is
+ * still on screen when the PiP window is created, and with no frame
+ * coming it stays there. Measured on device on 2026-11-03, the consumer's
+ * full expanded chrome (header band, scrub row, +/-10 buttons, the big pause
  * button) was painted into the PiP window, its buttons were DEAD (tapping
- * pause did not pause — their views were gone) and its clock was FROZEN at
+ * pause did not pause - their views were gone) and its clock was FROZEN at
  * 51:09 while the real position was 54:15 (the pixels were stale).
  *
- * So the auto-enter is now the CONSUMER's to perform, in the only order
- * that works: remove the chrome, let the frame that drew it go by, and
- * only then ask the OS for the window. The library's job is to say
- * **WHEN** — the `onUserLeaveHint` event — and to keep the params it
- * hands the platform free of the platform's own auto-enter switch.
+ * ## V3.2.0 (2026-11-03) - the entry moved NATIVE, and into the library
  *
- * The public config keeps its meaning: `pip.autoEnterOnLeave: true` still
- * means "enter PiP when the user leaves the app". Only the performer
- * changed.
+ * The next measurement killed the JS-driven entry too. On the HOME path
+ * the JS handler ran immediately, but the effect that would have driven
+ * the entry ran 5.7 s late and the `requestAnimationFrame` never fired:
+ * RN pauses the React scheduler with the Activity, so no React commit can
+ * land and there is no frame clock. The entry had to be NATIVE, inside
+ * `onUserLeaveHint()`, before `onPause`.
+ *
+ * So the LIBRARY performs the entry now: the consumer's Activity hands it
+ * the Activity, the library hides the consumer's chrome natively (a
+ * View-system mutation, so it lands without a React commit) and asks the
+ * OS for the window. The public config keeps its meaning:
+ * `pip.autoEnterOnLeave: true` still means "enter PiP when the user
+ * leaves the app". Only the performer changed - twice - and the
+ * `onUserLeaveHint` event that used to carry the news is retired.
  *
  * ## What this test can and cannot prove
  *
@@ -161,24 +168,47 @@ class PipAutoEnterPolicyTest {
         )
     }
 
-    // ── The consumer is TOLD, not the platform ────────────────────────────
+    // ── The consumer REPORTS the leave, the library performs the entry ────
 
     @Test
-    fun `the bridge tells the CONSUMER that the user is leaving`() {
+    fun `the bridge exposes the NATIVE entry to the consumer's Activity`() {
         val source = bridgeSource().readText()
 
         // The consumer's Activity calls this from `onUserLeaveHint()`.
-        // The consumer then removes its own chrome and enters PiP itself,
-        // in the only order that works.
+        // The library then hides the chrome NATIVELY and asks the OS for
+        // the window itself - in that order, and inside that hook,
+        // because by then no React commit can land.
         assertTrue(
             "the bridge must expose a way for the consumer's Activity to " +
-                "report that the user is leaving",
-            source.contains("fun notifyUserLeaveHint()"),
+                "report that the user is leaving - and it must take the " +
+                "Activity, because the entry happens on it",
+            source.contains("fun notifyUserLeaveHint(activity: Activity): Boolean"),
         )
         assertTrue(
-            "the consumer must be told through the `onUserLeaveHint` event - " +
-                "that is the name the TypeScript event union declares",
+            "the entry must be NATIVE - the JS-driven one could not land in " +
+                "time (measured: the effect ran 5.7 s late and the " +
+                "requestAnimationFrame never fired)",
+            source.contains("activity.enterPictureInPictureMode(pipParams)"),
+        )
+    }
+
+    @Test
+    fun `the onUserLeaveHint EVENT is retired`() {
+        val source = bridgeSource().readText()
+
+        // The library performs the HOME-path entry itself, so the event's
+        // only consumer - a consumer that drove the entry from JS - is the
+        // path the library took over. Leaving the event would be a
+        // double-entry footgun: the OS would refuse the second entry, the
+        // consumer would read that refusal as "PiP failed", and the chrome
+        // would come back over a live PiP window.
+        assertFalse(
+            "the bridge must not emit an `onUserLeaveHint` event any more",
             source.contains("\"onUserLeaveHint\""),
+        )
+        assertFalse(
+            "the event name must not survive anywhere in the bridge",
+            source.contains("emit(\"onUserLeaveHint\""),
         )
     }
 
@@ -186,9 +216,9 @@ class PipAutoEnterPolicyTest {
     fun `the policy is MIRRORED where the companion can read it`() {
         val source = bridgeSource().readText()
 
-        // `notifyUserLeaveHint()` is a COMPANION function: it is called
-        // from the consumer's Activity, which has no reference to the
-        // module instance, so it cannot read the instance field. The
+        // `notifyUserLeaveHint(activity)` is a COMPANION function: it is
+        // called from the consumer's Activity, which has no reference to
+        // the module instance, so it cannot read the instance field. The
         // instance has to write a copy the companion can see — the same
         // pattern `debugLoggingEnabled` uses.
         assertTrue(
@@ -202,13 +232,13 @@ class PipAutoEnterPolicyTest {
     }
 
     @Test
-    fun `the consumer is only told when the policy says yes`() {
+    fun `the entry is only performed when the policy says yes`() {
         val source = bridgeSource().readText()
 
-        // A consumer that does not want auto-enter must not be told to
-        // enter PiP when the user leaves.
+        // A consumer that does not want auto-enter must not get a PiP
+        // window when the user leaves.
         assertTrue(
-            "the companion must check the policy before telling the consumer",
+            "the companion must check the policy before entering PiP",
             source.contains("if (!pipAutoEnterForCompanion)"),
         )
     }
@@ -301,15 +331,21 @@ class PipAutoEnterPolicyTest {
     }
 
     @Test
-    fun `the bridge says out loud that the CONSUMER performs the entry`() {
+    fun `the bridge says out loud that IT performs the entry`() {
         val source = bridgeSource().readText()
 
         // The library ships no Activity, so the consumer's Activity has to
-        // report the leave. The honest thing is to say so, not to leave a
-        // consumer wondering why pressing home does nothing.
+        // report the leave. The honest thing is to say so — in the log —
+        // instead of leaving a consumer wondering why pressing home does
+        // nothing.
         assertTrue(
-            "the bridge must tell the log that the consumer performs the entry",
+            "the bridge must tell the log that it performs the entry",
             source.contains("companion.notifyUserLeaveHint"),
+        )
+        assertTrue(
+            "the log must say what the entry did - the consumer's own chrome " +
+                "was hidden natively, and the OS's answer is what decides",
+            source.contains("companion.notifyUserLeaveHint: entered PiP"),
         )
     }
 

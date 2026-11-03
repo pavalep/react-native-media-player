@@ -1,4 +1,105 @@
 
+## [3.2.0] - 2026-11-03
+
+### Fixed
+
+- **Pressing HOME opened no Picture-in-Picture window at all.** The BUTTON path worked and was
+  proven on emulator-5554 (API 37): the app unmounted its chrome in React, waited one animation
+  frame, and then asked for the window. The HOME path did not — pressing HOME opened no PiP
+  window, and on return the screen was black and chromeless with the consumer's store stuck at
+  `pipActive=true` / `pipEntryRequested=true`.
+
+  The cause was measured, not guessed. `Activity.onUserLeaveHint()` fired and the JS handler ran
+  immediately, but the effect that would have driven the entry ran **5.7 s late** and the
+  `requestAnimationFrame` **never fired**. React Native pauses the React scheduler with the
+  Activity, so a React commit cannot land and there is no frame clock once the Activity is
+  backgrounded. The entry therefore has to be **native**, inside `onUserLeaveHint()`, before
+  `onPause`.
+
+  The library now performs the HOME-path entry itself:
+
+  - the consumer's chrome is hidden with a **native View-system mutation**
+    (`visibility = View.GONE`), which lands without a React commit and without a frame clock;
+  - the PiP parameters are built **after** the hide, by the same builder the JS path uses;
+  - the chrome is restored when Picture-in-Picture ends, and immediately if the OS refuses the
+    entry.
+
+  **Action required:** your Activity has to hand over the Activity.
+
+  ```kotlin
+  // android/app/src/main/java/.../MainActivity.kt
+  override fun onUserLeaveHint() {
+    super.onUserLeaveHint()
+    com.simba.player.mpv.MpvBridgeModule.notifyUserLeaveHint(this)
+  }
+  ```
+
+  If your app draws its own chrome over the picture, give that view a `nativeID` and name it in
+  the config — the library hides that view, and nothing else:
+
+  ```tsx
+  // the chrome root
+  <View nativeID="player-chrome" style={styles.chrome}>{/* your controls */}</View>
+  ```
+
+  ```tsx
+  <PlayerProvider
+    config={{pip: {enabled: true, autoEnterOnLeave: true, chromeNativeId: 'player-chrome'}}}>
+  ```
+
+  The `nativeID` literal belongs to the consumer; the library never hardcodes one of its own.
+  Omit `chromeNativeId` if your app draws no chrome of its own — the library then enters
+  Picture-in-Picture without hiding anything. If the id is set and **no view carries it**, the
+  library **refuses** the entry and logs a warning naming the id: entering PiP with the chrome
+  still mounted paints the app's dead chrome into the PiP window, which is the defect this
+  release exists to fix.
+
+### Removed
+
+- **The `onUserLeaveHint` JS event.** The library now performs the HOME-path Picture-in-Picture
+  entry itself, so the event's only consumer — a consumer that drove the entry from JavaScript —
+  is the path the library took over. Leaving it would be a double-entry footgun: the OS would
+  refuse the second entry, the consumer would read that refusal as "PiP failed", and the chrome
+  would come back over a live PiP window.
+
+  This is a **public API removal**, which is why the release is 3.2.0 and not a patch. The bridge
+  now emits **26** named events; the list has one owner, `ALL_PLAYER_EVENTS` in
+  `src/bridge/MpvPlayerModule.ts`.
+
+### Changed
+
+- `MpvBridgeModule.notifyUserLeaveHint()` is now
+  `notifyUserLeaveHint(activity: Activity): Boolean`. It takes the Activity — the entry happens
+  on it, and the chrome is searched under its window — and returns the OS's own answer:
+  `true` when the Activity entered Picture-in-Picture.
+- **The PiP parameters have ONE owner.** The JS path (`enterPip`) and the native path
+  (`notifyUserLeaveHint`) build them through the same function, so the two cannot drift apart.
+- The native path reports the title from mpv's `media-title` — which IS the title the consumer
+  supplied, because the library writes it as mpv's `force-media-title` before the load — and the
+  percentage from `time-pos` over `duration`, in the consumer's exact `"NN %"` format.
+
+### Documentation
+
+- Five places in this library still carried the false claim that "an Activity in
+  Picture-in-Picture does not redraw". The accurate statement is that an Activity in PiP is
+  **"paused, but rendering"** (AOSP) — the window keeps rendering; what stops is **REACT**,
+  because React Native pauses the React scheduler with the Activity. The ORDER still matters — the
+  PiP window keeps whatever the Activity's window held at the transition — but the REASON was
+  wrong, and a wrong reason sends the next reader looking for the fix in the wrong place.
+  Corrected in `MpvBridgeModule.kt`, `CHANGELOG.md`, `README.md`, `MpvPlayerModule.ts` and
+  `config.ts`.
+
+### Added
+
+- `PipConfig.chromeNativeId` — the `nativeID` of the consumer's chrome root, the view the
+  library hides natively on the HOME path.
+- `PipNativeEntryTest` — 24 guard tests for the native HOME-path entry: the three refusals and
+  the order they come in, the chrome hidden with `GONE` **before** the PiP request, a refused
+  entry restoring the chrome, Picture-in-Picture ending restoring the chrome, the title read from
+  mpv's `media-title`, the percentage read from `time-pos`/`duration` in the consumer's exact
+  `"NN %"` format, one params builder for both paths, and the retired event's absence from the
+  event list.
+
 ## [3.1.0] - 2026-11-03
 
 ### Fixed
@@ -34,7 +135,7 @@
 
 - The README described the **removed** mechanism: Android's own auto-enter switch, an API 31+
   floor for auto-enter, a PiP action receiver "declared in the manifest", and 26 named
-  events where there are 27. It also pointed at a section for "the two lines of Kotlin and
+  events where the bridge had 27. It also pointed at a section for "the two lines of Kotlin and
   the JS that goes with them" that did not contain them. All corrected; the auto-enter
   section now carries the Kotlin and the JS a consumer needs, and explains why the consumer
   performs the entry.
@@ -55,9 +156,11 @@
   `PictureInPictureParams.Builder.setAutoEnterEnabled` (API 31+), which makes
   the SYSTEM transition the activity into PiP when the user leaves the app,
   with the consumer unable to do anything first. That is the wrong order for a
-  consumer that draws its own chrome over the picture, because **an Activity in
-  PiP does not redraw**: whatever its window held at the transition is what
-  the PiP window keeps showing. Measured on device on 2026-11-03, the
+  consumer that draws its own chrome over the picture, because an Activity in
+  PiP is "paused, but rendering" (AOSP) - what stops is REACT: RN pauses the
+  React scheduler with the Activity, so a React commit cannot land and no frame
+  is produced. So whatever its window held at the transition is what the PiP
+  window keeps showing. Measured on device on 2026-11-03, the
   consumer's full expanded chrome was painted into the PiP window, its
   buttons were dead, and its clock was frozen three minutes behind the real
   position.
@@ -70,13 +173,18 @@
   to the `onUserLeaveHint` event in JS; both are in the README's
   Picture-in-Picture section.
 
+  (History: that event is **retired in 3.2.0**, and the entry itself moved
+  into the library — it is performed natively, inside `onUserLeaveHint()`,
+  because by then no React commit can land. See the 3.2.0 entry above.)
+
   A side effect worth knowing: auto-enter now works on **every** API level.
   The platform's switch never existed below Android 12; `onUserLeaveHint()`
   does.
 
-- **`onUserLeaveHint` is the 27th player event.** It is emitted with an empty
-  payload, and only when the auto-enter policy says yes — a consumer that
-  turned auto-enter off is never asked to enter PiP.
+- **`onUserLeaveHint` was the 27th player event.** It was emitted with an
+  empty payload, and only when the auto-enter policy says yes — a consumer that
+  turned auto-enter off was never asked to enter PiP. (The event was removed in
+  3.2.0; the bridge emits 26 events now.)
 
 - **The bridge no longer stashes PiP params on the Activity.**
   `Activity.setPictureInPictureParams` and the helper that pushed them

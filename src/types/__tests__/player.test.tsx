@@ -427,7 +427,7 @@ describe('usePlayer (inside PlayerProvider)', () => {
     expect(result.current.state.durationMs).toBe(0);
   });
 
-  it('subscribes to all 27 mpv events on mount', async () => {
+  it('subscribes to all 26 mpv events on mount', async () => {
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <PlayerProvider>{children}</PlayerProvider>
     );
@@ -445,7 +445,7 @@ describe('usePlayer (inside PlayerProvider)', () => {
     // The count is pinned so the canonical list cannot silently grow
     // or shrink: a new event added to the bridge has to come with a
     // subscription here, and a removed one has to come out of both.
-    expect(BridgeModule.ALL_PLAYER_EVENTS).toHaveLength(27);
+    expect(BridgeModule.ALL_PLAYER_EVENTS).toHaveLength(26);
   });
 
   it('updates state when an onPlaybackStateChanged event fires', async () => {

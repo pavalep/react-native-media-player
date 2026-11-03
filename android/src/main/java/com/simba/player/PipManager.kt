@@ -178,15 +178,16 @@ object PipManager {
         // own state already said `pipActive: true` and `isExpanded:
         // false`.
         //
-        // So auto-enter on leave is the CONSUMER's to perform, in the only
-        // order that works: remove the chrome, let the frame that drew it
-        // go by, and only then ask for the window. The library's part is
-        // to tell the consumer WHEN the user is leaving - the
-        // `onUserLeaveHint` event - and to keep the params it hands the
-        // platform free of the platform's own auto-enter switch.
+        // So auto-enter on leave is performed by the LIBRARY, natively, in
+        // the only order that works: hide the chrome, then ask for the
+        // window. The library's part is to hide the consumer's chrome
+        // natively (a View-system mutation, so it lands without a React
+        // commit) and to keep the params it hands the platform free of
+        // the platform's own auto-enter switch.
         //
-        // The consumer's Activity overrides `onUserLeaveHint()`, which
-        // works on every API level, unlike the platform switch (API 31+).
+        // The consumer's Activity overrides `onUserLeaveHint()` and calls
+        // `MpvBridgeModule.notifyUserLeaveHint(activity)`, which works on
+        // every API level, unlike the platform switch (API 31+).
 
         // Source rect hint for smooth entry animation (Android 12+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && sourceRectHint != null) {

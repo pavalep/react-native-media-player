@@ -145,9 +145,9 @@ Your launcher Activity has to opt in:
 `resizeableActivity="true"` is not optional. An Activity that is not resizeable cannot enter
 Picture-in-Picture.
 
-If `config.pip.autoEnterOnLeave` is on, the Activity also has to forward the platform’s leave
-hint to the library — see [Picture-in-Picture](#picture-in-picture) for the two lines of Kotlin
-and the JS that goes with them.
+If `config.pip.autoEnterOnLeave` is on, the Activity also has to hand the leave hint to the
+library, which performs the Picture-in-Picture entry itself - see
+[Picture-in-Picture](#picture-in-picture) for the two lines of Kotlin that go with it.
 
 ### Background audio
 
@@ -314,7 +314,7 @@ there is no library-owned overlay; the absolutely positioned `View` above is you
 | Section | Fields | Default |
 | --- | --- | --- |
 | `theme` | `accent`, `background`, `text`, `textSecondary`, `surface`, `icon?` | `#FFD700`, `#121216`, `#FFFFFF`, `rgba(255,255,255,0.6)`, `rgba(255,255,255,0.1)` |
-| `pip` | `enabled`, `autoEnterOnLeave` | `true`, `true` |
+| `pip` | `enabled`, `autoEnterOnLeave`, `chromeNativeId?` | `true`, `true`, none |
 | `hardwareDecoding` | `'auto' \| 'mediacodec' \| 'no'` | `'auto'` |
 | `notifications` | `enabled`, `channelId` | `true`, `'simba_player_media'` |
 | `audio` | `backgroundPlayback`, `respectAudioFocus` | `true`, `true` |
@@ -336,8 +336,8 @@ import {PlayerProvider} from '@simba-dev/react-native-media-player';
 ```
 
 The resolved config is pushed to the native bridge as JSON. The native side acts on the PiP
-section (it decides whether your app is told that the user is leaving); the remaining
-sections are values your app reads back with `usePlayerConfig()` and applies itself.
+section (the auto-enter policy, and the `nativeID` of your chrome root); the remaining sections
+are values your app reads back with `usePlayerConfig()` and applies itself.
 `DEFAULT_PLAYER_CONFIG` and `DEFAULT_THEME` are exported if you would rather spread and patch.
 
 
@@ -359,40 +359,81 @@ declare `android:supportsPictureInPicture="true"` (see [Consumer setup](#consume
 **Auto-enter on leave** is `config.pip.autoEnterOnLeave` (default `true`): it means "enter
 Picture-in-Picture when the user leaves the app".
 
-**Your app performs the entry.** The library does not arm Android's own auto-enter switch
-(`PictureInPictureParams.Builder.setAutoEnterEnabled`), because an Activity in
-Picture-in-Picture does not redraw: whatever its window held at the moment of the transition is
-what the PiP window keeps showing. Letting the OS transition the Activity first froze the
-app's own controls into the PiP window, scaled down and dead - measured on device on
-2026-11-03.
-
-So the order is yours to keep: take your chrome off screen, let the frame that drew it go by,
-and only then ask for the window. The library tells you WHEN, with two pieces.
+**The library performs that entry, natively.** Two lines of Kotlin in your Activity:
 
 ```kotlin
 // android/app/src/main/java/.../MainActivity.kt
 override fun onUserLeaveHint() {
   super.onUserLeaveHint()
-  com.simba.player.mpv.MpvBridgeModule.notifyUserLeaveHint()
+  com.simba.player.mpv.MpvBridgeModule.notifyUserLeaveHint(this)
 }
 ```
 
-```ts
-// the consumer's JS - remove your chrome, then ask for the window
-import {subscribePlayerEvent} from '@simba-dev/react-native-media-player';
+The library then hides your chrome, asks the OS for the window, and brings your chrome back when
+Picture-in-Picture ends. It returns whether the OS accepted the entry, so you can log it:
 
-useEffect(() => {
-  return subscribePlayerEvent('onUserLeaveHint', () => {
-    setChromeVisible(false);        // your chrome, your state
-    requestAnimationFrame(() => {
-      commands.enterPip();          // only now
-    });
-  });
-}, [commands]);
+```kotlin
+val entered = com.simba.player.mpv.MpvBridgeModule.notifyUserLeaveHint(this)
 ```
 
-This works on **every** Android version - `onUserLeaveHint()` exists everywhere, and the
-platform's own switch never existed below Android 12.
+### Why it is native, and why your Activity hands over the Activity
+
+`Activity.onUserLeaveHint()` is the only hook Android gives you BEFORE the Activity is paused.
+`onPictureInPictureModeChanged(true)` arrives after `onPause`, which is too late to change what
+the window holds.
+
+And by then, React Native has already paused the React scheduler with the Activity, so a React
+commit cannot land and there is no frame clock. Measured on emulator-5554 (API 37) on 2026-11-03:
+the JS handler ran immediately, the effect that would have driven the entry ran **5.7 s late**, and
+the `requestAnimationFrame` **never fired**. So the entry has to happen in native code, and the
+chrome has to be hidden with a native View-system mutation (`visibility = View.GONE`), which lands
+without a React commit and without a frame clock.
+
+An Activity in Picture-in-Picture is "paused, but rendering" (AOSP) - the window keeps rendering;
+what stops is REACT. So the PiP window keeps whatever your window held at the moment of the
+transition: the chrome has to be GONE before the entry.
+
+### Telling the library which view is your chrome
+
+If your app draws its own chrome over the picture, give that view a `nativeID` and tell the library
+about it:
+
+```tsx
+// the consumer's JS - the chrome root
+<View nativeID="player-chrome" style={styles.chrome}>
+  {/* your controls */}
+</View>
+```
+
+```tsx
+// the consumer's config
+<PlayerProvider
+  config={{
+    pip: {enabled: true, autoEnterOnLeave: true, chromeNativeId: 'player-chrome'},
+  }}>
+  <App />
+</PlayerProvider>
+```
+
+The library finds that view with React Native's own lookup (`ReactFindViewUtil.findView`), under
+your Activity's window decor view, and hides it natively before it asks for the window. The
+`nativeID` literal is yours - the library never hardcodes one of its own.
+
+Omit `chromeNativeId` if your app draws no chrome of its own: the library then enters
+Picture-in-Picture without hiding anything.
+
+**If the `nativeID` is set and no view carries it, the library REFUSES the entry** and logs a
+warning naming the id. Entering Picture-in-Picture with the chrome still mounted paints your dead
+controls into the PiP window, scaled down and dead - that is the defect this path exists to fix, so
+the library declines rather than reproduce it.
+
+The library deliberately does NOT arm Android's own auto-enter switch
+(`PictureInPictureParams.Builder.setAutoEnterEnabled`): that makes the OS transition the Activity
+with no chance to remove your chrome, and the chrome it froze into the PiP window on 2026-11-03 was
+scaled down and dead.
+
+This works on **every** Android version - `onUserLeaveHint()` exists everywhere, and the platform's
+own switch never existed below Android 12.
 
 The two PiP flags combine: auto-enter needs `pip.enabled` and `pip.autoEnterOnLeave` to both be
 true.
@@ -484,7 +525,7 @@ that position in that file. The defaults are 640×360 at quality 80, exported as
 
 `getMpvPlayerModule()` returns the native module, or a no-op stand-in when the native side is
 not wired (Jest, web previews) so consumer code stays renderable.
-`subscribePlayerEvent(name, handler)` subscribes to one of the 27 named events and returns an
+`subscribePlayerEvent(name, handler)` subscribes to one of the 26 named events and returns an
 unsubscribe function; `removeAllListeners()`, `setDebugLogging()` and
 `dumpObservedProperties()` are also exported. The event names are typed as `PlayerEventName`.
 
@@ -501,8 +542,10 @@ before launching, and check `commands.isSurfaceMounted()`.
 
 **Picture-in-Picture does not start.** The Activity is missing
 `android:supportsPictureInPicture="true"` or `android:resizeableActivity="true"`. If auto-enter
-on leave does nothing, the Activity is not forwarding `onUserLeaveHint()` - see
-[Picture-in-Picture](#picture-in-picture).
+on leave does nothing, the Activity is not calling `MpvBridgeModule.notifyUserLeaveHint(this)`
+from `onUserLeaveHint()` - see [Picture-in-Picture](#picture-in-picture). If the log says the
+library refused the entry because no view carries your chrome `nativeID`, the `nativeID` in your
+config does not match the one on the view.
 
 **The Picture-in-Picture action row shows three buttons and none of them work.** That was the
 explicit-broadcast bug, fixed in 3.1.0: the action's PendingIntent named the receiver's
@@ -527,9 +570,9 @@ Call `commands.requestNotificationPermission()`.
 
 - **Android only.** There is no iOS implementation.
 - **No controls.** The library ships none; see [Controls](#controls).
-- **Auto-enter on leave is the consumer's to perform.** The library tells your Activity when the
-  user is leaving; taking your chrome off screen before asking for the window is your app's
-  job, and it has to happen before the Activity is paused.
+- **Auto-enter on leave is performed by the library, from your Activity.** Your Activity hands
+  over the leave hint and the library enters Picture-in-Picture natively, because by then no
+  React commit can land. Your app's own job is the `nativeID` of the chrome the library hides.
 - **Most config sections are consumed in JavaScript.** The native side receives the resolved
   config as JSON and acts on the PiP auto-enter policy; the rest are values your app reads back
   through `usePlayerConfig()`.
