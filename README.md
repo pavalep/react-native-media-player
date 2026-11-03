@@ -198,7 +198,15 @@ import {SimbaVideo} from '@simba-dev/react-native-media-player';
 <SimbaVideo style={{flex: 1}} resizeMode="contain" />;
 ```
 
-`resizeMode` is `'contain' | 'cover' | 'stretch'` and defaults to `'contain'`.
+`resizeMode` is `'contain' | 'cover' | 'stretch'` and defaults to `'contain'`. Each mode is a
+combination of mpv's own properties, and the difference between them is what the picture does
+inside the view:
+
+| `resizeMode` | `video-zoom` | `keepaspect` | `panscan` | What it does |
+| --- | --- | --- | --- | --- |
+| `contain` (default) | `"0"` | `"yes"` | `"0"` | Fits **inside** the view — letterboxed / pillarboxed, aspect kept. |
+| `cover` | `"0"` | `"yes"` | `"1.0"` | **Fills** the view — the overflow is cropped away, aspect kept. |
+| `stretch` | `"0"` | `"no"` | `"0"` | **Fills** the view — aspect ignored. |
 
 ### Drive it
 
@@ -227,6 +235,10 @@ function Controls() {
 directly (`positionMs`, `durationMs`, `isBuffering`, `isSeeking`, `seekable`, `cacheRanges`,
 `cacheFill`).
 
+The buffered ranges are quantised onto the grid the scrub bar is drawn at — the timeline is cut
+into `durationMs / 1000` cells and every boundary is snapped to the nearest cell — so the progress
+context no longer changes on every native cache tick.
+
 ### Optional adapter: resume positions
 
 ```tsx
@@ -243,29 +255,46 @@ position in milliseconds, or `undefined` when there is none.
 **The library draws no controls.** That has been the contract since 2.0.0.
 
 `<DefaultControls>` — the default control bundle the package used to ship — was **removed in
-2.0.0**. The export no longer exists, and `<PlayerRoot>` no longer falls back to it. If you were
-using it, keep your own copy in your app or render your own controls; the library will not supply
-them.
+2.0.0**. The export no longer exists. If you were using it, keep your own copy in your app or
+render your own controls; the library will not supply them.
 
 There are two ways to have chrome, and you can mix them:
 
 1. **Render your own component** wherever you want it, reading `usePlayer()`,
    `usePlayerProgress()` and `useTheme()`. Nothing else is needed.
 2. **Use the `renderControls` slot** on `<PlayerProvider>`. The function returns the tree to draw
-   over the picture, and `<PlayerRoot>` positions it in an absolutely positioned overlay:
+   over the picture. The library draws no overlay for you — you place the controls yourself, in an
+   absolutely positioned `View` over the picture:
 
 ```tsx
+import {StyleSheet, View} from 'react-native';
+import {PlayerProvider, SimbaVideo} from '@simba-dev/react-native-media-player';
+
 <PlayerProvider config={config} renderControls={() => <MyControls />}>
-  <PlayerRoot />
+  <View style={{flex: 1}}>
+    <SimbaVideo style={{flex: 1}} />
+    <View style={StyleSheet.absoluteFill}>
+      <PlayerChrome />
+    </View>
+  </View>
 </PlayerProvider>
 ```
 
 `renderControls` takes no arguments — read what you need from the hooks inside your component.
 The slot is JS-only: it is never sent to the native side. `useRenderControls()` returns the slot,
-or `null` when there is none.
+or `null` when there is none — your own component calls it:
 
-`<PlayerRoot>` renders `<PlayerSurface />` — a transparent `flex: 1` layout placeholder — plus the
-overlay. The picture itself is `<SimbaVideo />`; `<PlayerSurface>` is not the video surface.
+```tsx
+import {useRenderControls} from '@simba-dev/react-native-media-player';
+
+function PlayerChrome() {
+  const renderControls = useRenderControls();
+  return renderControls != null ? renderControls() : null;
+}
+```
+
+The picture is `<SimbaVideo />`. `<PlayerRoot>` and `<PlayerSurface>` were **removed in 3.0.0** —
+there is no library-owned overlay; the absolutely positioned `View` above is yours.
 
 ## Configuration
 
@@ -354,9 +383,7 @@ const theme = useTheme();
 | --- | --- | --- |
 | `<SimbaPlayer>` | `config?`, `resumePolicy?`, `children` | The one-import integration point. Composes `PlayerProvider` + `PlayerResumeProvider`. `resumePolicy: (itemId: string) => number \| undefined`. |
 | `<PlayerProvider>` | `config?`, `renderControls?`, `children` | Resolved config, live player state, and the controls slot. |
-| `<PlayerRoot>` | `launchParams?` | The surface placeholder plus the controls overlay. `launchParams` is a `{uri, title, type, startPositionMs, requestId?}` payload; it is loaded once per `(uri, startPositionMs)` pair. |
 | `<SimbaVideo>` | `resizeMode?` + standard view props | The picture. `resizeMode`: `'contain' \| 'cover' \| 'stretch'`, default `'contain'`. |
-| `<PlayerSurface>` | `backgroundColor?` | A transparent `flex: 1` layout placeholder. Not the video surface. |
 
 ### Hooks
 
@@ -372,7 +399,7 @@ const theme = useTheme();
 | `usePlayItem()` | `({id, uri, title}, {type}) => Promise<boolean>` |
 | `useOpenFromUrl()` | `(uri: string) => Promise<boolean>` — accepts `content://` and `file://` URIs, derives a title, classifies the type and opens it. |
 | `useOpenPlaylist()` | `{openPlaylist(entries, opts?)}` → `Promise<boolean>` |
-| `useLaunchPlayback()` | `(launchParams)` — loads a payload once per `(uri, startPositionMs)` pair. |
+| `useLaunchPlayback()` | `(launchParams)` — loads a payload once per `(requestId, uri, startPositionMs)` triple. The `requestId` is part of the key, so re-launching the same file at the same position with a new `requestId` loads again. |
 | `useQueue()` / `useQueueLength()` / `useQueueItems()` / `useQueueItemsAs()` | The queue store and convenience selectors. |
 | `usePlaybackHistory()` / `usePlaybackHistoryAs()` | The playback history. |
 | `useQueueSelection()` / `useQueueSelectedIndices()` | The selection store. |

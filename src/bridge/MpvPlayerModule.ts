@@ -94,9 +94,11 @@ export interface LaunchParams {
    * every in-window caller needs it.
    *
    * `uri` + `startPositionMs` is not a unique identity for a launch, and
-   * `useLaunchPlayback` keys its load effect on exactly that pair. When
-   * every launch started a fresh `PlayerActivity`, that was sound — a new
-   * React root, so the hook mounted fresh and always fired.
+   * `useLaunchPlayback` keys its load effect on the whole
+   * `requestId | uri | startPositionMs` triple — the `requestId` is part
+   * of the key, not decoration. When every launch started a fresh
+   * `PlayerActivity`, a key without it was sound — a new React root, so
+   * the hook mounted fresh and always fired.
    *
    * That world is gone. Playback now loads into an already-open window, so
    * the hook stays mounted across launches and the same key means the
@@ -110,7 +112,7 @@ export interface LaunchParams {
   readonly requestId?: string;
 }
 
-/** All 23 events emitted by the Kotlin bridge. */
+/** All 26 events emitted by the Kotlin bridge. */
 export type PlayerEventName =
   | 'onFileLoaded'
   | 'onLoadRequested'
@@ -1051,7 +1053,7 @@ export function removeAllListeners(event?: PlayerEventName): void {
   }
 }
 
-/** All 23 player event names — used by `removeAllListeners()` to iterate when no event is specified. */
+/** All 26 player event names — used by `removeAllListeners()` to iterate when no event is specified. */
 const ALL_PLAYER_EVENTS: readonly PlayerEventName[] = [
   'onFileLoaded',
   'onLoadRequested',

@@ -1,5 +1,5 @@
 /**
- * @simba/react-native-media-player — public API surface.
+ * @simba-dev/react-native-media-player — public API surface.
  *
  * The surface is three things:
  *
@@ -10,9 +10,10 @@
  *  - `usePlayerProgress()` — position, duration and the buffer /
  *    cache fields, split out from `usePlayer()` so a scrubber does
  *    not re-render on every volume or track change. The values come
- *    from the native mpv event stream (4 Hz after native
- *    coalescing) plus a one-shot hydration read at mount — there is
- *    no JS-side timer polling the bridge.
+ *    from the native mpv event stream — position at 4 Hz, because the
+ *    native side coalesces `time-pos` at 250 ms — plus a one-shot
+ *    hydration read at mount; there is no JS-side timer polling the
+ *    bridge.
  *  - `<SimbaVideo>` — the video picture. It is an ordinary view in
  *    the consumer's own React tree, so React Native owns the
  *    layout, the z-order and the lifecycle. Playback and
@@ -37,9 +38,7 @@
  *
  * The contract now says what it means: **the library draws no chrome.**
  * A consumer that wants controls renders them, through the
- * `renderControls` slot on `<PlayerProvider>`. `<PlayerRoot>` renders
- * the surface and the consumer's controls, and **nothing else** when
- * `renderControls` is absent.
+ * `renderControls` slot on `<PlayerProvider>`.
  *
  * This is a **breaking** change, hence the major version.
  *

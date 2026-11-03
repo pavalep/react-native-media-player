@@ -23,6 +23,7 @@
     "!android/src/test/",
     "!android/src/main/jniLibs/",
     "assets/",
+    "CHANGELOG.md",
     "LICENSE",
     "README.md",
     "react-native.config.js",

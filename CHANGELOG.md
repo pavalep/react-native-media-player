@@ -130,6 +130,9 @@
   (`no` for stretch), which is a change in the native half and is tracked
   in the consumer app's bug tracker.
 
+  **Superseded by 3.0.3** — `cover` and `stretch` now do what their names
+  say.
+
 ### Removed
 
 - **`PlayerSurface.boundsInWindow()`** — it had no readers left, and it

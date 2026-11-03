@@ -141,11 +141,12 @@ export interface PlaylistEntry {
  * `usePlayerProgress()` is separate from `usePlayer()` so consumers
  * that only need position/duration don't re-render on every
  * `onPropertyChanged('volume')` etc. The provider updates the
- * progress context from the native mpv event stream — position and
- * duration arrive on the property events (4 Hz after native
- * coalescing), and `isBuffering` / `isSeeking` / `seekable` /
- * `cacheRanges` / `cacheFill` each have their own dedicated event —
- * plus a one-shot hydration read at mount.
+ * progress context from the native mpv event stream — position arrives
+ * on the `time-pos` property event, coalesced natively at 250 ms (4 Hz),
+ * while duration arrives on the `duration` property event, which is NOT
+ * coalesced and is forwarded as it arrives — and `isBuffering` /
+ * `isSeeking` / `seekable` / `cacheRanges` / `cacheFill` each have their
+ * own dedicated event — plus a one-shot hydration read at mount.
  */
 export interface PlayerProgress {
   // ── V12 surface (preserved) ───────────────────────────────────────────
@@ -168,6 +169,11 @@ export interface PlayerProgress {
    * has to know that mpv's own `seekable-ranges` is in seconds — the
    * native bridge converts, because it is the only layer that knows which
    * unit a payload carried.
+   *
+   * The published boundaries are SNAPPED to the grid the scrub bar is
+   * drawn at — the timeline cut into `durationMs / 1000` cells, or a fixed
+   * one-second grid when the duration is unknown — so the values are a
+   * rounded grid, not raw mpv readings.
    *
    * Empty when the source exposes no time-space cache information. A byte
    * offset is NOT a time and is never reported here: a range painted from
@@ -919,7 +925,7 @@ export function usePlayer(): UsePlayerResult {
  * volume / track / chapter change.
  *
  * The provider updates the progress context only on:
- *  - the native mpv event stream (position, duration, volume, …)
+ *  - the native mpv event stream (position, duration, …)
  *  - `onBuffering` / `onSeeking` / `onSeekable` / `onCacheState` /
  *    `onCacheFill` events
  *  - a one-shot hydration read at mount

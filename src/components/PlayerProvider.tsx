@@ -185,7 +185,7 @@ function PlayerStateProvider({
 }
 
 /**
- * All 23 player event names. Must match `PlayerEventName` in
+ * All 26 player event names. Must match `PlayerEventName` in
  * `MpvPlayerModule.ts` (and the Kotlin `MpvBridgeModule.kt`
  * `RCTDeviceEventEmitter` strings).
  *
@@ -488,7 +488,7 @@ export interface PlayerProviderProps {
  *  - **Initial hydration** (mount): synchronous bridge getters fill in
  *    position / duration / playback state / volume / mute / speed /
  *    loop / playlist / tracks / chapters / video params.
- *  - **Event subscriptions** (mount): all 22 mpv events are subscribed
+ *  - **Event subscriptions** (mount): all 26 mpv events are subscribed
  *    via `subscribePlayerEvent` and dispatched to `applyPlayerEvent`.
  *  - **Mount-time level seeds** (mount): `seekable` and `mute` are read once
  *    via the sync `getProperty` getter, because mpv emits those two as
@@ -629,7 +629,7 @@ export function PlayerProvider({
       console.warn('[simba-player] hydratePlayerState failed:', e);
     }
 
-    // ── 2. Subscribe to all 22 mpv events ───────────────────────────────
+    // ── 2. Subscribe to all 26 mpv events ───────────────────────────────
     // Each event handler reads the current state + progress from the
     // refs, applies the patch via the pure `applyPlayerEvent`
     // reducer, writes back to the refs, and schedules a re-render
