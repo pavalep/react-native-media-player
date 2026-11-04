@@ -209,8 +209,8 @@ class MpvRenderView(context: Context) : SurfaceView(context),
             return
         }
         // The rect moved, so the PiP params — which carry this rect as the
-        // source rect hint the platform crops the app's window to — are
-        // stale. The bridge re-commits them.
+        // source rect hint the PiP window ANIMATES FROM — are stale. The
+        // bridge re-commits them.
         MpvBridgeModule.onPictureBoundsChanged()
     }
 

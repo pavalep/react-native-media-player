@@ -235,54 +235,41 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
          * Mirrors the companion sendEvent pattern from
          * https://yor-dev.com/react-native-picture-in-picture-native-in-android/
          *
-         * ## The chrome is hidden HERE, and not where the window is asked for
+         * ## The chrome is hidden in the ENTRY, and this callback only restores it
          *
-         * `Activity.onUserLeaveHint()` is called as part of the Activity's
-         * PAUSE transaction. There is NO frame between the hide and the
-         * pause, so a `visibility = View.GONE` applied there never reaches
-         * the pixels: the PiP window is built from the window's LAST
-         * RENDERED BUFFER, and that buffer still holds the chrome.
-         * Measured on emulator-5554 (API 37) on 2026-11-03: the native
-         * hide ran ~40 ms before the OS was asked for the window, and the
-         * PiP window still showed the app's full expanded chrome, scaled
-         * down, with dead buttons.
+         * The chrome is hidden in `notifyUserLeaveHint(activity)` — the
+         * entry — BEFORE the window is asked for. That is the only moment a
+         * hide can reach the pixels: the PiP window IS the Activity's own
+         * window, and it shows that window's LAST RENDERED FRAME.
          *
-         * By the time this callback runs, the platform HAS entered PiP and
-         * the Activity's window IS the PiP window - so the hide is painted.
+         * Measured on emulator-5554 (API 37) on 2026-11-04: with the hide
+         * in `onPictureInPictureModeChanged(true)` — AFTER the platform had
+         * already transitioned the window — the PiP window showed the app's
+         * FULL expanded chrome, scaled down, with a frozen clock.
          *
-         * ## Two mechanisms keep the app's chrome out of the PiP window,
-         * and this callback is the SECOND of them
+         * So the hide here is a SECOND line of defence, not the mechanism:
+         * by the time this callback runs, the platform has already entered
+         * PiP and the window is already frozen.
          *
-         * 1. **The crop (primary).** The platform CROPS the app's window to
-         *    the rect in `PictureInPictureParams.setSourceRectHint(...)`
-         *    and scales that crop into the PiP window. The library
-         *    commits that hint EARLY — `Activity.setPictureInPictureParams
-         *    (...)` — and keeps it current, and the hint is the region of
-         *    the window the VIDEO occupies. So the chrome around the video
-         *    is cropped away by the platform itself. (Google's own
-         *    `androidx.core-pip` does exactly this: it tracks the player
-         *    view's bounds and feeds them as the source rect.)
-         * 2. **The hide (second line of defence, and this callback).** The
-         *    chrome the app draws OVER the video — the big pause button,
-         *    the scrub row — is INSIDE the crop, so the crop cannot remove
-         *    it. It is removed here.
+         * ## There is NO crop
          *
-         * ## Why the hide happens HERE and not where the window is asked for
+         * The 3.2.0 and 3.3.0 releases of this library claimed that the
+         * platform "CROPS the app's window to the rect in
+         * `setSourceRectHint(...)`" and that this crop is what keeps the
+         * app's chrome out of the PiP window. **That is false.**
+         * `setSourceRectHint` is a TRANSITION hint: it tells the platform
+         * which region of the window the PiP window should animate FROM.
+         * It does not crop anything. Measured on emulator-5554 (API 37) on
+         * 2026-11-04: with the hint committed, the PiP window showed the
+         * app's full chrome, scaled down.
          *
-         * `Activity.onUserLeaveHint()` is called as part of the Activity's
-         * PAUSE transaction. There is NO frame between the hide and the
-         * pause, so a `visibility = View.GONE` applied there never reaches
-         * the pixels: the PiP window is built from the window's LAST
-         * RENDERED BUFFER, and that buffer still holds the chrome.
-         * Measured on emulator-5554 (API 37) on 2026-11-03: the native
-         * hide ran ~40 ms before the OS was asked for the window, and the
-         * PiP window still showed the app's full expanded chrome, scaled
-         * down, with dead buttons.
+         * The chrome is kept out by HIDING it before the entry.
          *
-         * By the time this callback runs, the platform HAS entered PiP and
-         * the Activity's window IS the PiP window — and the platform's own
-         * documentation says the activity is in a "paused, but rendering"
-         * state there, so an invalidation made now IS drawn.
+         * ## Why the restore still happens here
+         *
+         * The chrome comes back when PiP ends, and it comes back EVEN IF
+         * the React instance is gone: the view is a native one, and the app
+         * is showing it (or not showing it) either way.
          *
          * @param newConfig the platform's new configuration. It is logged
          *        (it carries the PiP WINDOW's size in dp) and the work is
@@ -660,9 +647,12 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                 chapterTitle = chapterTitle ?: nativeTitle() ?: DEFAULT_PIP_TITLE,
                 progressPercentage = progressPct ?: nativeProgressPct() ?: DEFAULT_PIP_PROGRESS,
                 playing = isPlaying(),
-                // Auto-enter is armed ONLY while media is loaded: the
-                // platform would otherwise throw the user into a PiP
-                // window of a stopped session.
+                // The CONSUMER'S POLICY: whether the Activity may enter PiP
+                // when the user leaves the app. It is checked by the library
+                // before it enters, and it is NOT a platform switch - the
+                // platform's own auto-enter switch is never armed, because
+                // the platform would transition the window before the app
+                // could hide its chrome.
                 autoEnter = isMediaLoaded(),
             )
         }
@@ -670,9 +660,10 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         /**
          * Whether the engine is playing right now.
          *
-         * Read from mpv's `playback-state` at the moment of use, never
-         * from a JS flag: the PiP action's icon has to be true even when
-         * the app is paused and no JS is running.
+         * Read from mpv's REAL properties (`idle-active`, `eof-reached`,
+         * `pause`) at the moment of use, and never from a JS flag: the PiP
+         * action's icon has to be true even when the app is paused and no
+         * JS is running.
          */
         private fun isPlaying(): Boolean {
             // ONE owner: `PlaybackState`, which reads mpv's REAL
@@ -760,10 +751,11 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
          * Whether mpv currently has media loaded.
          *
          * Read live through [PlaybackHost] — never from a JS flag, which
-         * can be stale by the time the user presses HOME. The question
-         * is mpv's own `playback-state`: `idle` and `stopped` are its
-         * "no media" states, and everything else (`loading`, `play`,
-         * `pause`, `eof-reached`) means something is still loaded.
+         * can be stale by the time the user presses HOME. The question is
+         * answered by mpv's REAL properties (`idle-active`, `eof-reached`,
+         * `pause`), and the vocabulary is the one the library has always
+         * published: `idle` and `stopped` mean no media, and `paused` and
+         * `playing` mean something is still loaded.
          */
         private fun isMediaLoaded(): Boolean {
             // ONE owner: `PlaybackState`, which reads mpv's REAL
@@ -854,15 +846,25 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
          * ## What the rect is, and what the platform does with it
          *
          * Android's `setSourceRectHint` wants the region of the window where
-         * the video is. The platform CROPS the app's window to that rect and
-         * scales the crop into the PiP window — which is what keeps the
-         * app's chrome out of the PiP window, because the chrome around the
-         * video is outside the crop.
+         * the video is, so the PiP window can ANIMATE FROM the picture
+         * instead of from a black rectangle.
+         *
+         * **It does NOT crop the app's window.** The 3.2.0 and 3.3.0
+         * releases of this library claimed it did, and that the crop is
+         * what keeps the app's chrome out of the PiP window. That claim is
+         * false and is retracted in 3.3.2: `setSourceRectHint` is a
+         * TRANSITION hint — the region the PiP window animates FROM — and
+         * nothing more. Measured on emulator-5554 (API 37) on 2026-11-04:
+         * with the hint committed, the PiP window showed the app's FULL
+         * chrome, scaled down.
+         *
+         * The chrome is kept out by HIDING it before the entry, in native
+         * code — see `notifyUserLeaveHint(activity)`.
          *
          * It is **not** the picture view's box. The picture fills its lane
-         * (`StyleSheet.absoluteFill`), so the view's rect is the whole window,
-         * and hinting that would crop the whole window into the PiP window —
-         * the app's chrome included, scaled down. The rect has to be the
+         * (`StyleSheet.absoluteFill`), so the view's rect is the whole window
+         * — and hinting that would animate the PiP window out of the whole
+         * screen rather than out of the picture. The rect has to be the
          * video's FRAME inside the view: the largest rect of the video's own
          * shape that fits inside it, or the whole view when the picture is
          * filling it.
@@ -1477,9 +1479,10 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         ensurePtr()
         Log.i(TAG, "[PlaybackTrace][Bridge][stop] ptr=$nativePtr")
         MPVLib.nativeStop(nativePtr)
-        // A stopped session has no media, so the auto-enter switch has to
-        // be disarmed: the platform must not throw the user into a PiP
-        // window of a stopped session.
+        // A stopped session has no media, so the entry is refused: the
+        // library must not throw the user into a PiP window of a stopped
+        // session. The platform's own auto-enter switch is not armed at
+        // all, so there is no platform path to a PiP window either.
         onPlaybackStateChanged()
     }
 
@@ -3040,12 +3043,11 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             pipAutoEnter = desired
             // The policy is remembered so `notifyUserLeaveHint(activity)`
             // knows whether to enter PiP at all. The platform's OWN
-            // auto-enter switch is NOT armed: the system would transition
-            // the activity before the chrome could be hidden, and React
-            // cannot commit a frame while the Activity is paused - so the
-            // chrome would be still mounted in the PiP window, dead and
-            // scaled down. See `PipManager.buildPipParams` for the
-            // measurement.
+            // auto-enter switch is NOT armed: the platform transitions the
+            // window through the Shell transition and the app's hooks are
+            // never consulted, so the chrome would still be mounted when
+            // the window was captured - dead and scaled down. See
+            // `PipManager.buildPipParams` for the measurement.
             pipAutoEnterForCompanion = desired
         } catch (t: Throwable) {
             // Never let this reject the `setConfig` promise: the config
@@ -3135,7 +3137,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         // while the Activity is paused.
         rememberPipActivity(activity)
         // The params are committed BEFORE the window is requested, so the
-        // platform has the source rect hint it crops the app's window to.
+        // platform has the source rect hint it ANIMATES FROM.
         commitPipParams(activity)
         // The params are built and the window is requested by the
         // companion's ONE builder - the same one the native HOME path

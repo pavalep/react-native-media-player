@@ -17,12 +17,21 @@ import androidx.annotation.RequiresApi
  * Manages Android Picture-in-Picture (PiP) overlay actions and parameters
  * for the `PlayerActivity` in `@simba/react-native-media-player`.
  *
+ * v3.3.1:
+ *  - ONE owner for the playback state: `PlaybackState`, which reads mpv's
+ *    REAL properties (`idle-active`, `eof-reached`, `pause`)
+ *  - The platform's own auto-enter switch is NOT armed - the app owns the
+ *    entry, and the chrome is hidden IN THE ENTRY, before the window is
+ *    asked for
+ *  - The source-rect hint is a TRANSITION hint, not a crop - the crop
+ *    claim is retracted
+ *
  * v3.3.0:
  *  - ONE RemoteAction: [Play/Pause], with a state-driven icon
  *  - Notification text with chapter title + progress percentage (Android 12+)
  *  - No NEXT/PREV actions (removed for simplicity)
  *  - The platform's own auto-enter switch, armed only while media is loaded
- *    (Android 12+)
+ *    (Android 12+) - RETRACTED in 3.3.1: the switch is not armed at all
  *
  * ## Who owns the action receiver
  *
@@ -99,9 +108,11 @@ object PipManager {
      * @param progressPercentage Percentage string like "45%" for notification text (Android 12+).
      * @param playing            Whether the video is playing right now — it picks
      *                           the action's icon.
-     * @param autoEnter          Whether the platform may enter PiP by itself when
-     *                           the user leaves the app (Android 12+). Armed only
-     *                           while media is loaded.
+     * @param autoEnter          Whether the Activity may enter PiP by itself when
+     *                           the user leaves the app. This is a CONSUMER
+     *                           POLICY, checked by the library before it enters -
+     *                           it is NOT a platform switch, and the platform's
+     *                           own auto-enter switch is never armed.
      */
     fun buildPipParams(
         context: Context,

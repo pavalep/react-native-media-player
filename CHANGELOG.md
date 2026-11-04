@@ -1,4 +1,65 @@
 
+## [3.3.2] - 2026-11-04
+
+### Retracted
+
+- **"The platform crops your window to the rect in `setSourceRectHint(...)`."** The 3.3.1
+  release retracted this claim in the README and in the CHANGELOG, but **four places in the
+  library's SOURCE still asserted it**, and one of them was in the TypeScript API docs every
+  consumer reads:
+
+  - `MpvBridgeModule.kt` — the docblock of `onPictureInPictureModeChanged` (*"Two mechanisms …
+    1. **The crop (primary).** The platform CROPS the app's window …"*), the docblock of
+    `pipSourceRectInWindow()` (*"The platform CROPS the app's window to that rect … which is
+    what keeps the app's chrome out of the PiP window"*), and an inline comment.
+  - `MpvRenderView.kt` — an inline comment.
+  - `src/types/config.ts` — the `autoEnterOnLeave` docblock, which also claimed that the library
+    *"arms Android's own auto-enter switch (`PictureInPictureParams.Builder
+    .setAutoEnterEnabled`), but ONLY while media is loaded"*. **That is false too**: the switch
+    is **not armed at all**, because the platform's auto-enter transitions the window through the
+    Shell transition and the app's hooks are never consulted.
+
+  All five now say what is true: `setSourceRectHint` is a **TRANSITION hint** — the region the
+  PiP window animates **from** — and the app's chrome is kept out by **hiding it before the
+  entry**, in native code.
+
+  **A retraction that leaves the wrong claim standing in the source is not a retraction.** The
+  claim is now pinned by a test (`PipSourceRectClaimTest`): no shipped file may assert the crop,
+  and a block that quotes the old claim has to say that it is false.
+
+- **Two more stale prose claims, found by the same sweep.** The 3.3.1 release's own guard read
+  the library's **code** with the comments stripped, so a docblock that contradicted the code was
+  invisible to it. Two families survived into the published package:
+
+  - `MpvBridgeModule.kt` — the docblock of `isPlaying()` said *"Read from mpv's `playback-state`
+    at the moment of use"*. `playback-state` is **not an mpv property** — that is the whole reason
+    the PiP play/pause button was inert — so the docblock described a read that does not exist and
+    never did.
+  - `MpvBridgeModule.kt` and `PipManager.kt` — six places still described the library as **arming
+    the platform's auto-enter switch** *"only while media is loaded"*. The switch is not armed at
+    all; `autoEnter` is a **consumer policy** the library checks before it enters.
+
+  Both families are corrected, and both are now pinned by a test (`PiPFactClaimTest`).
+
+### Added
+
+- `PipSourceRectClaimTest` — a plain-JUnit guard (no device, no Robolectric, no network) that
+  fails if any source file, or the shipped README, asserts that the platform crops the app's
+  window. It also asserts that the scan **reaches** the files the claim lived in, because a
+  guard that silently covers nothing is not a guard.
+- `PiPFactClaimTest` — the same shape for the other two PiP facts: no file may claim that the
+  library arms the platform's auto-enter switch, and no file may claim the playback state is read
+  from `playback-state`.
+- `ClaimScan` — the shared scanner behind both, so a third guard does not have to re-implement
+  "what counts as a paragraph" and get it subtly different.
+
+### Changed
+
+- **Nothing behavioural.** 3.3.2 is a documentation-and-guard release: the runtime behaviour is
+  exactly 3.3.1's. If you are on 3.3.1, you do not need 3.3.1's successor for behaviour — but
+  3.3.1's README is the shipped documentation, and a false claim in it is a false claim in
+  every install.
+
 ## [3.3.1] - 2026-11-04
 
 ### Fixed

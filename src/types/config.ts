@@ -65,15 +65,18 @@ export interface PipConfig {
    * immediately, the effect that would have driven the entry ran 5.7 s late,
    * and the `requestAnimationFrame` never fired.
    *
-   * On Android 12+ the library also arms Android's own auto-enter switch
-   * (`PictureInPictureParams.Builder.setAutoEnterEnabled`), but ONLY while
-   * media is loaded — and it commits the PiP params to the Activity early,
-   * because the platform builds the PiP window from the LAST COMMITTED params
-   * and crops the app's window to their source rect hint. That crop is what
-   * keeps the app's chrome out of the PiP window.
+   * On Android 12+ the library does **NOT** arm Android's own auto-enter
+   * switch (`PictureInPictureParams.Builder.setAutoEnterEnabled`): the
+   * platform's auto-enter transitions the window through the Shell
+   * transition, the app's hooks are never consulted, and the app's chrome
+   * ends up in the PiP window. The app owns the entry instead — see the
+   * README's Picture-in-Picture section.
    *
-   * See the README's Picture-in-Picture section for how the two mechanisms
-   * fit together.
+   * The library commits the PiP params to the Activity early, because the
+   * platform builds the PiP window from the LAST COMMITTED params. The
+   * source rect hint among them is a TRANSITION hint — the region the PiP
+   * window ANIMATES FROM — not a crop. The app's chrome is kept out of the
+   * PiP window by hiding it before the entry, in native code.
    */
   autoEnterOnLeave: boolean;
   /**
