@@ -22,23 +22,26 @@ import java.io.File
  *
  * Two things, and neither of them was "the library forgot to hide the chrome":
  *
- * 1. **The crop never happened.** The platform CROPS the app's window to the
- *    rect in `PictureInPictureParams.setSourceRectHint(...)` and scales that
- *    crop into the PiP window. The hint has to be in the LAST COMMITTED
- *    params — `Activity.setPictureInPictureParams(...)` — and this library
- *    only handed params over at the entry moment. A hint that is only handed
- *    over at the entry moment never crops anything: the PiP window shows the
- *    WHOLE window, scaled down. That is exactly what was measured.
+ * 1. **THE CROP WAS NEVER A MECHANISM.** This file used to say that the
+ *    platform "CROPS the app's window to the rect in
+ *    `PictureInPictureParams.setSourceRectHint(...)`". That was WRONG, and
+ *    the device disproved it: on emulator-5554 (API 37) on 2026-11-04, with
+ *    the hint committed, the PiP window showed the app's FULL chrome,
+ *    scaled down. `setSourceRectHint` is a TRANSITION hint — it tells the
+ *    platform which region of the window the PiP window should animate
+ *    FROM. It does not crop anything.
  *
- * 2. **The hide could not reach the pixels.**
- *    `Activity.onUserLeaveHint()` is called as part of the Activity's PAUSE
- *    transaction, and there is no frame between the hide and the pause. The
- *    PiP window is built from the window's last rendered buffer, and that
- *    buffer still held the chrome.
+ * 2. **The app's hooks were never called.** With the platform's
+ *    auto-enter switch armed, the platform transitions the window itself,
+ *    through the Shell transition, and the app is not consulted.
+ *    `Activity.onUserLeaveHint()` did not fire at all on a HOME press
+ *    (measured: zero log lines) and the PiP window showed the app's full
+ *    chrome, scaled down.
  *
- * So the chrome is now hidden from `onPictureInPictureModeChanged(true)` —
- * after the platform has entered PiP — and the params are committed early and
- * kept current.
+ * So the chrome is now hidden BEFORE the window is asked for, from
+ *    `Activity.onPictureInPictureRequested()` — AOSP's own PiP entry hook,
+ *    which is called while the Activity is still RESUMED — and the
+ *    platform's auto-enter switch is not armed.
  *
  * ## What this test can and cannot prove
  *
@@ -158,7 +161,7 @@ class PipPiPWindowTest {
     // ── Auto-enter (Android 12+) ───────────────────────────────────────────
 
     @Test
-    fun `auto-enter is armed only while media is loaded`() {
+    fun `the platform's auto-enter switch is NOT armed`() {
         val code = code(bridgeSource().readText())
         val manager = code(pipManagerSource().readText())
 
@@ -166,14 +169,13 @@ class PipPiPWindowTest {
             "the params builder must accept the auto-enter flag",
             manager.contains("autoEnter: Boolean"),
         )
-        assertTrue(
-            "the platform's switch must be armed from the params - " +
-                "`setAutoEnterEnabled` is API 31+",
-            manager.contains("builder.setAutoEnterEnabled(true)"),
-        )
-        assertTrue(
-            "the switch is API 31+, so it must be gated on that",
-            manager.contains("Build.VERSION_CODES.S && autoEnter"),
+        assertFalse(
+            "the platform's auto-enter switch must NOT be armed - it " +
+                "transitions the window itself, through the Shell " +
+                "transition, and the app's own hooks are never called: " +
+                "`onUserLeaveHint()` did not fire at all on a HOME press " +
+                "(measured on emulator-5554, API 37, 2026-11-04)",
+            manager.contains("setAutoEnterEnabled(true)"),
         )
         assertTrue(
             "the flag must be the media-loaded fact - a PiP window of a " +
@@ -183,25 +185,21 @@ class PipPiPWindowTest {
     }
 
     @Test
-    fun `the HOME path does NOT ask for the window on API 31+`() {
+    fun `the HOME path asks for the window on EVERY API level`() {
         val body = leaveHintBody()
 
-        val api31 = body.indexOf("VERSION_CODES.S")
-        val request = body.indexOf("enterPictureInPicture(")
-
-        assertTrue("the API 31+ branch must exist", api31 >= 0)
+        val request = body.indexOf("enterPictureInPicture(activity)")
         assertTrue("the explicit request must exist", request >= 0)
-        assertTrue(
-            "on API 31+ the platform's own auto-enter performs the entry, and " +
-                "ATMS refuses the explicit call while the switch is armed " +
-                "('auto-enter should take in place instead') - so the explicit " +
-                "request must be skipped there",
-            api31 in 0 until request,
-        )
-        assertTrue(
-            "the API 31+ branch must return before the explicit request",
-            body.substringAfter("VERSION_CODES.S").substringBefore("enterPictureInPicture(")
-                .contains("return true"),
+
+        // There must be NO API-31+ branch that returns before the
+        // request: the explicit entry is the only entry, because the
+        // platform's auto-enter never calls the app's hooks.
+        assertFalse(
+            "there must be no API-31+ branch that skips the explicit " +
+                "request - the platform's auto-enter does the transition " +
+                "without ever calling the app, and the chrome is then " +
+                "still mounted when the window is frozen",
+            body.contains("VERSION_CODES.S"),
         )
     }
 
@@ -304,9 +302,9 @@ class PipPiPWindowTest {
             .substringBefore("private fun ")
 
         assertFalse(
-            "the release must not resize the surface - the platform crops and " +
-                "scales the existing surface, and changing its bounds on top " +
-                "of that double-scales the picture",
+            "the release must not resize the surface - the platform lays the " +
+                "existing surface out in the PiP window, and changing its " +
+                "bounds on top of that double-scales the picture",
             publish.contains("layout("),
         )
         assertFalse(
@@ -316,23 +314,28 @@ class PipPiPWindowTest {
         )
     }
 
-    // ── The chrome: hidden in the mode-changed callback ────────────────────
+    // ── The chrome: hidden BEFORE the window is asked for ──────────────────
 
     @Test
-    fun `the chrome is hidden in the MODE-CHANGED callback, not in the request path`() {
+    fun `the chrome is hidden BEFORE the window is asked for`() {
         val request = leaveHintBody()
         val modeChanged = modeChangedBody()
 
-        assertFalse(
-            "the request path must NOT hide the chrome - there is no frame " +
-                "between the hide and the pause, so the hide never reaches the " +
-                "pixels",
-            request.contains("visibility = View.GONE"),
+        val hide = request.indexOf("hideConsumerChrome()")
+        val ask = request.indexOf("enterPictureInPicture(activity)")
+
+        assertTrue("the request path must hide the chrome", hide >= 0)
+        assertTrue("the request path must ask for the window", ask >= 0)
+        assertTrue(
+            "the chrome must be hidden BEFORE the window is asked for - the " +
+                "PiP window IS the Activity's own window, so whatever the " +
+                "chrome draws is what the PiP window shows",
+            hide < ask,
         )
         assertTrue(
-            "the mode-changed callback must hide the chrome - the platform has " +
-                "entered PiP by then, and the activity is 'paused, but " +
-                "rendering', so the invalidation is drawn",
+            "the mode-changed callback keeps hiding the chrome too - it is " +
+                "the second line of defence for the consumer's own button " +
+                "path",
             modeChanged.contains("hideConsumerChrome()"),
         )
         assertTrue(
@@ -361,9 +364,10 @@ class PipPiPWindowTest {
         )
         assertFalse(
             "the request path must not refuse the entry over the chrome - " +
-                "the chrome block is a diagnostic there, and the entry goes on",
+                "a chrome that is not there means it is ALREADY hidden, and " +
+                "the entry goes on",
             leaveHintBody()
-                .substringAfter("if (chromeNativeId != null) {")
+                .substringAfter("hideConsumerChrome()")
                 .substringBefore("rememberPipActivity(activity)")
                 .contains("return false"),
         )

@@ -1,4 +1,52 @@
 
+## [3.3.1] - 2026-11-04
+
+### Fixed
+
+- **The Picture-in-Picture play/pause button did nothing.** The action reached the library's
+  receiver, the receiver logged "play/pause: played", and the picture kept moving: the button
+  looked alive and did nothing. Measured on emulator-5554 (API 37) on 2026-11-04.
+
+  The cause was that the receiver read mpv's `playback-state` — **a property mpv does not
+  have**. It is absent from mpv's own manuals (`DOCS/man/options.rst`, `DOCS/man/mpv.rst`) and
+  from mpv's source (`player/command.c`: `"playback-state"` appears ZERO times, while
+  `"idle-active"`, `"eof-reached"`, `"pause"` and `"playback-time"` all appear). The read
+  failed, the native helper returned the JSON literal `null`, and "null" is neither "play" nor
+  "idle" — so every answer was wrong in the same direction: the receiver always believed the
+  video was stopped and called PLAY on an already-playing video.
+
+  The same broken read was in three other places — the PiP action's icon, the library's own
+  media check, and the consumer app's media check — so "media is loaded" was true for every
+  value. All four now go through **one** owner, `PlaybackState`, which reads mpv's real
+  properties and derives the same vocabulary the library has always published:
+  `idle` / `stopped` / `paused` / `playing`.
+
+- **The Picture-in-Picture window showed the app's full chrome on the HOME path.** The platform
+  transitions the window itself when the auto-enter switch is armed, and it does that through
+  the Shell transition: the app's hooks are never consulted. `Activity.onUserLeaveHint()` did
+  **not fire at all** on a HOME press (measured on emulator-5554, API 37, 2026-11-04 — zero log
+  lines) and the PiP window showed the app's full expanded chrome, scaled down.
+
+  The entry now runs from `Activity.onPictureInPictureRequested()` — AOSP's own PiP entry hook —
+  which is called while the Activity is still **RESUMED**. That matters twice over:
+  `Activity.enterPictureInPictureMode()` throws `IllegalStateException` unless the Activity is
+  resumed, and the app is still drawing, so the chrome-less window is presented before the
+  platform transitions it. The chrome is now hidden **in the entry, before the window is asked
+  for** — hiding it afterwards, from `onPictureInPictureModeChanged(true)`, was too late.
+
+  The platform's auto-enter switch is **not armed**. With it armed there is no pre-transition
+  hook to use, and ATMS refuses an explicit entry while it is enabled ("auto-enter should take
+  in place instead").
+
+### Retracted
+
+- **"The platform crops your window to the rect in `setSourceRectHint(...)`."** This was
+  published in the 3.2.0 and 3.3.0 READMEs and CHANGELOGs, and it is **false**.
+  `setSourceRectHint` is a **transition hint**: it tells the platform which region of your window
+  the PiP window should animate FROM. It does not crop anything. Measured on emulator-5554 (API
+  37) on 2026-11-04: with the hint committed, the PiP window showed the app's **full** chrome,
+  scaled down. The chrome is kept out by hiding it before the entry, not by a crop.
+
 ## [3.3.0] - 2026-11-04
 
 ### Fixed
@@ -15,6 +63,12 @@
   transaction, and there is **no frame between the hide and the pause**. The PiP window is built
   from the window's last rendered buffer, and that buffer still held the chrome. The chrome was
   hidden and stayed visible.
+
+  **3.3.0's own claim is retracted by 3.3.1.** The crop mechanism described below is NOT a
+  mechanism: `setSourceRectHint` is a transition hint, not a crop, and the device disproved it.
+  3.3.1 replaces this whole mechanism with hiding the chrome before the entry, from
+  `Activity.onPictureInPictureRequested()`. The text below is kept as the historical record of
+  what 3.3.0 believed, and it is WRONG.
 
   Two mechanisms keep the app's chrome out of the PiP window now, and they are layered:
 

@@ -369,6 +369,23 @@ override fun onUserLeaveHint() {
 }
 ```
 
+On Android 12+ (API 31+) there is a **better** hook, and it is the one that matters:
+
+```kotlin
+override fun onPictureInPictureRequested(): Boolean {
+  com.simba.player.mpv.MpvBridgeModule.notifyUserLeaveHint(this)
+  return true
+}
+```
+
+Return `true`. AOSP's contract for that return value is "true if the activity received this
+callback regardless of if it acts on it or not", and `false` sends the framework down the legacy
+`onUserLeaveHint()` path instead.
+
+**Keep both.** `onPictureInPictureRequested()` is API 31+; `onUserLeaveHint()` is the API 24-30
+path. The same library call serves both, so there is one entry and one owner. Why the API 31+
+hook matters is in [Why it is native](#why-it-is-native-and-why-your-activity-hands-over-the-activity).
+
 The library then asks the OS for the window, hides your chrome, and brings your chrome back when
 Picture-in-Picture ends. It returns whether the OS accepted the entry, so you can log it:
 
@@ -378,36 +395,53 @@ val entered = com.simba.player.mpv.MpvBridgeModule.notifyUserLeaveHint(this)
 
 ### Why it is native, and why your Activity hands over the Activity
 
-`Activity.onUserLeaveHint()` is the only hook Android gives you BEFORE the Activity is paused.
+Two reasons, and they are different.
 
-And by then, React Native has ALREADY frozen, in two ways: `FabricUIManager.onHostPause()`
-removes the DISPATCH_UI frame callback, so mount items are never applied to native views, and
+**React Native has frozen by then.** `FabricUIManager.onHostPause()` removes the DISPATCH_UI
+frame callback, so mount items are never applied to native views, and
 `JavaTimerManager.onHostPause()` freezes the timer registry, so `requestAnimationFrame` never
 fires. The JS runtime itself keeps running. Measured on emulator-5554 (API 37) on 2026-11-03: the
 JS handler ran immediately, the effect that would have driven the entry ran **5.7 s late**, and
 the `requestAnimationFrame` **never fired**. So the entry has to happen in native code.
 
-While the Activity is paused, the app window's **UI layer** stops producing frames, while a
-`SurfaceView` keeps compositing. That is why the chrome is hidden from
-`onPictureInPictureModeChanged(true)` and not from `onUserLeaveHint()`: `onUserLeaveHint()` is
-called as part of the Activity's PAUSE transaction, and there is **no frame between the hide and
-the pause** — a hide applied there never reaches the pixels. (The 3.2.0 release claimed otherwise;
-the 3.3.0 release retracted it.)
+**And on API 31+ the platform's own hooks are the wrong ones.** `Activity.onUserLeaveHint()`
+used to be described as "the only hook Android gives you BEFORE the Activity is paused", and on
+API 31+ that is **false**. With the platform's auto-enter switch armed, the platform
+transitions your window itself, through the Shell transition, and your Activity is not
+consulted: `onUserLeaveHint()` did **not fire at all** on a HOME press. Measured on
+emulator-5554 (API 37) on 2026-11-04 — zero log lines, while the PiP window opened with the
+app's full chrome in it.
+
+`Activity.onPictureInPictureRequested()` is AOSP's own PiP entry hook, and it is called while
+your Activity is still **RESUMED**. That matters twice over:
+
+- `Activity.enterPictureInPictureMode()` throws `IllegalStateException` unless the Activity is
+  resumed, so this is the only moment an explicit entry is legal at all.
+- your app is still drawing, so the chrome-less window is presented before the platform
+  transitions it.
+
+That is why the library does **not** arm the platform's auto-enter switch: with it armed there
+is no pre-transition hook to use.
 
 ### How your chrome is kept out of the PiP window
 
-Two mechanisms, layered:
+The PiP window **is** your Activity's own window, so whatever your chrome draws is what the PiP
+window shows. The library hides your chrome root **before** it asks the OS for the window.
 
-1. **The crop (primary).** The platform crops your window to the rect in
-   `PictureInPictureParams.setSourceRectHint(...)` and scales that crop into the PiP window. The
-   library **commits** the params to your Activity with
-   `Activity.setPictureInPictureParams(...)` — early, and again whenever the picture's geometry,
-   the video's shape or the playback state changes — because the platform builds the PiP window
-   from the LAST COMMITTED params. A hint handed over only at the entry moment never crops
-   anything, and the PiP window then shows your whole window, scaled down.
-2. **The hide (second line of defence).** The chrome you draw *over* the video is inside the
-   crop, so the crop cannot remove it. The library hides your chrome root when Picture-in-
-   Picture starts.
+Two things have to be right for that to work:
+
+1. **The hide happens in the entry, not after it.** Hiding from
+   `onPictureInPictureModeChanged(true)` — after the platform has already transitioned the
+   window — is too late. Measured on emulator-5554 (API 37) on 2026-11-04: the PiP window showed
+   the app's FULL expanded chrome, scaled down.
+2. **The entry happens while your Activity is resumed.** On API 31+ that means
+   `onPictureInPictureRequested()`; see
+   [Why it is native](#why-it-is-native-and-why-your-activity-hands-over-the-activity).
+
+`PictureInPictureParams.setSourceRectHint(...)` is **not** part of this. It is a TRANSITION
+hint: it tells the platform which region of your window the PiP window should animate FROM. It
+does **not** crop your window. (The 3.2.0 and 3.3.0 releases said otherwise; 3.3.1 retracts it,
+with the device measurement that disproved it.)
 
 ### Telling the library which view is your chrome
 
@@ -563,14 +597,17 @@ before launching, and check `commands.isSurfaceMounted()`.
 **Picture-in-Picture does not start.** The Activity is missing
 `android:supportsPictureInPicture="true"` or `android:resizeableActivity="true"`. If auto-enter
 on leave does nothing, the Activity is not calling `MpvBridgeModule.notifyUserLeaveHint(this)`
-from `onUserLeaveHint()` - see [Picture-in-Picture](#picture-in-picture).
+from `onPictureInPictureRequested()` (API 31+) or from `onUserLeaveHint()` (API 24-30) - see
+[Picture-in-Picture](#picture-in-picture).
 
-**The Picture-in-Picture window shows your app's chrome.** The platform crops your window to the
-source rect hint in the COMMITTED PiP params, and the library commits them when the picture's
-geometry, the video's shape or the playback state changes. If the crop is not happening, the
-params are not being committed - the log says so (`companion.commitPipParams`). A `nativeID` in
-your config that no view carries is NOT a refusal: the chrome is already hidden, and the library
-says so in the log.
+**The Picture-in-Picture window shows your app's chrome.** The chrome is hidden in the entry,
+before the window is asked for — so the entry has to run while your Activity is resumed. On API
+31+ that means `onPictureInPictureRequested()` must return `true` and call the library:
+`onUserLeaveHint()` alone is **never called** there, because the platform's auto-enter switch
+transitions the window itself (measured: zero log lines on a HOME press). The library logs the
+hide (`companion.hideConsumerChrome`) and the entry (`companion.notifyUserLeaveHint`). A
+`nativeID` in your config that no view carries is NOT a refusal: the chrome is already hidden, and
+the library says so in the log.
 
 **The Picture-in-Picture action row shows three buttons and none of them work.** That was the
 explicit-broadcast bug, fixed in 3.1.0: the action's PendingIntent named the receiver's

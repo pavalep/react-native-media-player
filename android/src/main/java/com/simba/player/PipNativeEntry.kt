@@ -87,22 +87,4 @@ internal object PipNativeEntry {
         return "${kotlin.math.floor(ratio + 0.5).toInt()} %"
     }
 
-    /**
-     * Whether mpv is PLAYING right now, from its `playback-state`.
-     *
-     * mpv's `playback-state` is one of `idle`, `loading`, `play`, `pause`,
-     * `stopped`, `eof-reached`. Only `play` means the picture is moving.
-     *
-     * `eof-reached` is NOT playing: the file ended, and the engine is
-     * sitting on its last frame. A play/pause button that shows "play"
-     * for an ended file is right, so the state has to be read, not
-     * guessed.
-     *
-     * The property arrives JSON-encoded, so it is trimmed of its quotes
-     * before it is compared.
-     */
-    fun isPlaying(playbackState: String?): Boolean {
-        val state = playbackState?.trim()?.trim('"')?.trim() ?: return false
-        return state.equals("play", ignoreCase = true)
-    }
 }

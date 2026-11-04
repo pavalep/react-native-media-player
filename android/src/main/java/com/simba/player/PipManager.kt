@@ -88,10 +88,13 @@ object PipManager {
      * @param aspect             Video aspect ratio as a float (e.g., 16f / 9f for 16:9).
      *                           Clamped to the Android PiP-allowed range [0.42, 2.38]
      *                           before being encoded as an integer Rational.
-     * @param sourceRectHint     The region of the window the VIDEO occupies. The
-     *                           platform crops the app's window to this rect, so
-     *                           it is what keeps the app's chrome out of the PiP
-     *                           window.
+     * @param sourceRectHint     The region of the window the VIDEO occupies. It is
+     *                           a TRANSITION hint: the platform animates the PiP
+     *                           window FROM that region. It does NOT crop the
+     *                           app's window — measured on emulator-5554 (API 37)
+     *                           on 2026-11-04, with the hint committed the PiP
+     *                           window showed the app's FULL chrome, scaled
+     *                           down.
      * @param chapterTitle       Current chapter title for notification text (Android 12+).
      * @param progressPercentage Percentage string like "45%" for notification text (Android 12+).
      * @param playing            Whether the video is playing right now — it picks
@@ -163,23 +166,32 @@ object PipManager {
             builder.setSeamlessResizeEnabled(true)
         }
 
-        // Auto-enter (Android 12+).
+        // Auto-enter (Android 12+). DELIBERATELY NOT ARMED.
         //
         // The platform's auto-enter switch makes the SYSTEM transition the
-        // activity into PiP when the user leaves the app, and it does that
-        // from the LAST COMMITTED params — which is why the library commits
-        // them early and keeps them current.
+        // activity into PiP when the user leaves the app. It does that
+        // through the Shell transition, and the app's own hooks are never
+        // consulted: `Activity.onUserLeaveHint()` did not fire at all on a
+        // HOME press (measured on emulator-5554, API 37, 2026-11-04 — zero
+        // log lines), and ATMS refuses an explicit entry while the switch
+        // is armed ("auto-enter should take in place instead").
         //
-        // It is armed ONLY while media is loaded (`autoEnter`). Arming it
-        // with nothing playing would throw the user into a PiP window of a
-        // stopped session the moment they browsed the Home screen.
+        // So with the switch armed the library had NO pre-transition hook
+        // at all: the platform froze the window with the consumer's chrome
+        // still mounted, and the PiP window showed the whole chrome scaled
+        // down.
         //
-        // While it is armed, ATMS REFUSES an explicit
-        // `enterPictureInPictureMode()` — "auto-enter should take in place
-        // instead" — so the library's own entry path is a logged no-op on
-        // API 31+ and the explicit entry is kept for API 24-30.
+        // AOSP's own hook for this case is
+        // `Activity.onPictureInPictureRequested()` (API 31+): the system
+        // asks the app, and the app enters PiP itself. Returning `true`
+        // from it also stops the framework from falling back to the legacy
+        // `onUserLeaveHint()` path.
+        //
+        // `autoEnter` therefore stays a CONSUMER POLICY, checked by the
+        // library before it enters, and never a platform switch.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && autoEnter) {
-            builder.setAutoEnterEnabled(true)
+            // Intentionally NOT `setAutoEnterEnabled(true)`.
+            builder.setAutoEnterEnabled(false)
         }
 
         // Source rect hint (Android 8.0+, API 26)
@@ -190,10 +202,10 @@ object PipManager {
         // API 26, so gating it on API 31 threw away the entry animation on
         // every device below Android 12 for no reason.
         //
-        // This is also the rect the platform CROPS the app's window to, so
-        // it is what keeps the app's chrome out of the PiP window. That is
-        // why the library commits the params early instead of handing them
-        // over only at the entry moment.
+        // This is the rect the PiP window ANIMATES FROM — a transition
+        // hint, nothing more. It does not crop the app's window, so it is
+        // NOT what keeps the app's chrome out of the PiP window; the
+        // consumer's chrome is hidden before the entry, in native code.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && sourceRectHint != null) {
             builder.setSourceRectHint(sourceRectHint)
         }
@@ -373,14 +385,17 @@ class PipActionReceiver : BroadcastReceiver() {
             android.util.Log.w(TAG, "cannot toggle playback: no engine handle")
             return
         }
-        val state = try {
-            com.simba.player.mpv.MPVLib.nativeGetProperty(ptr, "playback-state")
-        } catch (t: Throwable) {
-            android.util.Log.w(TAG, "cannot read playback-state", t)
-            null
-        }
+        // The state is read through the ONE owner, from mpv's REAL
+        // properties (`idle-active`, `eof-reached`, `pause`).
+        //
+        // It used to read `playback-state` — a property mpv does NOT
+        // have. The read failed, the answer was "not playing", and the
+        // button called PLAY on an already-playing video: a button that
+        // looked alive and did nothing. Measured on emulator-5554
+        // (API 37) on 2026-11-04.
+        val state = com.simba.player.mpv.PlaybackState.live()
         try {
-            if (PipNativeEntry.isPlaying(state)) {
+            if (com.simba.player.mpv.PlaybackState.isPlaying(state)) {
                 com.simba.player.mpv.MPVLib.nativePause(ptr)
                 android.util.Log.i(TAG, "play/pause: paused")
             } else {

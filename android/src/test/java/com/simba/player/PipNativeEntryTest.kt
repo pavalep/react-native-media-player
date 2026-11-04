@@ -172,13 +172,19 @@ class PipNativeEntryTest {
 
         // The facts come from mpv, never from a JS flag: by the time the
         // user presses HOME, a JS flag can be stale.
+        //
+        // The read goes through the ONE owner, `PlaybackState`, which
+        // reads mpv's REAL properties. It used to read
+        // `playback-state` — a property mpv does NOT have — so the
+        // check always answered "media is loaded".
         assertTrue(
-            "the media check must read mpv's own playback-state",
-            code.contains("nativeGetProperty(ptr, \"playback-state\")"),
+            "the media check must go through the one owner",
+            code.contains("PlaybackState.hasMediaNow()"),
         )
-        assertTrue(
-            "mpv's `idle` and `stopped` are its no-media states",
-            code.contains("state != \"idle\"") && code.contains("state != \"stopped\""),
+        assertFalse(
+            "`playback-state` is not an mpv property - it must never be " +
+                "read again",
+            code.contains("playback-state"),
         )
         assertTrue(
             "the native entry must consult the media check",
@@ -193,7 +199,7 @@ class PipNativeEntryTest {
         val policy = body.indexOf("if (!pipAutoEnterForCompanion)")
         val alreadyInPip = body.indexOf("if (activity.isInPictureInPictureMode)")
         val noMedia = body.indexOf("if (!isMediaLoaded())")
-        val chrome = body.indexOf("if (chromeNativeId != null)")
+        val chrome = body.indexOf("hideConsumerChrome()")
 
         assertTrue("the policy guard must be there", policy >= 0)
         assertTrue("the already-in-PiP guard must be there", alreadyInPip >= 0)
@@ -238,7 +244,7 @@ class PipNativeEntryTest {
         assertTrue(
             "the search root must be the Activity's window decor view - the " +
                 "React root lives under it",
-            code.contains("activity.window?.decorView"),
+            code.contains("window?.decorView"),
         )
     }
 
@@ -262,24 +268,32 @@ class PipNativeEntryTest {
         )
         assertFalse(
             "the request path must not refuse the entry over the chrome - " +
-                "the chrome block is a diagnostic there, and the entry goes on",
+                "a chrome that is not there means it is ALREADY hidden, and " +
+                "the entry goes on",
             leaveHintBody()
-                .substringAfter("if (chromeNativeId != null) {")
+                .substringAfter("hideConsumerChrome()")
                 .substringBefore("rememberPipActivity(activity)")
                 .contains("return false"),
         )
     }
 
     @Test
-    fun `the chrome is NOT hidden in the request path`() {
+    fun `the chrome IS hidden in the request path, BEFORE the window is asked for`() {
         val body = leaveHintBody()
 
-        assertFalse(
-            "the request path must NOT hide the chrome - " +
-                "`onUserLeaveHint` is called as part of the Activity's PAUSE " +
-                "transaction and there is NO frame between the hide and the " +
-                "pause, so the hide never reaches the pixels",
-            body.contains("visibility = View.GONE"),
+        val hide = body.indexOf("hideConsumerChrome()")
+        val ask = body.indexOf("enterPictureInPicture(activity)")
+
+        assertTrue("the request path must hide the chrome", hide >= 0)
+        assertTrue("the request path must ask for the window", ask >= 0)
+        assertTrue(
+            "the chrome must be hidden BEFORE the window is asked for - the " +
+                "PiP window IS the Activity's own window, so whatever the " +
+                "chrome draws is what the PiP window shows. Measured on " +
+                "emulator-5554 (API 37) on 2026-11-04: hidden only AFTER " +
+                "the transition, the PiP window showed the app's FULL " +
+                "chrome, scaled down",
+            hide < ask,
         )
     }
 
