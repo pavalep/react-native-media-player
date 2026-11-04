@@ -12,17 +12,17 @@ import android.graphics.drawable.Icon
 import android.os.Build
 import android.util.Rational
 import androidx.annotation.RequiresApi
-import com.facebook.react.ReactApplication
-import com.facebook.react.bridge.ReactContext
 
 /**
  * Manages Android Picture-in-Picture (PiP) overlay actions and parameters
  * for the `PlayerActivity` in `@simba/react-native-media-player`.
  *
- * v3 redesign (carried over from V11):
- *  - 3 RemoteAction buttons max: [Play/Pause] [Expand] [Close]
+ * v3.3.0:
+ *  - ONE RemoteAction: [Play/Pause], with a state-driven icon
  *  - Notification text with chapter title + progress percentage (Android 12+)
  *  - No NEXT/PREV actions (removed for simplicity)
+ *  - The platform's own auto-enter switch, armed only while media is loaded
+ *    (Android 12+)
  *
  * ## Who owns the action receiver
  *
@@ -31,12 +31,12 @@ import com.facebook.react.bridge.ReactContext
  * consumer app does NOT register it and does not need to know the class
  * exists.
  *
- * That ownership is not a preference — it is what makes the buttons
+ * That ownership is not a preference — it is what makes the button
  * work. See [buildRemoteAction] for the measured reason the broadcast
  * has to be IMPLICIT, and [registerActionReceiver] for why there must be
  * exactly ONE registration (two would deliver every action twice, and a
  * play/pause that toggles twice leaves playback exactly where it was —
- * buttons that look alive and do nothing).
+ * a button that looks alive and does nothing).
  *
  * V12 Phase 9 relocated this object from the consumer app to the module
  * so the consumer's Activity can call `buildPipParams(...)` without
@@ -49,29 +49,56 @@ object PipManager {
 
     // ── Action Constants ───────────────────────────────────────────────────
 
+    /**
+     * The ONE action the PiP row carries: play/pause.
+     *
+     * The expand and close actions this library used to build are GONE:
+     * the platform renders its own expand / close / settings affordances
+     * in the PiP window, and the library's row was a second copy of them.
+     */
     const val ACTION_PLAY_PAUSE = "com.simba.player.PIP_PLAY_PAUSE"
-    const val ACTION_EXPAND = "com.simba.player.PIP_EXPAND"
-    const val ACTION_CLOSE = "com.simba.player.PIP_CLOSE"
 
     private const val REQ_PLAY_PAUSE = 1001
-    private const val REQ_EXPAND = 1002
-    private const val REQ_CLOSE = 1003
 
     // ── PiP Params Builder ─────────────────────────────────────────────────
 
     /**
-     * Build PictureInPictureParams with 3 overlay actions:
-     * [Pause/Resume] [Expand to Fullscreen] [Close].
+     * Build the PictureInPictureParams the platform builds the PiP window
+     * from.
      *
-     * On Android 12+, also sets notification subtitle with chapter/progress info.
+     * ## ONE action, and why
+     *
+     * The params carry exactly ONE RemoteAction: play/pause.
+     *
+     * The platform renders its OWN expand / close / settings affordances in
+     * the PiP window. The library's own Expand and Close buttons were a
+     * SECOND row of the same three controls — the "two rows" symptom — and
+     * the platform's own copy is the one that works. Google's own
+     * `androidx.core-pip` ships exactly one custom action for the same
+     * reason.
+     *
+     * ## The icon is state-driven
+     *
+     * The play/pause action shows the PAUSE icon while the video is
+     * playing and the PLAY icon while it is paused, and the params are
+     * re-committed when the playback state changes so the platform picks
+     * the new icon up. A static icon is a lie the user can see.
      *
      * @param context            Application or Activity context for PendingIntents.
      * @param aspect             Video aspect ratio as a float (e.g., 16f / 9f for 16:9).
      *                           Clamped to the Android PiP-allowed range [0.42, 2.38]
      *                           before being encoded as an integer Rational.
-     * @param sourceRectHint     Optional bounds for smooth PiP entry animation.
+     * @param sourceRectHint     The region of the window the VIDEO occupies. The
+     *                           platform crops the app's window to this rect, so
+     *                           it is what keeps the app's chrome out of the PiP
+     *                           window.
      * @param chapterTitle       Current chapter title for notification text (Android 12+).
      * @param progressPercentage Percentage string like "45%" for notification text (Android 12+).
+     * @param playing            Whether the video is playing right now — it picks
+     *                           the action's icon.
+     * @param autoEnter          Whether the platform may enter PiP by itself when
+     *                           the user leaves the app (Android 12+). Armed only
+     *                           while media is loaded.
      */
     fun buildPipParams(
         context: Context,
@@ -79,10 +106,12 @@ object PipManager {
         sourceRectHint: Rect? = null,
         chapterTitle: String? = null,
         progressPercentage: String? = null,
+        playing: Boolean = false,
+        autoEnter: Boolean = false,
     ): PictureInPictureParams {
-        // The params carry the three RemoteActions, and the platform's PiP
-        // action row is the ONLY way they can ever be fired. So the
-        // receiver that serves them has to exist before these params do.
+        // The params carry the RemoteAction, and the platform's PiP action
+        // row is the ONLY way it can ever be fired. So the receiver that
+        // serves it has to exist before these params do.
         //
         // Registering here — at the single place the params are built —
         // makes it impossible to hand the platform a set of buttons that
@@ -93,39 +122,19 @@ object PipManager {
 
         val actions = mutableListOf<RemoteAction>()
 
-        // Play/Pause
+        // Play/Pause — the ONE action, with a state-driven icon.
         actions.add(
             buildRemoteAction(
                 context = context,
-                iconResId = android.R.drawable.ic_media_play,
-                title = "Play/Pause",
-                contentDescription = "Toggle playback",
+                iconResId = if (playing) {
+                    android.R.drawable.ic_media_pause
+                } else {
+                    android.R.drawable.ic_media_play
+                },
+                title = if (playing) "Pause" else "Play",
+                contentDescription = if (playing) "Pause playback" else "Resume playback",
                 action = ACTION_PLAY_PAUSE,
                 requestCode = REQ_PLAY_PAUSE,
-            ),
-        )
-
-        // Expand to Fullscreen
-        actions.add(
-            buildRemoteAction(
-                context = context,
-                iconResId = android.R.drawable.ic_menu_zoom,
-                title = "Expand",
-                contentDescription = "Expand to fullscreen",
-                action = ACTION_EXPAND,
-                requestCode = REQ_EXPAND,
-            ),
-        )
-
-        // Close
-        actions.add(
-            buildRemoteAction(
-                context = context,
-                iconResId = android.R.drawable.ic_menu_close_clear_cancel,
-                title = "Close",
-                contentDescription = "Close player",
-                action = ACTION_CLOSE,
-                requestCode = REQ_CLOSE,
             ),
         )
 
@@ -154,43 +163,38 @@ object PipManager {
             builder.setSeamlessResizeEnabled(true)
         }
 
-        // NO `setAutoEnterEnabled` HERE, and that is deliberate.
+        // Auto-enter (Android 12+).
         //
         // The platform's auto-enter switch makes the SYSTEM transition the
-        // activity into PiP when the user leaves the app, without the app
-        // being able to do anything first. That is the wrong order for a
-        // consumer that draws its own chrome over the picture.
+        // activity into PiP when the user leaves the app, and it does that
+        // from the LAST COMMITTED params — which is why the library commits
+        // them early and keeps them current.
         //
-        // The reason is NOT that the window freezes - an Activity in PiP is
-        // "paused, but rendering" (source.android.com/docs/core/display/
-        // pip). What stops is REACT: RN pauses the React scheduler when
-        // the Activity is paused, so a React commit cannot land and no
-        // frame is produced. The switch transitions the Activity before
-        // the consumer can unmount its chrome, so the chrome is still
-        // mounted when the PiP window is created - and with no frame
-        // coming, it stays there: dead and scaled down.
+        // It is armed ONLY while media is loaded (`autoEnter`). Arming it
+        // with nothing playing would throw the user into a PiP window of a
+        // stopped session the moment they browsed the Home screen.
         //
-        // Measured on device on 2026-11-03: the consumer's full expanded
-        // chrome (header band, scrub row, +-10 buttons, the big pause
-        // button) was painted into the PiP window, its buttons were DEAD
-        // (tapping pause did not pause) and its clock was FROZEN at
-        // 51:09 while the real position was 54:15 - while the consumer's
-        // own state already said `pipActive: true` and `isExpanded:
-        // false`.
-        //
-        // So auto-enter on leave is performed by the LIBRARY, natively, in
-        // the only order that works: hide the chrome, then ask for the
-        // window. The library's part is to hide the consumer's chrome
-        // natively (a View-system mutation, so it lands without a React
-        // commit) and to keep the params it hands the platform free of
-        // the platform's own auto-enter switch.
-        //
-        // The consumer's Activity overrides `onUserLeaveHint()` and calls
-        // `MpvBridgeModule.notifyUserLeaveHint(activity)`, which works on
-        // every API level, unlike the platform switch (API 31+).
+        // While it is armed, ATMS REFUSES an explicit
+        // `enterPictureInPictureMode()` — "auto-enter should take in place
+        // instead" — so the library's own entry path is a logged no-op on
+        // API 31+ and the explicit entry is kept for API 24-30.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && autoEnter) {
+            builder.setAutoEnterEnabled(true)
+        }
 
-        // Source rect hint for smooth entry animation (Android 12+)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && sourceRectHint != null) {
+        // Source rect hint (Android 8.0+, API 26)
+        //
+        // `PictureInPictureParams.Builder.setSourceRectHint(Rect)` was added
+        // in API 26, not API 31 - the API 31 call is the TWO-rect overload.
+        // react-native-video and expo-video both hand the hint over from
+        // API 26, so gating it on API 31 threw away the entry animation on
+        // every device below Android 12 for no reason.
+        //
+        // This is also the rect the platform CROPS the app's window to, so
+        // it is what keeps the app's chrome out of the PiP window. That is
+        // why the library commits the params early instead of handing them
+        // over only at the entry moment.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && sourceRectHint != null) {
             builder.setSourceRectHint(sourceRectHint)
         }
 
@@ -265,23 +269,24 @@ object PipManager {
      * `internal` on purpose: registering the receiver is THIS library's
      * job (see [registerActionReceiver]), and a public helper would
      * only invite a consumer to register a second receiver for the same
-     * three actions. Two receivers means every action is delivered
-     * twice, and a play/pause that toggles twice leaves playback exactly
-     * where it was — a row of buttons that look alive and do nothing.
+     * action. Two receivers means every action is delivered twice, and a
+     * play/pause that toggles twice leaves playback exactly where it was
+     * — a button that looks alive and does nothing.
+     *
+     * Only the play/pause action is filtered on: it is the ONLY action the
+     * params carry (the platform renders its own expand / close), so an
+     * expand / close broadcast can no longer arrive.
      */
     internal fun intentFilter(): IntentFilter {
         return IntentFilter().apply {
             addAction(ACTION_PLAY_PAUSE)
-            addAction(ACTION_EXPAND)
-            addAction(ACTION_CLOSE)
         }
     }
 
     // ── Receiver registration ─────────────────────────────────────────────
 
     /**
-     * Registers [PipActionReceiver] for the three PiP actions — ONCE per
-     * process.
+     * Registers [PipActionReceiver] for the PiP action — ONCE per process.
      *
      * The application context is used on purpose: the receiver has to
      * outlive any Activity, because the platform's PiP action row can
@@ -315,22 +320,33 @@ object PipManager {
 // ── BroadcastReceiver for PiP Actions ──────────────────────────────────────
 
 /**
- * Receives PiP RemoteAction broadcasts and forwards them to the React Native
- * event layer via [com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter].
+ * Receives the PiP RemoteAction broadcast and acts on it NATIVELY.
  *
  * Registered by THIS library, once per process, on the application context
  * — see [PipManager.registerActionReceiver]. The consumer app does not
  * register it and does not need to know the class exists.
  *
- * It is a RUNTIME registration on purpose: the three action strings are
- * owned by [PipManager] as Kotlin constants, and a manifest declaration
- * would have to repeat them as literals — two owners for one fact. The
- * broadcast those constants feed is implicit, so it matches a runtime
- * registration by action. (An EXPLICIT broadcast would need a manifest
- * declaration instead; see [PipManager.buildRemoteAction] for the
- * measured reason that shape never worked.)
+ * It is a RUNTIME registration on purpose: the action string is owned by
+ * [PipManager] as a Kotlin constant, and a manifest declaration would have
+ * to repeat it as a literal — two owners for one fact. The broadcast that
+ * constant feeds is implicit, so it matches a runtime registration by
+ * action. (An EXPLICIT broadcast would need a manifest declaration instead;
+ * see [PipManager.buildRemoteAction] for the measured reason that shape
+ * never worked.)
  *
- * v3: Handles 3 actions — play/pause, expand (restore fullscreen), close (end session).
+ * ## The action is handled IN THE ENGINE, with no JS round trip
+ *
+ * The play/pause action used to travel broadcast → JS event → bridge →
+ * mpv, and this file's own comment recorded why that shape is fragile: the
+ * broadcast can arrive after the JS bundle has unloaded. So the action is
+ * delivered to the engine directly, through [PlaybackHost] and
+ * [com.simba.player.mpv.MPVLib] — the same way `MediaPlaybackService`'s
+ * session callbacks drive playback.
+ *
+ * The `onPipPlayPause` event still exists in the library's JS API, for
+ * consumers that listen to it, but it is NOT the mechanism that pauses
+ * playback: the engine call below is, and it happens whether or not there
+ * is a JS bundle to receive an event.
  */
 class PipActionReceiver : BroadcastReceiver() {
 
@@ -340,51 +356,43 @@ class PipActionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
-            PipManager.ACTION_PLAY_PAUSE -> {
-                emitEvent(context, "onPipPlayPause", null)
-            }
-            PipManager.ACTION_EXPAND -> {
-                emitEvent(context, "onPipExpand", null)
-            }
-            PipManager.ACTION_CLOSE -> {
-                emitEvent(context, "onPipClose", null)
-            }
+            PipManager.ACTION_PLAY_PAUSE -> togglePlayback()
         }
     }
 
-    private fun emitEvent(context: Context, eventName: String, params: android.os.Bundle?) {
-        try {
-            val reactContext = getReactContext(context)
-            reactContext
-                .getJSModule(com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                ?.emit(eventName, params)
-        } catch (e: Exception) {
-            // The React context is not available — the broadcast can arrive
-            // after the JS bundle has unloaded, and there is no UI to update
-            // in that case.
-            //
-            // It is still LOGGED, and that is the point. A silent catch
-            // here is how the PiP action row could render three buttons
-            // that did nothing, with not one line in the log to say so.
-            android.util.Log.w(TAG, "cannot emit $eventName: no React context", e)
+    /**
+     * Toggle playback in the engine.
+     *
+     * The state is read from mpv at the moment of the tap, so the button
+     * toggles what is actually happening rather than what it last
+     * believed.
+     */
+    private fun togglePlayback() {
+        val ptr = PlaybackHost.handle()
+        if (ptr == 0L) {
+            android.util.Log.w(TAG, "cannot toggle playback: no engine handle")
+            return
         }
-    }
-
-    private fun getReactContext(context: Context): ReactContext {
-        val app = context.applicationContext as? ReactApplication
-            ?: throw IllegalStateException("Application is not a ReactApplication")
-        // Bridgeless RN (0.76+): prefer `reactHost.currentReactContext`.
-        // Legacy bridged: fall back to `reactNativeHost.reactInstanceManager.currentReactContext`.
-        // We try bridgeless first because the consumer app runs in
-        // bridgeless mode (per V12 plan), but the legacy fallback covers
-        // any build that hasn't migrated yet.
-        val bridgeless = try {
-            app.reactHost?.currentReactContext
-        } catch (_: Exception) {
+        val state = try {
+            com.simba.player.mpv.MPVLib.nativeGetProperty(ptr, "playback-state")
+        } catch (t: Throwable) {
+            android.util.Log.w(TAG, "cannot read playback-state", t)
             null
         }
-        if (bridgeless != null) return bridgeless
-        return app.reactNativeHost?.reactInstanceManager?.currentReactContext
-            ?: throw IllegalStateException("ReactContext not available")
+        try {
+            if (PipNativeEntry.isPlaying(state)) {
+                com.simba.player.mpv.MPVLib.nativePause(ptr)
+                android.util.Log.i(TAG, "play/pause: paused")
+            } else {
+                com.simba.player.mpv.MPVLib.nativePlay(ptr)
+                android.util.Log.i(TAG, "play/pause: played")
+            }
+        } catch (t: Throwable) {
+            android.util.Log.w(TAG, "cannot toggle playback", t)
+            return
+        }
+        // The action's icon is state-driven, so the committed params have
+        // to be re-committed for the platform to pick the new one up.
+        com.simba.player.mpv.MpvBridgeModule.onPlaybackStateChanged()
     }
 }

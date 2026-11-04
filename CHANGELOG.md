@@ -1,4 +1,88 @@
 
+## [3.3.0] - 2026-11-04
+
+### Fixed
+
+- **The Picture-in-Picture window showed the app's full expanded chrome, scaled down.** The PiP
+  window opened, and the video played under it — but the header band, the scrub row with its frozen
+  clock, the ±10 buttons, the big pause button and the volume row were painted into the window
+  too, at a fraction of their size, and their buttons were dead. Measured on emulator-5554 (API
+  37) on 2026-11-03.
+
+  **3.2.0's claim is retracted.** 3.2.0 said the library hides the consumer's chrome on the HOME
+  path. It did hide it — natively, with `visibility = View.GONE` — but the hide **could not reach
+  the pixels**: `Activity.onUserLeaveHint()` is called as part of the Activity's PAUSE
+  transaction, and there is **no frame between the hide and the pause**. The PiP window is built
+  from the window's last rendered buffer, and that buffer still held the chrome. The chrome was
+  hidden and stayed visible.
+
+  Two mechanisms keep the app's chrome out of the PiP window now, and they are layered:
+
+  1. **The crop (primary).** The platform crops the app's window to the rect in
+     `PictureInPictureParams.setSourceRectHint(...)` and scales that crop into the PiP window. The
+     library now **commits** the params to the Activity with
+     `Activity.setPictureInPictureParams(...)` — early, and every time the picture's geometry,
+     the video's shape or the playback state changes — instead of handing them over only at the
+     entry moment. A source rect hint that is only handed over at the entry moment never crops
+     anything: the PiP window then shows the whole window, scaled down. Google's own
+     `androidx.core-pip` does exactly this — it tracks the player view's bounds and commits the
+     params as they change.
+
+     The hint is the region of the window the **video** occupies (the video's own frame inside
+     the picture box, letterboxed), not the picture box's rect — the box fills the screen, so
+     hinting the box crops the whole screen into the PiP window, chrome included.
+
+  2. **The hide (second line of defence).** The chrome the app draws *over* the video — the big
+     pause button, the scrub row — is inside the crop, so the crop cannot remove it. It is now
+     hidden from `onPictureInPictureModeChanged(true)`: after the platform has entered PiP, and
+     while the activity is "paused, but rendering", so the invalidation is drawn. A `nativeID`
+     that no view carries is no longer a refusal — it means the chrome is **already hidden**, and
+     the entry goes on.
+
+- **The PiP action row was a second copy of the platform's own buttons.** The library's Expand
+  and Close actions are gone: the platform renders its own expand / close / settings affordances
+  in the PiP window, and the library's row duplicated them. The row now carries **exactly one**
+  action, play/pause, with a **state-driven icon** — the pause icon while the video is playing,
+  the play icon while it is paused — and the params are re-committed when the playback state
+  changes so the platform picks the new icon up.
+
+- **The play/pause button went through JavaScript to pause the video.** The broadcast now
+  reaches the engine directly (`PlaybackHost` + `MPVLib`), the same way
+  `MediaPlaybackService`'s session callbacks drive playback. The old path was
+  broadcast → JS event → bridge → mpv, and this library's own code recorded why that shape is
+  fragile: "the broadcast can arrive after the JS bundle has unloaded". The `onPipPlayPause`
+  event still exists in the JS API for compatibility, but it is not the mechanism that pauses
+  playback.
+
+- **The source rect hint was applied from Android 12 only.** `setSourceRectHint(Rect)` has been
+  available since API 26; react-native-video and expo-video both hand it over from API 26.
+
+### Changed
+
+- **Android 12+ uses the platform's own auto-enter switch.** The library arms
+  `setAutoEnterEnabled(true)` — but **only while media is loaded**, and disarms it when playback
+  stops, so browsing the Home screen with nothing playing cannot throw the user into a PiP
+  window. While auto-enter is armed, `notifyUserLeaveHint(activity)` is a logged no-op: ATMS
+  refuses an explicit `enterPictureInPictureMode()` while auto-enter is enabled ("auto-enter
+  should take in place instead"). The explicit entry is kept for API 24–30. The consumer's
+  Activity keeps calling `MpvBridgeModule.notifyUserLeaveHint(this)` from `onUserLeaveHint()` —
+  unchanged, and correct on every API level.
+
+### Documentation
+
+- Every sentence in this library that said React Native pauses its own scheduler together with the
+  Activity was **mechanically wrong**, and a wrong reason sends the next reader looking for the
+  fix in the wrong place. React Native freezes in **two** ways while the Activity is paused:
+  `FabricUIManager.onHostPause()` removes the DISPATCH_UI frame callback, so mount items are
+  never applied to native views, and `JavaTimerManager.onHostPause()` freezes the timer registry,
+  so `requestAnimationFrame` never fires. The JS runtime itself keeps running. Corrected in
+  `MpvBridgeModule.kt`, `PipManager.kt`, `PipNativeEntry.kt`, `MpvPlayerModule.ts` and
+  `config.ts`.
+
+- The claim that an Activity in Picture-in-Picture never repaints its window was corrected too:
+  the app window's **UI layer** stops producing frames while it is paused, while a `SurfaceView`
+  keeps compositing.
+
 ## [3.2.0] - 2026-11-03
 
 ### Fixed
@@ -11,18 +95,21 @@
 
   The cause was measured, not guessed. `Activity.onUserLeaveHint()` fired and the JS handler ran
   immediately, but the effect that would have driven the entry ran **5.7 s late** and the
-  `requestAnimationFrame` **never fired**. React Native pauses the React scheduler with the
-  Activity, so a React commit cannot land and there is no frame clock once the Activity is
-  backgrounded. The entry therefore has to be **native**, inside `onUserLeaveHint()`, before
-  `onPause`.
+  `requestAnimationFrame` **never fired**. React Native freezes in TWO ways while the Activity is
+  paused — `FabricUIManager.onHostPause()` removes the DISPATCH_UI frame callback, so mount items
+  are never applied to native views, and `JavaTimerManager.onHostPause()` freezes the timer
+  registry, so `requestAnimationFrame` never fires. The entry therefore has to be **native**,
+  inside `onUserLeaveHint()`, before `onPause`.
 
   The library now performs the HOME-path entry itself:
 
-  - the consumer's chrome is hidden with a **native View-system mutation**
-    (`visibility = View.GONE`), which lands without a React commit and without a frame clock;
-  - the PiP parameters are built **after** the hide, by the same builder the JS path uses;
-  - the chrome is restored when Picture-in-Picture ends, and immediately if the OS refuses the
-    entry.
+  - the PiP parameters are built by the same builder the JS path uses, and handed to the platform;
+  - the chrome is restored when Picture-in-Picture ends.
+
+  > **Superseded by 3.3.0.** This release made the PiP window **open** — it did not make the
+  > chrome go away. The chrome hide it added could not reach the pixels (there is no frame
+  > between the hide and the pause), and the source rect hint it passed at the entry moment never
+  > cropped the window. See the 3.3.0 entry above for what actually fixed it.
 
   **Action required:** your Activity has to hand over the Activity.
 
@@ -49,10 +136,7 @@
 
   The `nativeID` literal belongs to the consumer; the library never hardcodes one of its own.
   Omit `chromeNativeId` if your app draws no chrome of its own — the library then enters
-  Picture-in-Picture without hiding anything. If the id is set and **no view carries it**, the
-  library **refuses** the entry and logs a warning naming the id: entering PiP with the chrome
-  still mounted paints the app's dead chrome into the PiP window, which is the defect this
-  release exists to fix.
+  Picture-in-Picture without hiding anything.
 
 ### Removed
 
@@ -70,8 +154,7 @@
 
 - `MpvBridgeModule.notifyUserLeaveHint()` is now
   `notifyUserLeaveHint(activity: Activity): Boolean`. It takes the Activity — the entry happens
-  on it, and the chrome is searched under its window — and returns the OS's own answer:
-  `true` when the Activity entered Picture-in-Picture.
+  on it — and returns the OS's own answer: `true` when the Activity entered Picture-in-Picture.
 - **The PiP parameters have ONE owner.** The JS path (`enterPip`) and the native path
   (`notifyUserLeaveHint`) build them through the same function, so the two cannot drift apart.
 - The native path reports the title from mpv's `media-title` — which IS the title the consumer
@@ -80,14 +163,13 @@
 
 ### Documentation
 
-- Five places in this library still carried the false claim that "an Activity in
-  Picture-in-Picture does not redraw". The accurate statement is that an Activity in PiP is
-  **"paused, but rendering"** (AOSP) — the window keeps rendering; what stops is **REACT**,
-  because React Native pauses the React scheduler with the Activity. The ORDER still matters — the
-  PiP window keeps whatever the Activity's window held at the transition — but the REASON was
-  wrong, and a wrong reason sends the next reader looking for the fix in the wrong place.
-  Corrected in `MpvBridgeModule.kt`, `CHANGELOG.md`, `README.md`, `MpvPlayerModule.ts` and
-  `config.ts`.
+- Five places in this library still carried the false claim that an Activity in Picture-in-
+  Picture never repaints its window. The accurate statement is that the app window's **UI
+  layer** stops producing frames while the Activity is paused, while a `SurfaceView` keeps
+  compositing; and what stops is **REACT**, in two ways —
+  `FabricUIManager.onHostPause()` removes the DISPATCH_UI frame callback, and
+  `JavaTimerManager.onHostPause()` freezes the timer registry. Corrected in
+  `MpvBridgeModule.kt`, `CHANGELOG.md`, `README.md`, `MpvPlayerModule.ts` and `config.ts`.
 
 ### Added
 
@@ -157,10 +239,10 @@
   the SYSTEM transition the activity into PiP when the user leaves the app,
   with the consumer unable to do anything first. That is the wrong order for a
   consumer that draws its own chrome over the picture, because an Activity in
-  PiP is "paused, but rendering" (AOSP) - what stops is REACT: RN pauses the
-  React scheduler with the Activity, so a React commit cannot land and no frame
-  is produced. So whatever its window held at the transition is what the PiP
-  window keeps showing. Measured on device on 2026-11-03, the
+  PiP is "paused, but rendering" (AOSP) - what stops is REACT: React Native
+  freezes in two ways while the Activity is paused, so a React commit cannot
+  land and no frame is produced. So whatever its window held at the transition
+  is what the PiP window keeps showing. Measured on device on 2026-11-03, the
   consumer's full expanded chrome was painted into the PiP window, its
   buttons were dead, and its clock was frozen three minutes behind the real
   position.

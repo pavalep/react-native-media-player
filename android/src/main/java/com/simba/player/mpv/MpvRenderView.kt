@@ -189,12 +189,29 @@ class MpvRenderView(context: Context) : SurfaceView(context),
         }
         val location = IntArray(2)
         getLocationInWindow(location)
-        cachedWindowBounds = PictureFrame(
+        val next = PictureFrame(
             location[0],
             location[1],
             location[0] + width,
             location[1] + height,
         )
+        val previous = cachedWindowBounds
+        cachedWindowBounds = next
+        if (previous != null &&
+            previous.left == next.left &&
+            previous.top == next.top &&
+            previous.right == next.right &&
+            previous.bottom == next.bottom
+        ) {
+            // The rect did not move, so the committed PiP params are still
+            // current. Layout passes are frequent, and re-committing the
+            // params on every one of them would be a binder call per frame.
+            return
+        }
+        // The rect moved, so the PiP params — which carry this rect as the
+        // source rect hint the platform crops the app's window to — are
+        // stale. The bridge re-commits them.
+        MpvBridgeModule.onPictureBoundsChanged()
     }
 
     /**

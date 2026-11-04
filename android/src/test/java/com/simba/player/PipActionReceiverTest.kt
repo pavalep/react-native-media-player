@@ -48,35 +48,17 @@ class PipActionReceiverTest {
     private val context
         get() = ApplicationProvider.getApplicationContext<TestApplication>()
 
-    // ── All 3 documented actions are handled without crashing ───────────
+    // ── The ONE documented action is handled without crashing ───────────
 
     @Test
     fun onReceive_actionPlayPause_doesNotThrow() {
         val receiver = PipActionReceiver()
         val intent = Intent(PipManager.ACTION_PLAY_PAUSE)
-        // Robolectric's onReceive dispatch is normal — the receiver's
-        // internal emitEvent will fail to find a React context (because
-        // TestApplication isn't a ReactApplication) but the
-        // catch-all `catch (_: Exception)` in emitEvent keeps it from
-        // propagating.
+        // The receiver drives the ENGINE directly, so it needs an engine
+        // handle. There is none in this test, and the receiver must say so
+        // and stop — a missing engine is not a reason to crash the app.
         receiver.onReceive(context, intent)
         // Assert no exception escaped; the test would have failed by now.
-        assertNotNull(receiver)
-    }
-
-    @Test
-    fun onReceive_actionExpand_doesNotThrow() {
-        val receiver = PipActionReceiver()
-        val intent = Intent(PipManager.ACTION_EXPAND)
-        receiver.onReceive(context, intent)
-        assertNotNull(receiver)
-    }
-
-    @Test
-    fun onReceive_actionClose_doesNotThrow() {
-        val receiver = PipActionReceiver()
-        val intent = Intent(PipManager.ACTION_CLOSE)
-        receiver.onReceive(context, intent)
         assertNotNull(receiver)
     }
 
@@ -114,8 +96,6 @@ class PipActionReceiverTest {
         // doesn't accumulate (no hidden fields, no leaks).
         val receiver = PipActionReceiver()
         receiver.onReceive(context, Intent(PipManager.ACTION_PLAY_PAUSE))
-        receiver.onReceive(context, Intent(PipManager.ACTION_EXPAND))
-        receiver.onReceive(context, Intent(PipManager.ACTION_CLOSE))
         receiver.onReceive(context, Intent(PipManager.ACTION_PLAY_PAUSE))
         // If we got here without an exception, the receiver is reusable.
         assertNotNull(receiver)

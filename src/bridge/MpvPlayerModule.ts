@@ -526,18 +526,23 @@ export interface MpvPlayerModuleBridge {
    * returns it) and the caller needs it, because a caller that hides its
    * chrome on a refused request has no way to bring it back.
    *
-   * The ORDER still matters, and the reason is REACT, not the window: an
-   * Activity in Picture-in-Picture is "paused, but rendering" (AOSP), so the
-   * PiP window keeps whatever the Activity's window held at the transition —
-   * but React Native pauses the React scheduler with the Activity, so a
-   * React commit cannot land and no frame is produced. Chrome that is still
-   * mounted at that moment therefore stays in the PiP window, dead and
-   * scaled down.
+   * The ORDER still matters, and the reason is REACT, not the window. While
+   * the Activity is paused, the app window's UI layer stops producing frames,
+   * while a SurfaceView keeps compositing. What stops is REACT, in TWO ways:
+   * `FabricUIManager.onHostPause()` removes the DISPATCH_UI frame callback,
+   * so mount items are never applied to native views, and
+   * `JavaTimerManager.onHostPause()` freezes the timer registry, so
+   * `requestAnimationFrame` never fires. The JS runtime itself keeps running.
+   *
+   * So the chrome has to be unmounted BEFORE the window is asked for, and the
+   * consumer's own button is the only place where that is still possible:
+   * `onUserLeaveHint()` is called as part of the Activity's PAUSE
+   * transaction, and there is NO frame between it and the pause.
    *
    * This is the MANUAL path — the consumer's own button. The HOME path is
-   * the library's own: it hides the consumer's chrome natively, inside
-   * `onUserLeaveHint()`, and enters PiP from there, because by then no React
-   * commit can land at all.
+   * the library's own: it enters PiP from `onUserLeaveHint()` (or lets the
+   * platform's own auto-enter switch do it on Android 12+), and hides the
+   * consumer's chrome from `onPictureInPictureModeChanged(true)`.
    */
   enterPip(chapterTitle?: string | null, progressPct?: string | null): boolean;
   /** Exit PiP by bringing the activity to the front. */

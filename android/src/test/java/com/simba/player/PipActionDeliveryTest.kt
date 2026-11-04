@@ -150,39 +150,33 @@ class PipActionDeliveryTest {
     // ── Failures must be visible ──────────────────────────────────────────
 
     @Test
-    fun `a failure to emit the PiP event is LOGGED`() {
+    fun `a failure to reach the engine is LOGGED`() {
         val source = pipManagerSource().readText()
 
         // A silent catch is how a row of dead buttons produced not one
-        // line in the log. The React context can legitimately be gone
-        // (the bundle unloaded), but that has to be visible.
+        // line in the log. The engine can legitimately be gone (no handle,
+        // or the file was closed), but that has to be visible.
         //
-        // Scoped to `emitEvent` on purpose. `getReactContext` has its own
-        // catch, and it is a PROBE: the bridgeless accessor is tried
-        // first and the legacy one is the fallback. Its failure is not
-        // swallowed in the end - `getReactContext` then throws, and THAT
-        // throw is the one `emitEvent` logs.
-        assertTrue(
-            "the receiver must have an emitEvent to check",
-            source.contains("private fun emitEvent"),
-        )
-        assertTrue(
-            "the receiver must have a getReactContext to bound the check",
-            source.contains("private fun getReactContext"),
-        )
-        val emitBody = code(
+        // Scoped to the receiver's toggle, which is the whole delivery path
+        // now: the action reaches the engine directly, with no JS in
+        // between.
+        val toggleBody = code(
             source
-                .substringAfter("private fun emitEvent")
-                .substringBefore("private fun getReactContext"),
+                .substringAfter("private fun togglePlayback()")
+                .substringBefore("}\n}"),
         )
         assertFalse(
             "the receiver must not swallow a failure silently - that is " +
                 "how the PiP buttons could be inert with an empty log",
-            emitBody.contains("catch (_: Exception)"),
+            toggleBody.contains("catch (_: Exception)"),
         )
         assertTrue(
             "the failure must be logged",
-            emitBody.contains("cannot emit"),
+            toggleBody.contains("cannot toggle playback"),
+        )
+        assertTrue(
+            "a missing engine handle must be logged too",
+            toggleBody.contains("no engine handle"),
         )
     }
 
@@ -207,21 +201,12 @@ class PipActionDeliveryTest {
     fun `the library's manifest does NOT duplicate the action strings`() {
         val manifest = code(manifestSource().readText())
 
-        // The three action strings are owned by `PipManager` as Kotlin
-        // constants. The manifest cannot reference a Kotlin constant, so
-        // a literal there would give one fact two owners - and the two
-        // could drift.
+        // The action string is owned by `PipManager` as a Kotlin constant.
+        // The manifest cannot reference a Kotlin constant, so a literal
+        // there would give one fact two owners - and the two could drift.
         assertFalse(
             "the action strings must live in PipManager only",
             manifest.contains("PIP_PLAY_PAUSE"),
-        )
-        assertFalse(
-            "the action strings must live in PipManager only",
-            manifest.contains("PIP_EXPAND"),
-        )
-        assertFalse(
-            "the action strings must live in PipManager only",
-            manifest.contains("PIP_CLOSE"),
         )
     }
 

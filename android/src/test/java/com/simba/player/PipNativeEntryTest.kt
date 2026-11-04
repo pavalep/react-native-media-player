@@ -24,10 +24,12 @@ import java.io.File
  * The cause was measured, not guessed: `Activity.onUserLeaveHint()` fired
  * and the JS handler ran immediately, but the effect that would have driven
  * the entry ran **5.7 s late** and the `requestAnimationFrame` **never
- * fired**. React Native pauses the React scheduler with the Activity, so a
- * React commit cannot land and there is no frame clock once the Activity is
- * backgrounded. The entry therefore has to be NATIVE, inside
- * `onUserLeaveHint()`, before `onPause`.
+ * fired**. React Native freezes in TWO ways while the Activity is paused:
+ * `FabricUIManager.onHostPause()` removes the DISPATCH_UI frame callback, so
+ * mount items are never applied to native views, and
+ * `JavaTimerManager.onHostPause()` freezes the timer registry, so
+ * `requestAnimationFrame` never fires. The entry therefore has to be
+ * NATIVE, inside `onUserLeaveHint()`, before `onPause`.
  *
  * ## What this test can and cannot prove
  *
@@ -216,77 +218,90 @@ class PipNativeEntryTest {
     // ── The chrome ────────────────────────────────────────────────────────
 
     @Test
-    fun `the chrome is found with React Native's own lookup`() {
-        val body = leaveHintBody()
+    fun `the chrome is found with React Native's own lookup, in ONE place`() {
+        val code = code(bridgeSource().readText())
+
+        // The lookup has ONE owner: `findConsumerChromeView`. Both callers
+        // - the request path's diagnostic and the mode-changed callback's
+        // hide - go through it, so there is one place that knows how the
+        // consumer's chrome is found.
+        val owner = code
+            .substringAfter("private fun findConsumerChromeView(root: View?): View? {")
+            .substringBefore("private fun ")
 
         assertTrue(
             "the chrome must be found with React Native's own lookup - " +
                 "`ReactFindViewUtil.findView` is the supported way to find a " +
                 "view by the `nativeID` prop",
-            body.contains("ReactFindViewUtil.findView("),
+            owner.contains("ReactFindViewUtil.findView("),
         )
         assertTrue(
             "the search root must be the Activity's window decor view - the " +
                 "React root lives under it",
-            body.contains("activity.window?.decorView"),
+            code.contains("activity.window?.decorView"),
         )
     }
 
     @Test
-    fun `a chrome id that NO view carries REFUSES the entry`() {
-        val body = leaveHintBody()
+    fun `a chrome id that NO view carries does NOT refuse the entry`() {
+        val code = code(bridgeSource().readText())
+        val hide = code
+            .substringAfter("private fun hideConsumerChrome() {")
+            .substringBefore("private fun ")
 
         assertTrue(
-            "the native entry must handle a chrome id that no view carries",
-            body.contains("if (chromeView == null)"),
+            "the hide must handle a chrome id that no view carries",
+            hide.contains("if (chromeView == null)"),
         )
-        assertTrue(
-            "a chrome that cannot be hidden must REFUSE the entry - entering " +
-                "PiP with it still mounted paints the app's dead chrome into " +
-                "the PiP window",
-            body.substringAfter("if (chromeView == null)").substringBefore("}")
+        assertFalse(
+            "a chrome that is not there must NOT refuse anything - it means the " +
+                "chrome is ALREADY hidden: the consumer's own button path " +
+                "unmounts it in React before it asks for the window",
+            hide.substringAfter("if (chromeView == null)").substringBefore("}")
+                .contains("return false"),
+        )
+        assertFalse(
+            "the request path must not refuse the entry over the chrome - " +
+                "the chrome block is a diagnostic there, and the entry goes on",
+            leaveHintBody()
+                .substringAfter("if (chromeNativeId != null) {")
+                .substringBefore("rememberPipActivity(activity)")
                 .contains("return false"),
         )
     }
 
     @Test
-    fun `the chrome is hidden with GONE BEFORE the PiP request`() {
+    fun `the chrome is NOT hidden in the request path`() {
         val body = leaveHintBody()
 
-        val hide = body.indexOf("chromeView.visibility = View.GONE")
-        val request = body.indexOf("enterPictureInPicture(")
-
-        assertTrue("the chrome must be hidden at all", hide >= 0)
-        assertTrue("the PiP window must be requested at all", request >= 0)
-        assertTrue(
-            "the chrome must be GONE BEFORE the PiP request - the PiP window " +
-                "keeps what the Activity's window held at the transition, and " +
-                "a View-system mutation is the only hide that lands without a " +
-                "React commit",
-            hide in 0 until request,
+        assertFalse(
+            "the request path must NOT hide the chrome - " +
+                "`onUserLeaveHint` is called as part of the Activity's PAUSE " +
+                "transaction and there is NO frame between the hide and the " +
+                "pause, so the hide never reaches the pixels",
+            body.contains("visibility = View.GONE"),
         )
     }
 
     @Test
-    fun `the params are built AFTER the hide, by the one shared builder`() {
-        val body = leaveHintBody()
+    fun `the params are built by the one shared builder`() {
+        val code = code(bridgeSource().readText())
 
-        // The hide happens in `notifyUserLeaveHint`; the params are built
-        // inside the shared builder, which the native path calls only
-        // AFTER the hide. So the ORDER of the two is the order of the
-        // hide and the builder call.
-        val hide = body.indexOf("chromeView.visibility = View.GONE")
-        val builder = body.indexOf("enterPictureInPicture(")
-
+        // ONE builder for the JS path and the native path, so the two
+        // cannot drift apart.
         assertTrue(
-            "the params must be built after the hide - they describe the " +
-                "window as it is at the transition",
-            hide in 0 until builder,
+            "the shared builder must be `PipManager.buildPipParams`",
+            code.contains("PipManager.buildPipParams("),
+        )
+        assertEquals(
+            "the builder must be called from ONE place in the bridge",
+            1,
+            Regex("PipManager\\.buildPipParams\\(").findAll(code).count(),
         )
     }
 
     @Test
-    fun `a REFUSED OS entry restores the chrome to VISIBLE`() {
+    fun `a REFUSED OS entry is reported to the caller`() {
         val body = leaveHintBody()
 
         val after = body.substringAfter("val entered = enterPictureInPicture(")
@@ -295,13 +310,8 @@ class PipNativeEntryTest {
             after.contains("if (!entered)"),
         )
         assertTrue(
-            "a refused entry must restore the chrome - a consumer left with " +
-                "an invisible chrome cannot come back from it",
-            after.contains("restoreConsumerChrome()"),
-        )
-        assertTrue(
-            "the restore must make the chrome visible again",
-            code(bridgeSource().readText()).contains("view.visibility = View.VISIBLE"),
+            "a refused entry must be reported as `false`",
+            after.contains("return false"),
         )
     }
 
@@ -310,11 +320,11 @@ class PipNativeEntryTest {
         val code = code(bridgeSource().readText())
         val pipChanged = code
             .substringAfter("fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean) {")
-            .substringBefore("fun notifyUserLeaveHint(")
+            .substringBefore("fun onPictureInPictureModeChanged(\n")
 
         assertTrue(
             "PiP ending must restore the chrome",
-            pipChanged.contains("if (!isInPictureInPictureMode)") &&
+            pipChanged.contains("else {") &&
                 pipChanged.contains("restoreConsumerChrome()"),
         )
         assertTrue(

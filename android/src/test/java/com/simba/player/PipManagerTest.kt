@@ -53,20 +53,12 @@ class PipManagerTest {
 
     @Test
     fun actionConstants_haveExpectedValues() {
-        // The action constants are referenced by both the module and the
-        // consumer app's MainActivity. Lock them in — a refactor that
+        // The action constant is referenced by both the module and the
+        // consumer app's MainActivity. Lock it in — a refactor that
         // changes the value would silently break the broadcast receiver.
         assertEquals(
             "com.simba.player.PIP_PLAY_PAUSE",
             PipManager.ACTION_PLAY_PAUSE,
-        )
-        assertEquals(
-            "com.simba.player.PIP_EXPAND",
-            PipManager.ACTION_EXPAND,
-        )
-        assertEquals(
-            "com.simba.player.PIP_CLOSE",
-            PipManager.ACTION_CLOSE,
         )
     }
 
@@ -90,18 +82,17 @@ class PipManagerTest {
     }
 
     @Test
-    fun buildPipParams_withDefaults_hasThreeRemoteActions() {
+    fun buildPipParams_withDefaults_hasOneRemoteAction() {
         // We can't enumerate RemoteAction contents directly through
         // PictureInPictureParams (they're a system-level list), but we
         // CAN confirm the builder accepted them by re-deriving the
         // PendingIntent's intent target action for each request code.
         // The actions list is read-only after build(), but we can verify
-        // the IntentFilters we register cover exactly the 3 actions.
+        // the IntentFilters we register cover exactly the ONE action the
+        // PiP row carries: the platform renders its own expand / close.
         val filter = PipManager.intentFilter()
-        assertEquals(3, filter.countActions())
+        assertEquals(1, filter.countActions())
         assertTrue(filter.hasAction(PipManager.ACTION_PLAY_PAUSE))
-        assertTrue(filter.hasAction(PipManager.ACTION_EXPAND))
-        assertTrue(filter.hasAction(PipManager.ACTION_CLOSE))
     }
 
     // ── Aspect-ratio clamping ─────────────────────────────────────────────
@@ -226,8 +217,7 @@ class PipManagerTest {
     @Test
     fun intentFilter_actionsAreInExpectedOrder() {
         // Order matters because some launchers enumerate them in
-        // registration order. Lock the expected ordering: Play/Pause →
-        // Expand → Close.
+        // registration order. There is only ONE action now: Play/Pause.
         val filter = PipManager.intentFilter()
         val actions = (0 until filter.countActions()).map { i ->
             filter.getAction(i)
@@ -235,8 +225,6 @@ class PipManagerTest {
         assertEquals(
             listOf(
                 PipManager.ACTION_PLAY_PAUSE,
-                PipManager.ACTION_EXPAND,
-                PipManager.ACTION_CLOSE,
             ),
             actions,
         )

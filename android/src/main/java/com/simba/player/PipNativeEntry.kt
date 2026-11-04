@@ -7,11 +7,14 @@ package com.simba.player
  *
  * The HOME path enters PiP from NATIVE code — `MpvBridgeModule`'s
  * companion, `notifyUserLeaveHint(activity)` — because by the time the
- * user presses HOME, React Native has already paused the React
- * scheduler with the Activity: a React commit cannot land and there is
- * no frame clock. Measured on emulator-5554 (API 37) on 2026-11-03: the
- * JS handler ran immediately, the effect that would have driven the
- * entry ran 5.7 s late, and the `requestAnimationFrame` never fired.
+ * user presses HOME, React Native has ALREADY frozen: `FabricUIManager
+ * .onHostPause()` removes the DISPATCH_UI frame callback, so mount items
+ * are never applied to native views, and `JavaTimerManager.onHostPause()`
+ * freezes the timer registry, so `requestAnimationFrame` never fires.
+ * The JS runtime itself keeps running. Measured on emulator-5554 (API
+ * 37) on 2026-11-03: the JS handler ran immediately, the effect that
+ * would have driven the entry ran 5.7 s late, and the
+ * `requestAnimationFrame` never fired.
  *
  * That native path has to produce the SAME two facts the JS path
  * produces — a title and a progress percentage — and it has to format
@@ -82,5 +85,24 @@ internal object PipNativeEntry {
         if (durationMs <= 0L) return null
         val ratio = (positionMs.toDouble() / durationMs.toDouble()) * 100.0
         return "${kotlin.math.floor(ratio + 0.5).toInt()} %"
+    }
+
+    /**
+     * Whether mpv is PLAYING right now, from its `playback-state`.
+     *
+     * mpv's `playback-state` is one of `idle`, `loading`, `play`, `pause`,
+     * `stopped`, `eof-reached`. Only `play` means the picture is moving.
+     *
+     * `eof-reached` is NOT playing: the file ended, and the engine is
+     * sitting on its last frame. A play/pause button that shows "play"
+     * for an ended file is right, so the state has to be read, not
+     * guessed.
+     *
+     * The property arrives JSON-encoded, so it is trimmed of its quotes
+     * before it is compared.
+     */
+    fun isPlaying(playbackState: String?): Boolean {
+        val state = playbackState?.trim()?.trim('"')?.trim() ?: return false
+        return state.equals("play", ignoreCase = true)
     }
 }

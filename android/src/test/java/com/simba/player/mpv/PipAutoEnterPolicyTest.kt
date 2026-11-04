@@ -25,34 +25,37 @@ import java.io.File
  * made the SYSTEM transition the activity into PiP when the user left the
  * app, with the consumer unable to do anything first.
  *
- * That is the wrong order for a consumer that draws its own chrome over
- * the picture. An Activity in PiP is "paused, but rendering" - what stops
- * is REACT: RN pauses the React scheduler when the Activity is paused, so
- * a commit cannot land and no frame is produced. The switch transitions the
- * Activity before the consumer can unmount its chrome, so the chrome is
- * still on screen when the PiP window is created, and with no frame
- * coming it stays there. Measured on device on 2026-11-03, the consumer's
- * full expanded chrome (header band, scrub row, +/-10 buttons, the big pause
- * button) was painted into the PiP window, its buttons were DEAD (tapping
- * pause did not pause - their views were gone) and its clock was FROZEN at
- * 51:09 while the real position was 54:15 (the pixels were stale).
- *
  * ## V3.2.0 (2026-11-03) - the entry moved NATIVE, and into the library
  *
  * The next measurement killed the JS-driven entry too. On the HOME path
  * the JS handler ran immediately, but the effect that would have driven
  * the entry ran 5.7 s late and the `requestAnimationFrame` never fired:
- * RN pauses the React scheduler with the Activity, so no React commit can
- * land and there is no frame clock. The entry had to be NATIVE, inside
+ * React Native freezes in TWO ways while the Activity is paused -
+ * `FabricUIManager.onHostPause()` removes the DISPATCH_UI frame callback,
+ * so mount items are never applied to native views, and
+ * `JavaTimerManager.onHostPause()` freezes the timer registry, so
+ * `requestAnimationFrame` never fires. The entry had to be NATIVE, inside
  * `onUserLeaveHint()`, before `onPause`.
  *
  * So the LIBRARY performs the entry now: the consumer's Activity hands it
- * the Activity, the library hides the consumer's chrome natively (a
- * View-system mutation, so it lands without a React commit) and asks the
- * OS for the window. The public config keeps its meaning:
- * `pip.autoEnterOnLeave: true` still means "enter PiP when the user
- * leaves the app". Only the performer changed - twice - and the
- * `onUserLeaveHint` event that used to carry the news is retired.
+ * the Activity, and the library asks the OS for the window. The public
+ * config keeps its meaning: `pip.autoEnterOnLeave: true` still means
+ * "enter PiP when the user leaves the app". Only the performer changed -
+ * twice - and the `onUserLeaveHint` event that used to carry the news is
+ * retired.
+ *
+ * ## V3.3.0 (2026-11-04) - the platform's switch is armed again, WITH media
+ *
+ * The platform's own switch came back, because it is the mechanism the
+ * platform documents: the params are COMMITTED to the Activity early
+ * (`Activity.setPictureInPictureParams(...)`) and kept current, and the
+ * platform builds the PiP window from the LAST COMMITTED params. The
+ * source rect hint among them is the rect it CROPS the app's window to,
+ * and that crop is what keeps the app's chrome out of the PiP window.
+ *
+ * The switch is armed ONLY while media is loaded, and disarmed when
+ * playback stops: browsing the Home screen with nothing playing must not
+ * throw the user into a PiP window of a stopped session.
  *
  * ## What this test can and cannot prove
  *
@@ -243,72 +246,72 @@ class PipAutoEnterPolicyTest {
         )
     }
 
-    // ── The platform's OWN switch must NOT be armed ───────────────────────
+    // ── The platform's OWN switch IS armed, but only with media ────────────
 
     @Test
-    fun `the platform's OWN auto-enter switch is NOT used`() {
+    fun `the platform's OWN auto-enter switch IS used`() {
         val manager = pipManagerSource().readText()
 
         // `PictureInPictureParams.Builder.setAutoEnterEnabled` is the
         // platform's switch (API 31+), and it makes the SYSTEM transition
-        // the activity without the consumer being able to remove its
-        // chrome first. The Activity in PiP is "paused, but rendering" -
-        // what stops is REACT: its scheduler is paused with the Activity,
-        // so no commit lands and no frame is produced. So the chrome was
-        // still mounted when the PiP window was created, and with no frame
-        // coming it stayed there: dead and scaled down - measured on
-        // device on 2026-11-03.
+        // the activity into PiP when the user leaves the app.
         //
-        // So the params this library hands the platform must NOT carry it.
+        // That is what the library wants on API 31+: the params are COMMITTED
+        // to the Activity early (`setPictureInPictureParams`), so the
+        // platform builds the PiP window from the LAST COMMITTED params -
+        // including the source rect hint it crops the app's window to, which
+        // is what keeps the app's chrome out of the PiP window.
         //
         // The CALL form is what is checked, not the bare name: the prose in
-        // `PipManager` deliberately NAMES the platform API it refuses to
-        // use, and a guard that tripped on a comment would have to delete
-        // the explanation instead of the code. A call always has the
-        // parenthesis.
-        assertFalse(
-            "PipManager must NOT call the platform's auto-enter switch - the " +
-                "consumer enters PiP itself, after removing its chrome",
+        // `PipManager` deliberately NAMES the platform API, and a guard that
+        // tripped on a comment would have to delete the explanation instead
+        // of the code. A call always has the parenthesis.
+        assertTrue(
+            "PipManager must call the platform's auto-enter switch - it is " +
+                "how the platform enters PiP on API 31+, and the committed " +
+                "params are what the platform builds the window from",
             manager.contains(".setAutoEnterEnabled("),
+        )
+        assertTrue(
+            "the switch must be gated on API 31+, where it exists",
+            manager.contains("Build.VERSION_CODES.S && autoEnter"),
         )
     }
 
     @Test
-    fun `the platform's auto-enter switch is not armed anywhere in the bridge`() {
+    fun `the params are committed to the Activity, not only handed over at the entry`() {
         val source = bridgeSource().readText()
 
-        assertFalse(
-            "the bridge must not call the platform's auto-enter switch",
-            source.contains(".setAutoEnterEnabled("),
-        )
-        assertFalse(
-            "the bridge must not stash auto-enter params on the activity - " +
-                "the platform's own auto-enter path is gone",
+        assertTrue(
+            "the bridge must commit the params with " +
+                "`Activity.setPictureInPictureParams(...)` - the platform " +
+                "builds the PiP window from the LAST COMMITTED params, and a " +
+                "hint handed over only at the entry moment never crops " +
+                "anything",
             source.contains(".setPictureInPictureParams("),
         )
         assertFalse(
-            "the function that pushed those params must be gone too - " +
-                "dead code that arms a broken path is a trap",
+            "the function that stashed params on the activity must stay gone - " +
+                "it armed a broken path",
             source.contains("applyActivityPipParams"),
         )
     }
 
     @Test
-    fun `the manual entry carries no auto-enter flag`() {
+    fun `the auto-enter flag is the media-loaded fact`() {
         val source = bridgeSource().readText()
 
-        // The manual entry (`enterPip`) is the path the CONSUMER drives.
-        // Its params must describe the window and nothing else: a flag
-        // that makes the platform transition on its own would put the
-        // consumer's chrome back into the frozen PiP window on the NEXT
-        // leave.
-        assertFalse(
-            "the manual entry's params must not carry an auto-enter flag",
-            source.contains("autoEnter = pipAutoEnter"),
-        )
-        assertFalse(
-            "the params builder must not even accept an auto-enter flag",
+        // The manual entry (`enterPip`) and the HOME path build their params
+        // through the SAME builder, and the builder's auto-enter flag is the
+        // media-loaded fact: the platform must not throw the user into a PiP
+        // window of a stopped session.
+        assertTrue(
+            "the params builder must accept the auto-enter flag",
             pipManagerSource().readText().contains("autoEnter: Boolean"),
+        )
+        assertTrue(
+            "the flag must be the media-loaded fact",
+            source.contains("autoEnter = isMediaLoaded()"),
         )
     }
 

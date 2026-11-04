@@ -369,7 +369,7 @@ override fun onUserLeaveHint() {
 }
 ```
 
-The library then hides your chrome, asks the OS for the window, and brings your chrome back when
+The library then asks the OS for the window, hides your chrome, and brings your chrome back when
 Picture-in-Picture ends. It returns whether the OS accepted the entry, so you can log it:
 
 ```kotlin
@@ -379,19 +379,35 @@ val entered = com.simba.player.mpv.MpvBridgeModule.notifyUserLeaveHint(this)
 ### Why it is native, and why your Activity hands over the Activity
 
 `Activity.onUserLeaveHint()` is the only hook Android gives you BEFORE the Activity is paused.
-`onPictureInPictureModeChanged(true)` arrives after `onPause`, which is too late to change what
-the window holds.
 
-And by then, React Native has already paused the React scheduler with the Activity, so a React
-commit cannot land and there is no frame clock. Measured on emulator-5554 (API 37) on 2026-11-03:
-the JS handler ran immediately, the effect that would have driven the entry ran **5.7 s late**, and
-the `requestAnimationFrame` **never fired**. So the entry has to happen in native code, and the
-chrome has to be hidden with a native View-system mutation (`visibility = View.GONE`), which lands
-without a React commit and without a frame clock.
+And by then, React Native has ALREADY frozen, in two ways: `FabricUIManager.onHostPause()`
+removes the DISPATCH_UI frame callback, so mount items are never applied to native views, and
+`JavaTimerManager.onHostPause()` freezes the timer registry, so `requestAnimationFrame` never
+fires. The JS runtime itself keeps running. Measured on emulator-5554 (API 37) on 2026-11-03: the
+JS handler ran immediately, the effect that would have driven the entry ran **5.7 s late**, and
+the `requestAnimationFrame` **never fired**. So the entry has to happen in native code.
 
-An Activity in Picture-in-Picture is "paused, but rendering" (AOSP) - the window keeps rendering;
-what stops is REACT. So the PiP window keeps whatever your window held at the moment of the
-transition: the chrome has to be GONE before the entry.
+While the Activity is paused, the app window's **UI layer** stops producing frames, while a
+`SurfaceView` keeps compositing. That is why the chrome is hidden from
+`onPictureInPictureModeChanged(true)` and not from `onUserLeaveHint()`: `onUserLeaveHint()` is
+called as part of the Activity's PAUSE transaction, and there is **no frame between the hide and
+the pause** — a hide applied there never reaches the pixels. (The 3.2.0 release claimed otherwise;
+the 3.3.0 release retracted it.)
+
+### How your chrome is kept out of the PiP window
+
+Two mechanisms, layered:
+
+1. **The crop (primary).** The platform crops your window to the rect in
+   `PictureInPictureParams.setSourceRectHint(...)` and scales that crop into the PiP window. The
+   library **commits** the params to your Activity with
+   `Activity.setPictureInPictureParams(...)` — early, and again whenever the picture's geometry,
+   the video's shape or the playback state changes — because the platform builds the PiP window
+   from the LAST COMMITTED params. A hint handed over only at the entry moment never crops
+   anything, and the PiP window then shows your whole window, scaled down.
+2. **The hide (second line of defence).** The chrome you draw *over* the video is inside the
+   crop, so the crop cannot remove it. The library hides your chrome root when Picture-in-
+   Picture starts.
 
 ### Telling the library which view is your chrome
 
@@ -416,21 +432,22 @@ about it:
 ```
 
 The library finds that view with React Native's own lookup (`ReactFindViewUtil.findView`), under
-your Activity's window decor view, and hides it natively before it asks for the window. The
+your Activity's window decor view, and hides it natively when Picture-in-Picture starts. The
 `nativeID` literal is yours - the library never hardcodes one of its own.
 
 Omit `chromeNativeId` if your app draws no chrome of its own: the library then enters
 Picture-in-Picture without hiding anything.
 
-**If the `nativeID` is set and no view carries it, the library REFUSES the entry** and logs a
-warning naming the id. Entering Picture-in-Picture with the chrome still mounted paints your dead
-controls into the PiP window, scaled down and dead - that is the defect this path exists to fix, so
-the library declines rather than reproduce it.
+**If the `nativeID` is set and no view carries it, the chrome is already hidden** - your own
+button path unmounts it in React before it asks for the window - so the library logs that and
+carries on. It never refuses the entry over a missing view.
 
-The library deliberately does NOT arm Android's own auto-enter switch
-(`PictureInPictureParams.Builder.setAutoEnterEnabled`): that makes the OS transition the Activity
-with no chance to remove your chrome, and the chrome it froze into the PiP window on 2026-11-03 was
-scaled down and dead.
+On **Android 12+** the library also arms Android's own auto-enter switch
+(`PictureInPictureParams.Builder.setAutoEnterEnabled`), but **only while media is loaded**, and it
+disarms it when playback stops: browsing the Home screen with nothing playing must not throw you
+into a PiP window of a stopped session. While the switch is armed, the OS performs the entry
+itself, and the library's explicit `enterPictureInPictureMode()` call is skipped (the platform
+refuses it while auto-enter is enabled).
 
 This works on **every** Android version - `onUserLeaveHint()` exists everywhere, and the platform's
 own switch never existed below Android 12.
@@ -439,9 +456,12 @@ The two PiP flags combine: auto-enter needs `pip.enabled` and `pip.autoEnterOnLe
 true.
 
 
-The Picture-in-Picture action row has three buttons: **Play/Pause**, **Expand** and **Close**.
-They arrive in JS as the `onPipPlayPause`, `onPipExpand` and `onPipClose` events, next to
-`onPipModeChanged`.
+The Picture-in-Picture action row has **one** button: **Play/Pause**, with a state-driven icon
+(the pause icon while the video is playing, the play icon while it is paused). The platform
+renders its own expand / close / settings affordances next to it. The button reaches the engine
+directly - no JavaScript in the path - so it works even when the JS bundle is not running. The
+`onPipPlayPause` event still exists in the API for compatibility, next to `onPipModeChanged`, but
+it is not what pauses playback.
 
 The media notification and lock screen are a separate surface. Its MediaSession advertises play,
 pause, play/pause, stop, skip-to-next, skip-to-previous and seek-to, with title, artist and album
@@ -543,15 +563,21 @@ before launching, and check `commands.isSurfaceMounted()`.
 **Picture-in-Picture does not start.** The Activity is missing
 `android:supportsPictureInPicture="true"` or `android:resizeableActivity="true"`. If auto-enter
 on leave does nothing, the Activity is not calling `MpvBridgeModule.notifyUserLeaveHint(this)`
-from `onUserLeaveHint()` - see [Picture-in-Picture](#picture-in-picture). If the log says the
-library refused the entry because no view carries your chrome `nativeID`, the `nativeID` in your
-config does not match the one on the view.
+from `onUserLeaveHint()` - see [Picture-in-Picture](#picture-in-picture).
+
+**The Picture-in-Picture window shows your app's chrome.** The platform crops your window to the
+source rect hint in the COMMITTED PiP params, and the library commits them when the picture's
+geometry, the video's shape or the playback state changes. If the crop is not happening, the
+params are not being committed - the log says so (`companion.commitPipParams`). A `nativeID` in
+your config that no view carries is NOT a refusal: the chrome is already hidden, and the library
+says so in the log.
 
 **The Picture-in-Picture action row shows three buttons and none of them work.** That was the
 explicit-broadcast bug, fixed in 3.1.0: the action's PendingIntent named the receiver's
 component, and an explicit broadcast is resolved through the manifest, where the receiver was
 never declared. Check that you have not registered a receiver for the PiP actions yourself -
-this package registers one, and a second registration delivers every action twice.
+this package registers one, and a second registration delivers every action twice. Since 3.3.0
+the row carries ONE button (play/pause) and the platform renders its own expand / close.
 
 
 **Gradle fails with `libmpv.so not found at android/src/main/jniLibs/…`.** The postinstall
