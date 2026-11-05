@@ -98,7 +98,7 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK (NDK + cmake for native build)
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           # NDK r27.1.12297006 + cmake 3.22.1 matches the consumer's
           # build environment (verified on MOBILE_APP_REACT_NATIVE V22).
@@ -379,7 +379,7 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK (full install for codegen)
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
           accept-sdk-licenses: true
