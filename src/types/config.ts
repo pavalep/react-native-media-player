@@ -76,7 +76,8 @@ export interface PipConfig {
    * platform builds the PiP window from the LAST COMMITTED params. The
    * source rect hint among them is a TRANSITION hint — the region the PiP
    * window ANIMATES FROM — not a crop. The app's chrome is kept out of the
-   * PiP window by hiding it before the entry, in native code.
+   * PiP window by hiding it before the entry, in native code, and by having
+   * that hide DRAWN before the platform takes the window.
    */
   autoEnterOnLeave: boolean;
   /**

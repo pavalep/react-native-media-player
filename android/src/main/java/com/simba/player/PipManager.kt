@@ -216,7 +216,8 @@ object PipManager {
         // This is the rect the PiP window ANIMATES FROM — a transition
         // hint, nothing more. It does not crop the app's window, so it is
         // NOT what keeps the app's chrome out of the PiP window; the
-        // consumer's chrome is hidden before the entry, in native code.
+        // consumer's chrome is hidden before the entry, in native code,
+        // and that hide is DRAWN before the platform takes the window.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && sourceRectHint != null) {
             builder.setSourceRectHint(sourceRectHint)
         }

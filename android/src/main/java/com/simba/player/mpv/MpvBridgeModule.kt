@@ -7,12 +7,14 @@ import android.graphics.Rect
 import android.media.MediaMetadataRetriever
 import android.util.Log
 import android.view.View
+import android.view.ViewTreeObserver
 import java.io.File
 import java.io.FileOutputStream
 import java.lang.ref.WeakReference
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.atomic.AtomicBoolean
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReadableArray
@@ -44,6 +46,18 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
     companion object {
         const val NAME = "MpvPlayerModule"
         private const val TAG = "MpvBridgeModule"
+
+        /**
+         * How long the native HOME entry waits for the window to DRAW the
+         * chrome-less frame before it asks for the PiP window.
+         *
+         * Measured on emulator-5554 (API 37) on 2026-11-05: the platform
+         * asked for PiP at `33.942` and the Activity was still RESUMED at
+         * `34.300` — 358 ms of RESUMED time. The wait has to fit inside
+         * that window, because `enterPictureInPictureMode` throws unless
+         * the Activity is resumed.
+         */
+        private const val PIP_ENTRY_DRAW_TIMEOUT_MS = 250L
 
         // ── captureFrame: resume-rail thumbnails ──────────────────────────
         // `MediaMetadataRetriever` needs a real filesystem path for its
@@ -263,7 +277,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
          * 2026-11-04: with the hint committed, the PiP window showed the
          * app's full chrome, scaled down.
          *
-         * The chrome is kept out by HIDING it before the entry.
+         * The chrome is kept out by HIDING it before the entry — and by
+         * having that hide DRAWN before the platform takes the window.
          *
          * ## Why the restore still happens here
          *
@@ -477,9 +492,110 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
          *
          * @param activity the Activity that is leaving. It is the window
          *        the PiP entry applies to.
-         * @return `true` when the Activity entered Picture-in-Picture,
-         *        `false` when it did not.
+         * @return `true` when the entry was STARTED — on API 31+ that
+         *        means it was scheduled for the next draw, because the
+         *        window must carry the chrome-less frame before the
+         *        platform takes it — and `false` when the entry was
+         *        refused.
          */
+        /**
+         * Ask for the PiP window — but only AFTER the window has DRAWN the
+         * chrome-less frame.
+         *
+         * ## Why the entry waits for a draw
+         *
+         * Measured on emulator-5554 (API 37) on 2026-11-05, on the v3.3.1
+         * build:
+         *
+         *  - the native hide lands on the RIGHT view: the chrome root went
+         *    GONE and STAYED GONE — the same view identity before the hide
+         *    and after the mode change;
+         *  - and yet the PiP window showed the app's FULL expanded chrome,
+         *    scaled down, over the live video.
+         *
+         * The reason is measured, not guessed. `View.setVisibility(GONE)`
+         * only SCHEDULES a traversal: in that run the window's draw counter
+         * did NOT move between the hide and the entry, so the hide never
+         * reached the pixels.
+         *
+         * The PiP window's UI layer is the app's last drawn frame. The
+         * video keeps playing inside it because the video is a
+         * `SurfaceView` — a separate layer the platform re-parents into
+         * the PiP window — while the app's UI layer is a snapshot. A
+         * snapshot taken before the chrome-less frame was drawn carries the
+         * chrome.
+         *
+         * So: hide the chrome, FORCE the window to schedule a draw that
+         * carries the hidden chrome, and ask for the window from that draw.
+         *
+         * ## The wait is BOUNDED
+         *
+         * If the window never draws, the entry goes on anyway: a PiP
+         * window that still carries the chrome is better than no PiP
+         * window at all. The bound is
+         * [PIP_ENTRY_DRAW_TIMEOUT_MS], which fits inside the RESUMED window
+         * the platform leaves before it pauses the Activity.
+         */
+        private fun enterPictureInPictureAfterDraw(activity: Activity): Boolean {
+            val root = activity.window?.decorView
+            if (root == null) {
+                // No window to wait for: ask for the window now.
+                return enterPictureInPicture(activity)
+            }
+            val observer = root.viewTreeObserver
+            val asked = AtomicBoolean(false)
+            val listener = object : ViewTreeObserver.OnDrawListener {
+                override fun onDraw() {
+                    if (!asked.compareAndSet(false, true)) return
+                    removeDrawListener(observer, this)
+                    askForTheWindow(activity)
+                }
+            }
+            // FORCE the window to schedule a draw that carries the hidden
+            // chrome. The visibility change alone did not, and that is the
+            // whole defect.
+            root.invalidate()
+            root.requestLayout()
+            try {
+                observer.addOnDrawListener(listener)
+            } catch (e: IllegalStateException) {
+                // The tree is not alive: there is nothing to wait for.
+                return enterPictureInPicture(activity)
+            }
+            // The bound: a window that never draws must not hold the entry.
+            root.postDelayed({
+                if (asked.compareAndSet(false, true)) {
+                    removeDrawListener(observer, listener)
+                    askForTheWindow(activity)
+                }
+            }, PIP_ENTRY_DRAW_TIMEOUT_MS)
+            return true
+        }
+
+        /**
+         * Remove a draw listener without letting a dead view tree throw.
+         */
+        private fun removeDrawListener(
+            observer: ViewTreeObserver,
+            listener: ViewTreeObserver.OnDrawListener,
+        ) {
+            try {
+                observer.removeOnDrawListener(listener)
+            } catch (e: IllegalStateException) {
+                // The tree died with the window: there is nothing to remove.
+            }
+        }
+
+        /**
+         * The one call that asks the OS for the window, and the one place
+         * the OS's answer is read.
+         */
+        private fun askForTheWindow(activity: Activity) {
+            if (!enterPictureInPicture(activity)) {
+                Log.w(TAG, "companion.askForTheWindow: the OS refused the PiP entry")
+            }
+        }
+
         fun notifyUserLeaveHint(activity: Activity): Boolean {
             Log.i(
                 TAG,
@@ -540,13 +656,41 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             //    region the PiP window ANIMATES FROM — a transition hint,
             //    not a crop.
             commitPipParams(activity)
-            // 6. Ask for the window.
+            // 6. Ask for the window — on API 31+ only AFTER the window has
+            //    DRAWN the chrome-less frame.
             //
             //    This is an EXPLICIT entry on every API level. On API 31+
             //    it is legal here because the platform's auto-enter
             //    switch is not armed: ATMS refuses a client entry only
             //    while auto-enter is enabled ("auto-enter should take in
             //    place instead").
+            //
+            //    On API 31+ the entry runs from
+            //    `Activity.onPictureInPictureRequested()`, while the
+            //    Activity is still RESUMED — so there is time for one
+            //    frame, and the window is asked for only once the
+            //    chrome-less frame is on the screen. Measured on
+            //    emulator-5554 (API 37) on 2026-11-05: asking for the
+            //    window in the SAME tick as the hide put the app's
+            //    PRE-HIDE frame in the PiP window, and that window carried
+            //    the app's FULL expanded chrome, scaled down.
+            //
+            //    On API 24-30 the entry runs from `onUserLeaveHint()`,
+            //    which AOSP calls "right before the activity's onPause
+            //    callback": there is no frame between it and the pause,
+            //    and `enterPictureInPictureMode` needs a RESUMED Activity.
+            //    The entry there is immediate.
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                if (!enterPictureInPictureAfterDraw(activity)) {
+                    Log.w(TAG, "companion.notifyUserLeaveHint: the OS refused the PiP entry")
+                    return false
+                }
+                Log.i(
+                    TAG,
+                    "companion.notifyUserLeaveHint: the PiP entry is scheduled for the next draw",
+                )
+                return true
+            }
             val entered = enterPictureInPicture(activity)
             if (!entered) {
                 Log.w(TAG, "companion.notifyUserLeaveHint: the OS refused the PiP entry")
@@ -859,7 +1003,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
          * chrome, scaled down.
          *
          * The chrome is kept out by HIDING it before the entry, in native
-         * code — see `notifyUserLeaveHint(activity)`.
+         * code, and by having that hide DRAWN before the platform takes the
+         * window — see `notifyUserLeaveHint(activity)`.
          *
          * It is **not** the picture view's box. The picture fills its lane
          * (`StyleSheet.absoluteFill`), so the view's rect is the whole window

@@ -1,4 +1,58 @@
 
+## [3.3.3] - 2026-11-05
+
+### Fixed
+
+- **The HOME path's PiP window could carry the app's full expanded chrome, scaled down.** The
+  3.3.1 release shipped the entry ORDER — hide the chrome, then ask the OS for the window — and
+  that order is right, but it was not enough, and the release said it was. Measured on
+  emulator-5554 (API 37) on 2026-11-05, with an instrumented build that logged the chrome view's
+  identity, its visibility and the window's draw count at every stage:
+
+  - the native hide lands on the **right view**: the chrome root went `GONE` and **stayed** gone —
+    the same view identity before the hide and after `onPictureInPictureModeChanged(true)`;
+  - and yet the PiP window showed the app's **full** expanded chrome — the header band, the ±10
+    buttons, the big pause button, the scrub row — over the live video.
+
+  The cause is measured, not guessed. `View.setVisibility(GONE)` only **schedules** a traversal:
+  in that run the window's draw counter did **not move at all** between the hide and the entry, so
+  the hide never reached the pixels. The PiP window's UI layer is the app's **last drawn frame** —
+  the video keeps playing inside it because the video is a `SurfaceView`, a separate layer the
+  platform re-parents into the PiP window, while the app's UI layer is a snapshot. A frame that
+  was never drawn cannot be in it.
+
+  The defect is reproducible without the fix: **pause the video**, so the app has nothing to
+  animate and stops drawing, and then press HOME. With the video playing, the same press gives a
+  clean, video-only PiP window.
+
+  **The fix:** the entry now hides the chrome, **forces** the window to schedule a draw that
+  carries the hidden chrome (`invalidate()` + `requestLayout()`), and asks the OS for the window
+  **from that draw** — a one-shot `ViewTreeObserver.OnDrawListener`. If the window never draws,
+  the entry goes on anyway after a bounded wait (250 ms), because a PiP window that still carries
+  the chrome is better than no PiP window at all.
+
+  On API 24-30 the entry is unchanged and immediate: there it runs from `onUserLeaveHint()`, which
+  AOSP calls "right before the activity's onPause callback", so there is no frame to wait for and
+  `enterPictureInPictureMode()` needs a RESUMED Activity.
+
+### Retracted
+
+- **"The chrome is kept out by HIDING it before the entry."** That was the 3.3.1/3.3.2 mechanism,
+  and it was **not** enough: the hide has to be **drawn** before the platform takes the window.
+  Five shipped places asserted the old mechanism — `MpvBridgeModule.kt` (two docblocks),
+  `PipManager.kt`, `src/types/config.ts` and the README — and all of them now say what the
+  measurement says. The 3.3.1 CHANGELOG entry below still quotes the old wording on purpose: a
+  retraction that deletes the wrong text is not a retraction.
+
+- **"Your app is still drawing, so the chrome-less window is presented before the platform
+  transitions it."** (README) — the app is still **RESUMED** for a few hundred milliseconds after
+  `onPictureInPictureRequested()`, but *drawing* is a different thing, and a paused video leaves
+  the app with nothing to draw. The README now says what is true.
+
+- **"It returns whether the OS accepted the entry."** (README) — on API 31+ the entry is
+  **scheduled** for the next draw, so the return value says the entry was *started*. The OS's
+  answer is logged, not returned.
+
 ## [3.3.2] - 2026-11-04
 
 ### Retracted

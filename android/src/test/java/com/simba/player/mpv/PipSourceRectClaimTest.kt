@@ -19,7 +19,8 @@ import org.junit.Test
  * frozen clock (emulator-5554, API 37, 2026-11-04). `setSourceRectHint` is a
  * TRANSITION hint — the region the PiP window animates **FROM** — and
  * nothing more. The chrome is kept out by HIDING it before the entry, in
- * native code.
+ * native code, and by having that hide DRAWN before the platform takes the
+ * window.
  *
  * A docblock is a CLAIM. A false claim in a docblock does not fail a build;
  * it sends the next reader looking for a platform mechanism that does not

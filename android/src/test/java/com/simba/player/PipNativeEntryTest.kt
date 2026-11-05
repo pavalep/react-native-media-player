@@ -298,6 +298,64 @@ class PipNativeEntryTest {
     }
 
     @Test
+    fun `the entry waits for a draw that carries the hidden chrome`() {
+        val body = leaveHintBody()
+
+        // The chrome is hidden, and the window is asked for ONLY after the
+        // window has drawn the chrome-less frame.
+        //
+        // Measured on emulator-5554 (API 37) on 2026-11-05: the hide lands
+        // on the right view and stays there, and the window's draw counter
+        // does not move between the hide and the entry - so the hide never
+        // reached the pixels, and the PiP window carried the app's FULL
+        // expanded chrome, scaled down.
+        val hide = body.indexOf("hideConsumerChrome()")
+        val ask = body.indexOf("enterPictureInPictureAfterDraw(activity)")
+
+        assertTrue("the request path must hide the chrome", hide >= 0)
+        assertTrue(
+            "on API 31+ the entry must go through the draw-gated path",
+            ask >= 0,
+        )
+        assertTrue(
+            "the chrome must be hidden BEFORE the draw-gated entry is asked for",
+            hide < ask,
+        )
+
+        val code = code(bridgeSource().readText())
+        val afterDraw = code
+            .substringAfter("private fun enterPictureInPictureAfterDraw(activity: Activity): Boolean {")
+            .substringBefore("private fun removeDrawListener(")
+
+        assertTrue(
+            "the window must be asked for from a DRAW callback - a draw is " +
+                "the only proof that the chrome-less frame is on the screen",
+            afterDraw.contains("ViewTreeObserver.OnDrawListener"),
+        )
+        assertTrue(
+            "the entry must ask for the window from the draw callback",
+            afterDraw.contains("askForTheWindow(activity)"),
+        )
+        assertTrue(
+            "the window must be FORCED to schedule a draw - the visibility " +
+                "change alone did not, and that is the whole defect",
+            afterDraw.contains("root.invalidate()") &&
+                afterDraw.contains("root.requestLayout()"),
+        )
+        assertTrue(
+            "the wait must be BOUNDED - a window that never draws must not " +
+                "hold the entry, because a PiP window with the chrome is " +
+                "better than no PiP window at all",
+            afterDraw.contains("PIP_ENTRY_DRAW_TIMEOUT_MS"),
+        )
+        assertTrue(
+            "the draw-gated entry is the API 31+ path - below that the " +
+                "Activity is about to pause and there is no frame to wait for",
+            body.contains("android.os.Build.VERSION_CODES.S"),
+        )
+    }
+
+    @Test
     fun `the params are built by the one shared builder`() {
         val code = code(bridgeSource().readText())
 

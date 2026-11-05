@@ -191,15 +191,39 @@ class PipPiPWindowTest {
         val request = body.indexOf("enterPictureInPicture(activity)")
         assertTrue("the explicit request must exist", request >= 0)
 
-        // There must be NO API-31+ branch that returns before the
-        // request: the explicit entry is the only entry, because the
-        // platform's auto-enter never calls the app's hooks.
+        // There must be NO API-31+ branch that SKIPS the explicit request:
+        // the explicit entry is the only entry, because the platform's
+        // auto-enter never calls the app's hooks.
+        //
+        // The API 31+ branch that exists does NOT skip it — it asks for the
+        // window through the DRAW-GATED entry, one frame later, so the
+        // chrome-less frame is on the screen before the platform takes the
+        // window. Measured on emulator-5554 (API 37) on 2026-11-05: the
+        // chrome view was GONE and stayed GONE, and the PiP window STILL
+        // carried the app's full expanded chrome, because the hide had
+        // never been drawn.
+        val gated = body.indexOf("enterPictureInPictureAfterDraw(activity)")
+        assertTrue(
+            "the API 31+ path must ask for the window through the " +
+                "draw-gated entry - the hide has to be DRAWN before the " +
+                "platform takes the window",
+            gated >= 0,
+        )
+        assertTrue(
+            "the draw-gated entry must come first - API 31+ takes that " +
+                "path, and API 24-30 the immediate one",
+            gated < request,
+        )
+
+        val branch = body
+            .substringAfter("VERSION_CODES.S")
+            .substringBefore("val entered = enterPictureInPicture(activity)")
         assertFalse(
-            "there must be no API-31+ branch that skips the explicit " +
-                "request - the platform's auto-enter does the transition " +
-                "without ever calling the app, and the chrome is then " +
-                "still mounted when the window is frozen",
-            body.contains("VERSION_CODES.S"),
+            "the API 31+ branch must not return before asking for the " +
+                "window - the explicit entry is the only entry",
+            branch
+                .substringBefore("enterPictureInPictureAfterDraw(activity)")
+                .contains("return"),
         )
     }
 

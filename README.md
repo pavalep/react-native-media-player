@@ -386,8 +386,10 @@ callback regardless of if it acts on it or not", and `false` sends the framework
 path. The same library call serves both, so there is one entry and one owner. Why the API 31+
 hook matters is in [Why it is native](#why-it-is-native-and-why-your-activity-hands-over-the-activity).
 
-The library then asks the OS for the window, hides your chrome, and brings your chrome back when
-Picture-in-Picture ends. It returns whether the OS accepted the entry, so you can log it:
+The library then hides your chrome, asks the OS for the window, and brings your chrome back when
+Picture-in-Picture ends. It returns whether the entry was **started** — on API 31+ that means it
+was scheduled for the next draw, because the chrome-less frame has to be on the screen before the
+platform takes the window — and `false` when the entry was refused, so you can log it:
 
 ```kotlin
 val entered = com.simba.player.mpv.MpvBridgeModule.notifyUserLeaveHint(this)
@@ -417,8 +419,10 @@ your Activity is still **RESUMED**. That matters twice over:
 
 - `Activity.enterPictureInPictureMode()` throws `IllegalStateException` unless the Activity is
   resumed, so this is the only moment an explicit entry is legal at all.
-- your app is still drawing, so the chrome-less window is presented before the platform
-  transitions it.
+- the Activity is still **RESUMED** for a few hundred milliseconds after this hook, and that is
+  the window the library uses to draw the chrome-less frame before it asks for the PiP window.
+  Measured on emulator-5554 (API 37) on 2026-11-05: `onPictureInPictureRequested` at `33.942`,
+  `onUserLeaveHint` at `34.300` — 358 ms of RESUMED time.
 
 That is why the library does **not** arm the platform's auto-enter switch: with it armed there
 is no pre-transition hook to use.
@@ -428,7 +432,7 @@ is no pre-transition hook to use.
 The PiP window **is** your Activity's own window, so whatever your chrome draws is what the PiP
 window shows. The library hides your chrome root **before** it asks the OS for the window.
 
-Two things have to be right for that to work:
+Three things have to be right for that to work:
 
 1. **The hide happens in the entry, not after it.** Hiding from
    `onPictureInPictureModeChanged(true)` — after the platform has already transitioned the
@@ -437,6 +441,23 @@ Two things have to be right for that to work:
 2. **The entry happens while your Activity is resumed.** On API 31+ that means
    `onPictureInPictureRequested()`; see
    [Why it is native](#why-it-is-native-and-why-your-activity-hands-over-the-activity).
+3. **The hide has to be DRAWN.** This is the one that is easy to get wrong, and it was measured:
+   on API 31+ the library hides your chrome root and then asks the OS for the window — and the
+   window showed the app's full expanded chrome anyway. The reason is that
+   `View.setVisibility(GONE)` only **schedules** a traversal: in that run the window's draw
+   counter did not move at all between the hide and the entry, so the hide never reached the
+   pixels. The PiP window's UI layer is the app's **last drawn frame** — the video keeps playing
+   inside it because the video is a `SurfaceView`, a separate layer the platform re-parents —
+   so a frame that was never drawn cannot be in it.
+
+   The library therefore forces the window to schedule a draw that carries the hidden chrome
+   (`invalidate()` + `requestLayout()`) and asks the OS for the window **from that draw**. If the
+   window never draws, the entry goes on anyway after a bounded wait: a PiP window that still
+   carries your chrome is better than no PiP window at all.
+
+   You can reproduce the defect without that fix: pause the video, so the app has nothing to
+   animate and stops drawing, and then press HOME. With the video playing, the same press gives
+   a clean, video-only PiP window.
 
 `PictureInPictureParams.setSourceRectHint(...)` is **not** part of this. It is a TRANSITION
 hint: it tells the platform which region of your window the PiP window should animate FROM. It
@@ -600,8 +621,9 @@ on leave does nothing, the Activity is not calling `MpvBridgeModule.notifyUserLe
 from `onPictureInPictureRequested()` (API 31+) or from `onUserLeaveHint()` (API 24-30) - see
 [Picture-in-Picture](#picture-in-picture).
 
-**The Picture-in-Picture window shows your app's chrome.** The chrome is hidden in the entry,
-before the window is asked for — so the entry has to run while your Activity is resumed. On API
+**The Picture-in-Picture window shows your app's chrome.** The chrome is hidden in the entry and
+that hide is **drawn** before the window is asked for — so the entry has to run while your Activity
+is resumed. On API
 31+ that means `onPictureInPictureRequested()` must return `true` and call the library:
 `onUserLeaveHint()` alone is **never called** there, because the platform's auto-enter switch
 transitions the window itself (measured: zero log lines on a HOME press). The library logs the
