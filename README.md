@@ -387,8 +387,9 @@ path. The same library call serves both, so there is one entry and one owner. Wh
 hook matters is in [Why it is native](#why-it-is-native-and-why-your-activity-hands-over-the-activity).
 
 The library then hides your chrome, asks the OS for the window, and brings your chrome back when
-Picture-in-Picture ends. It returns whether the OS **accepted** the entry, and `false` when the
-entry was refused, so you can log it:
+Picture-in-Picture ends **— or when the OS refuses the entry**, which produces no Picture-in-Picture
+mode change to restore it from. It returns whether the OS **accepted** the entry, and `false` when
+the entry was refused, so you can log it:
 
 ```kotlin
 val entered = com.simba.player.mpv.MpvBridgeModule.notifyUserLeaveHint(this)

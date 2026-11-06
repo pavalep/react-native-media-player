@@ -647,6 +647,24 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             val entered = enterPictureInPicture(activity, state = state)
             if (!entered) {
                 Log.w(TAG, "companion.notifyUserLeaveHint: the OS refused the PiP entry")
+                // The chrome was hidden above, and a REFUSED entry never
+                // produces a PiP mode change: the app never entered PiP, so
+                // `onPictureInPictureModeChanged(false)` never runs and the
+                // restore it owns never happens.
+                //
+                // The consumer came back to the player with NO header, no
+                // scrub row and no transport row at all, and the only
+                // recovery was killing the app. Measured on emulator-5554
+                // (API 37) on 2026-11-06: the OS refused the entry and
+                // `restoreConsumerChrome` NEVER ran.
+                //
+                // So the refusal brings the chrome back ITSELF - and it
+                // calls the ONE owner, `restoreConsumerChrome()`, which
+                // forgets the hidden view as it restores it. That is what
+                // makes this call and the PiP-exit call safe to have
+                // BOTH: the second one finds nothing to restore and does
+                // nothing, so the chrome is restored exactly once.
+                restoreConsumerChrome()
                 return false
             }
             Log.i(TAG, "companion.notifyUserLeaveHint: entered PiP")
@@ -835,7 +853,21 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         /**
          * Bring the hidden chrome back, and forget it.
          *
-         * Called when PiP ends (`onPictureInPictureModeChanged(false)`).
+         * ## The ONE owner of the restore
+         *
+         * Two paths call it, and both go through here:
+         *  - PiP ends - `onPictureInPictureModeChanged(false)`;
+         *  - the OS REFUSED the entry - `notifyUserLeaveHint`, which
+         *    never produces a PiP mode change at all, because the app
+         *    never entered PiP.
+         *
+         * It forgets the hidden view as it restores it, so a second call
+         * finds nothing to do: whichever path gets there first restores
+         * the chrome, and the other one does nothing. The chrome is
+         * restored exactly once, and never zero times.
+         *
+         * A `null` view is not a failure: nothing was hidden, so there is
+         * nothing to restore.
          */
         private fun restoreConsumerChrome() {
             val view = pipHiddenChromeView ?: return

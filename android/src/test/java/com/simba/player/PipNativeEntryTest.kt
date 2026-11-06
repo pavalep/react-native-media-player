@@ -462,6 +462,113 @@ class PipNativeEntryTest {
         )
     }
 
+    // ── A REFUSED entry brings the chrome back ───────────────────────────
+
+    @Test
+    fun `a REFUSED OS entry brings the chrome back`() {
+        val body = leaveHintBody()
+
+        // B-054 (2026-11-06): the OS refused the PiP entry, the chrome
+        // stayed GONE, and the consumer came back to the player with NO
+        // header, no scrub row and NO transport row at all - the only
+        // recovery was killing the app.
+        //
+        // The restore cannot wait for a PiP mode change: a REFUSED entry
+        // never produces one, because the app never entered PiP.
+        val refusal = body
+            .substringAfter("if (!entered) {")
+            .substringBefore("return false")
+
+        assertTrue(
+            "a refused entry must restore the chrome - the hide already " +
+                "happened, and a refusal produces no PiP mode change to " +
+                "restore it",
+            refusal.contains("restoreConsumerChrome()"),
+        )
+        assertFalse(
+            "the refusal must NOT wait for a PiP mode change - a refused " +
+                "entry never produces one",
+            refusal.contains("onPictureInPictureModeChanged"),
+        )
+        assertTrue(
+            "the restore must come AFTER the ask - the chrome is only " +
+                "brought back when the OS refused the entry",
+            body.indexOf("val entered = enterPictureInPicture(") <
+                body.indexOf("restoreConsumerChrome()"),
+        )
+    }
+
+    @Test
+    fun `a guard that returns BEFORE the hide does NOT restore`() {
+        val body = leaveHintBody()
+
+        // The auto-enter, already-in-PiP and no-media guards all return
+        // BEFORE the chrome is touched. Nothing was hidden on those
+        // paths, so nothing may be restored there.
+        val beforeHide = body.substringBefore("hideConsumerChrome()")
+
+        assertFalse(
+            "nothing was hidden before the hide, so nothing may be " +
+                "restored there - a guard that returns early must leave " +
+                "the chrome alone",
+            beforeHide.contains("restoreConsumerChrome()"),
+        )
+    }
+
+    @Test
+    fun `the restore has ONE owner, and it forgets the hidden view`() {
+        val code = code(bridgeSource().readText())
+
+        assertEquals(
+            "the restore must have exactly ONE owner - a second " +
+                "implementation is a second path that can double-fire",
+            1,
+            Regex("private fun restoreConsumerChrome\\(\\)").findAll(code).count(),
+        )
+        assertEquals(
+            "the chrome must be made VISIBLE in exactly ONE place - the " +
+                "owner - so no path can restore it behind the owner's back",
+            1,
+            Regex("visibility = View\\.VISIBLE").findAll(code).count(),
+        )
+
+        val owner = code
+            .substringAfter("private fun restoreConsumerChrome() {")
+            .substringBefore("private fun ")
+
+        assertTrue(
+            "the owner must forget the hidden view AS IT RESTORES it - " +
+                "that is what makes a second call a no-op instead of a " +
+                "double restore",
+            owner.indexOf("pipHiddenChromeView = null") <
+                owner.indexOf("visibility = View.VISIBLE"),
+        )
+        assertTrue(
+            "the owner must be a no-op when nothing was hidden - a guard " +
+                "that returned before the hide must not restore anything",
+            owner.contains("val view = pipHiddenChromeView ?: return"),
+        )
+    }
+
+    @Test
+    fun `the PiP exit still restores the chrome exactly once`() {
+        val code = code(bridgeSource().readText())
+        val modeChanged = code
+            .substringAfter("fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean) {")
+            .substringBefore("private fun pipActivity(")
+
+        // The normal exit from PiP is still the restore's other caller:
+        // the refusal path and this one both go through the ONE owner,
+        // and the owner forgets the view as it restores it - so a normal
+        // exit restores exactly once, and a refusal restores exactly
+        // once.
+        assertEquals(
+            "the PiP-exit path must restore the chrome exactly once",
+            1,
+            Regex("restoreConsumerChrome\\(\\)").findAll(modeChanged).count(),
+        )
+    }
+
     // ── The facts the native path reports ────────────────────────────────
 
     @Test

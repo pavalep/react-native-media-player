@@ -1,4 +1,49 @@
 
+## [3.3.6] - 2026-11-06
+
+### Fixed
+
+- **A REFUSED Picture-in-Picture entry left the app with NO controls at all.** The entry path hides
+  your chrome before it asks the OS for the window. If the OS then **refused** the entry, the
+  chrome was never brought back: `restoreConsumerChrome()` was called from exactly one place —
+  `onPictureInPictureModeChanged(false)` — and a refused entry never produces a Picture-in-Picture
+  mode change, because the app never entered Picture-in-Picture.
+
+  Measured on emulator-5554 (API 37) on 2026-11-06, on the npm 3.3.5 build, with the platform
+  appop `PICTURE_IN_PICTURE` denied so the OS refuses the entry:
+
+  ```
+  18:14:49.334  hideConsumerChrome: hid the chrome view with nativeID 'simba-expanded-chrome' visibility=8
+  18:14:49.348  the OS refused the PiP entry
+  ```
+
+  `restoreConsumerChrome` **never ran**. The app came back to the player with no header, no scrub
+  row and no transport row — just the video, with nothing to control it with. Tapping the video did
+  not bring it back, and the only recovery was killing the app.
+
+  **The fix:** the refusal branch brings the chrome back itself, before it returns. It calls the
+  **one** owner — `restoreConsumerChrome()` — which forgets the hidden view as it restores it, so
+  the refusal path and the Picture-in-Picture-exit path can both call it and the chrome is restored
+  **exactly once**: whichever path gets there first restores it, and the other finds nothing to do
+  and does nothing. A guard that returns *before* the hide (the API level, the auto-enter policy,
+  already-in-Picture-in-Picture, no media loaded) restores nothing, because nothing was hidden.
+
+  The README said the chrome is brought back "when Picture-in-Picture ends". That was **false** for
+  a refused entry, and the README is the documentation every consumer installs — so it now says
+  "when Picture-in-Picture ends **or when the OS refuses the entry**".
+
+### Not claimed
+
+- This release does **not** claim to fix the chrome that is still in the Picture-in-Picture window
+  on a successful entry. That is **B-050**, and its cause is measured: the hide and the entry run
+  in the **same main-thread message**, so no traversal can run between them, so the chrome-less
+  frame is never drawn, and the Picture-in-Picture window keeps a **frozen snapshot** of the app's
+  last drawn UI layer while its video layer stays live. The 3.3.5 CHANGELOG's "Not claimed" section
+  says so in full, and nothing in this release changes it.
+
+- The JavaScript-button entry path is unchanged: the consumer unmounts its own chrome in React
+  there, so the library never hides it natively and there is nothing to restore.
+
 ## [3.3.5] - 2026-11-06
 
 ### Fixed
