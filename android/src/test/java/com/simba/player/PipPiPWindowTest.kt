@@ -191,39 +191,35 @@ class PipPiPWindowTest {
         val request = body.indexOf("enterPictureInPicture(activity)")
         assertTrue("the explicit request must exist", request >= 0)
 
-        // There must be NO API-31+ branch that SKIPS the explicit request:
-        // the explicit entry is the only entry, because the platform's
-        // auto-enter never calls the app's hooks.
+        // There must be NO API-31+ branch that defers the request, and no
+        // deferral of ANY kind: the explicit entry is the only entry, and
+        // it has to happen in THIS tick.
         //
-        // The API 31+ branch that exists does NOT skip it — it asks for the
-        // window through the DRAW-GATED entry, one frame later, so the
-        // chrome-less frame is on the screen before the platform takes the
-        // window. Measured on emulator-5554 (API 37) on 2026-11-05: the
-        // chrome view was GONE and stayed GONE, and the PiP window STILL
-        // carried the app's full expanded chrome, because the hide had
-        // never been drawn.
-        val gated = body.indexOf("enterPictureInPictureAfterDraw(activity)")
-        assertTrue(
-            "the API 31+ path must ask for the window through the " +
-                "draw-gated entry - the hide has to be DRAWN before the " +
-                "platform takes the window",
-            gated >= 0,
+        // Measured on emulator-5554 (API 37) on 2026-11-05, and again on
+        // 2026-11-06, on the v3.3.3 build: the ask was deferred to the
+        // window's next draw and landed 1.8 s after the platform's
+        // request. The Activity had been paused by then, the OS REFUSED
+        // the entry, and NO PiP window opened at all.
+        assertEquals(
+            "there must be exactly ONE entry call in the native path - a " +
+                "second one is a second, deferred entry",
+            1,
+            Regex("enterPictureInPicture\\(").findAll(body).count(),
         )
-        assertTrue(
-            "the draw-gated entry must come first - API 31+ takes that " +
-                "path, and API 24-30 the immediate one",
-            gated < request,
-        )
-
-        val branch = body
-            .substringAfter("VERSION_CODES.S")
-            .substringBefore("val entered = enterPictureInPicture(activity)")
         assertFalse(
-            "the API 31+ branch must not return before asking for the " +
-                "window - the explicit entry is the only entry",
-            branch
-                .substringBefore("enterPictureInPictureAfterDraw(activity)")
-                .contains("return"),
+            "the entry must NOT be deferred to a draw - a deferred ask " +
+                "lands after the Activity is paused, and the OS refuses it",
+            body.contains("enterPictureInPictureAfterDraw("),
+        )
+        assertFalse(
+            "the entry must NOT be deferred to a timer - same reason, same " +
+                "refusal",
+            body.contains("postDelayed"),
+        )
+        assertFalse(
+            "the entry must NOT be deferred to a draw listener - a draw " +
+                "callback fires outside this callback's tick",
+            body.contains("OnDrawListener"),
         )
     }
 

@@ -1,4 +1,60 @@
 
+## [3.3.4] - 2026-11-06
+
+### Fixed
+
+- **The HOME path opened NO Picture-in-Picture window at all.** This is a regression the 3.3.3
+  release shipped, and it is the reason this release exists. Measured on emulator-5554 (API 37) on
+  2026-11-05, and again on 2026-11-06, on the 3.3.3 build:
+
+  ```
+  15:21:28.392  onPictureInPictureRequested: the platform asked the app to enter PiP
+  15:21:28.423  hideConsumerChrome: hid the chrome view ... visibility=8
+  15:21:28.826  the PiP entry is scheduled for the next draw
+  15:21:29.139  onUserLeaveHint: the user is leaving the app
+  15:21:30.186  askForTheWindow: the OS refused the PiP entry
+  ```
+
+  `dumpsys activity activities` reported `mLastReportedPictureInPictureMode=false` — the entry
+  never happened. The cause is measured: 3.3.3 deferred the OS ask to the window's next draw, the
+  ask landed **1.8 s** after the platform's request, and by then the Activity had been paused.
+  `Activity.enterPictureInPictureMode` throws unless the Activity is RESUMED, so the OS refused
+  the entry.
+
+  **The fix:** the ask is synchronous again — inside `onPictureInPictureRequested()`, in that
+  tick, on every API level. The chrome is still hidden before the ask, and the params are still
+  committed before it.
+
+### Retracted
+
+- **"The hide has to be DRAWN before the platform takes the window."** (3.3.3) That claim was
+  **never proven**. It rested on a single measurement — the window's draw counter did not move
+  between the hide and the entry — which is consistent with a stale frame AND with a draw that had
+  not been scheduled yet. A single screenshot cannot separate the two, and the release stated the
+  inference as a measured cause.
+
+  The mechanism built on that claim — a draw-gated entry on the API 31+ path, waiting for a
+  `ViewTreeObserver.OnDrawListener` — is removed here, in the same release that withdraws the
+  claim. The 3.3.3 CHANGELOG entry below still quotes the old wording on purpose: a retraction
+  that deletes the wrong text is not a retraction.
+
+- **"A PiP window that still carries the chrome is better than no PiP window at all."** (3.3.3)
+  That was the decision behind the bounded wait, and it was wrong in practice: the wait did not
+  produce a PiP window with the chrome, it produced **no PiP window at all**. The entry is worth
+  more than the cosmetics.
+
+- **"It returns whether the entry was started — on API 31+ that means it was scheduled for the
+  next draw."** (README) The entry is no longer scheduled for anything. The return value is the
+  OS's answer again: `true` when the Activity entered Picture-in-Picture, `false` when it was
+  refused.
+
+### Not claimed
+
+- Whether the PiP window shows the app's chrome is **not** settled by this release. The hide is
+  applied natively before the entry, and on a playing video the PiP window comes up video-only; on
+  a paused video it has been seen carrying the app's full expanded chrome. The mechanism behind
+  that difference is still open, and it is measured per release rather than assumed.
+
 ## [3.3.3] - 2026-11-05
 
 ### Fixed
