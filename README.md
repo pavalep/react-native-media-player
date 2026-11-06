@@ -441,17 +441,23 @@ Three things have to be right for that to work:
 2. **The entry happens while your Activity is resumed.** On API 31+ that means
    `onPictureInPictureRequested()`; see
    [Why it is native](#why-it-is-native-and-why-your-activity-hands-over-the-activity).
-3. **Whether that hide is enough is MEASURED, not assumed.** The library hides your chrome root
-   and then asks the OS for the window in the same tick. On a playing video the PiP window comes
-   up video-only. On a **paused** video the PiP window has been seen carrying the app's full
-   expanded chrome.
+3. **The hide is applied natively, before the entry — and the PiP window keeps a FROZEN snapshot of
+   the app's UI layer.** Measured on emulator-5554 (API 37) on 2026-11-06, on the npm 3.3.4
+   build:
 
-   The 3.3.3 release claimed to know why: that `View.setVisibility(GONE)` only *schedules* a
-   traversal, so the hide never reached the pixels, and the PiP window therefore showed the app's
-   **last drawn frame**. It built a draw-gated entry on that claim — and **the claim was never
-   proven**, and the mechanism broke the entry outright (see the retraction below). The honest
-   statement today is the narrower one: the hide is applied natively, before the entry, and
-   whether the window that results is clean depends on the app still drawing.
+   - the hide lands on the **right view** — the chrome root goes `GONE` and **stays** gone (the
+     same view identity before the hide and after `onPictureInPictureModeChanged(true)`), and
+     every child of it reads `shown=false` when the platform reports the mode change;
+   - the window's draw counter does **not** move between the hide and the entry (`6863 → 6863`),
+     because the hide and the entry run in the **same main-thread message** — and a traversal can
+     only run *between* main-thread messages;
+   - the PiP window's **video layer is LIVE** (the frame advanced between two captures taken two
+     minutes apart) while its **UI layer is the app's last drawn frame** (the scrub row still read
+     `0:44 / 5:09` in both captures).
+
+   So the PiP window carries the chrome because **the chrome-less frame was never drawn**. That
+   is the measured cause. The library does **not** claim to have fixed it — the 3.3.5 CHANGELOG's
+   "Not claimed" section says so in full.
 
    If your app's PiP window shows your chrome, the first thing to check is whether the app is
    still drawing at the moment of the entry.

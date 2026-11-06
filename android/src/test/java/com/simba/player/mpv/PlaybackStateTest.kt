@@ -224,11 +224,11 @@ class PlaybackStateTest {
         )
         assertTrue(
             "the PiP action's icon must go through the owner",
-            code.contains("PlaybackState.isPlayingNow()"),
+            code.contains("PlaybackState.isPlaying("),
         )
         assertTrue(
             "the media check must go through the owner",
-            code.contains("PlaybackState.hasMediaNow()"),
+            code.contains("PlaybackState.hasMedia("),
         )
     }
 
@@ -286,7 +286,7 @@ class PlaybackStateTest {
             .substringBefore("private fun enterPictureInPicture(")
 
         val hide = body.indexOf("hideConsumerChrome()")
-        val ask = body.indexOf("enterPictureInPicture(activity)")
+        val ask = body.indexOf("enterPictureInPicture(activity, state = state)")
 
         assertTrue("the entry must hide the chrome", hide >= 0)
         assertTrue("the entry must ask for the window", ask >= 0)

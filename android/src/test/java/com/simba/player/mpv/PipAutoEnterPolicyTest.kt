@@ -311,7 +311,7 @@ class PipAutoEnterPolicyTest {
         )
         assertTrue(
             "the flag must be the media-loaded fact",
-            source.contains("autoEnter = isMediaLoaded()"),
+            source.contains("autoEnter = PlaybackState.hasMedia(state)"),
         )
     }
 

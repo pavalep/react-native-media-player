@@ -180,7 +180,7 @@ class PipPiPWindowTest {
         assertTrue(
             "the flag must be the media-loaded fact - a PiP window of a " +
                 "stopped session is a bug, not a feature",
-            code.contains("autoEnter = isMediaLoaded()"),
+            code.contains("autoEnter = PlaybackState.hasMedia(state)"),
         )
     }
 
@@ -188,7 +188,7 @@ class PipPiPWindowTest {
     fun `the HOME path asks for the window on EVERY API level`() {
         val body = leaveHintBody()
 
-        val request = body.indexOf("enterPictureInPicture(activity)")
+        val request = body.indexOf("enterPictureInPicture(activity, state = state)")
         assertTrue("the explicit request must exist", request >= 0)
 
         // There must be NO API-31+ branch that defers the request, and no
@@ -342,7 +342,7 @@ class PipPiPWindowTest {
         val modeChanged = modeChangedBody()
 
         val hide = request.indexOf("hideConsumerChrome()")
-        val ask = request.indexOf("enterPictureInPicture(activity)")
+        val ask = request.indexOf("enterPictureInPicture(activity, state = state)")
 
         assertTrue("the request path must hide the chrome", hide >= 0)
         assertTrue("the request path must ask for the window", ask >= 0)

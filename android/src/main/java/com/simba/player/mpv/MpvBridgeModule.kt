@@ -564,7 +564,19 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             }
             // 3. No media loaded: a PiP window for a stopped session is
             //    a bug, not a feature.
-            if (!isMediaLoaded()) {
+            //
+            //    The state is read ONCE, here, and the SAME read answers
+            //    this guard and the params below. It used to be read
+            //    twice — once for the guard and once again inside the
+            //    params builder — and `PlaybackState.live()` reads three
+            //    mpv properties over JNI, each of which blocks until mpv's
+            //    core thread answers. Measured on emulator-5554 (API 37) on
+            //    2026-11-06: the entry path made TWELVE such reads, and
+            //    the entry succeeded only when the whole path happened to
+            //    fit inside the few hundred milliseconds the Activity stays
+            //    RESUMED.
+            val state = PlaybackState.live()
+            if (!PlaybackState.hasMedia(state)) {
                 Log.i(TAG, "companion.notifyUserLeaveHint: no media loaded; not entering PiP")
                 return false
             }
@@ -590,35 +602,49 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             //    FULL chrome, scaled down.
             hideConsumerChrome()
             rememberPipActivity(activity)
-            // 5. Commit the params BEFORE the window is asked for.
-            //
-            //    The platform builds the PiP window from the LAST
-            //    COMMITTED params. The source rect hint among them is the
-            //    region the PiP window ANIMATES FROM — a transition hint,
-            //    not a crop.
-            commitPipParams(activity)
-            // 6. Ask for the window — SYNCHRONOUSLY, in this callback, on
+            // 5. Ask for the window — SYNCHRONOUSLY, in this callback, on
             //    every API level.
             //
-            //    This is an EXPLICIT entry. On API 31+ it is legal here
-            //    because the platform's auto-enter switch is not armed:
-            //    ATMS refuses a client entry only while auto-enter is
-            //    enabled ("auto-enter should take in place instead").
+            //    The entry path READS the state ONCE and COMMITS NOTHING:
+            //    `enterPictureInPictureMode(params)` carries the params, so
+            //    the separate `setPictureInPictureParams` round trip before
+            //    it is gone.
             //
-            //    The ask MUST NOT be deferred. Measured on emulator-5554
-            //    (API 37) on 2026-11-05 and again on 2026-11-06: a
-            //    deferred ask (waiting for the window's next draw) landed
-            //    1.8 s after the platform's request, the Activity had been
-            //    paused by then, and the OS REFUSED the entry — so NO PiP
-            //    window opened at all. `enterPictureInPictureMode` needs a
-            //    RESUMED Activity, and this callback is the last moment
-            //    the Activity is guaranteed to be one.
+            //    That is a measured fix, not a tidy-up. Measured on
+            //    emulator-5554 (API 37) on 2026-11-06, the HOME entry was
+            //    FLAKY: 2 of 5 HOME presses opened a PiP window and the
+            //    other 3 were REFUSED by the OS. The log splits the entry
+            //    path's latency:
+            //
+            //    ```
+            //    16:43:59.432  hideConsumerChrome
+            //    16:43:59.805  commitPipParams: committed the PiP params   (373 ms)
+            //    16:44:01.003  the OS refused the PiP entry               (1.2 s later)
+            //    ```
+            //
+            //    The path built the params TWICE — each build reads several
+            //    mpv properties over JNI, and `mpv_get_property` blocks
+            //    until mpv's core thread answers — and made two binder
+            //    round trips. It cost 0.1-2.3 s. The Activity is only
+            //    RESUMED for a few hundred milliseconds after the
+            //    platform's request, so the entry succeeded only when the
+            //    path happened to be fast.
+            //
+            //    The ask MUST NOT be deferred either. Measured on
+            //    emulator-5554 (API 37) on 2026-11-05 and again on
+            //    2026-11-06: a deferred ask (waiting for the window's next
+            //    draw) landed 1.8 s after the platform's request, the
+            //    Activity had been paused by then, and the OS REFUSED the
+            //    entry — so NO PiP window opened at all.
+            //    `enterPictureInPictureMode` needs a RESUMED Activity, and
+            //    this callback is the last moment the Activity is
+            //    guaranteed to be one.
             //
             //    On API 24-30 the entry runs from `onUserLeaveHint()`,
             //    which AOSP calls "right before the activity's onPause
             //    callback": there is no frame between it and the pause.
             //    The entry there is immediate too.
-            val entered = enterPictureInPicture(activity)
+            val entered = enterPictureInPicture(activity, state = state)
             if (!entered) {
                 Log.w(TAG, "companion.notifyUserLeaveHint: the OS refused the PiP entry")
                 return false
@@ -700,6 +726,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             activity: Activity,
             chapterTitle: String? = null,
             progressPct: String? = null,
+            state: String = PlaybackState.live(),
         ): android.app.PictureInPictureParams {
             // The rect of the window the VIDEO occupies. The PiP window
             // animates FROM it — a transition hint, not a crop.
@@ -717,31 +744,17 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                 // is read from mpv, which is the same fact.
                 chapterTitle = chapterTitle ?: nativeTitle() ?: DEFAULT_PIP_TITLE,
                 progressPercentage = progressPct ?: nativeProgressPct() ?: DEFAULT_PIP_PROGRESS,
-                playing = isPlaying(),
+                // The SAME live read answers both questions. Reading it
+                // twice was two thirds of the entry path's mpv traffic.
+                playing = PlaybackState.isPlaying(state),
                 // The CONSUMER'S POLICY: whether the Activity may enter PiP
                 // when the user leaves the app. It is checked by the library
                 // before it enters, and it is NOT a platform switch - the
                 // platform's own auto-enter switch is never armed, because
                 // the platform would transition the window before the app
                 // could hide its chrome.
-                autoEnter = isMediaLoaded(),
+                autoEnter = PlaybackState.hasMedia(state),
             )
-        }
-
-        /**
-         * Whether the engine is playing right now.
-         *
-         * Read from mpv's REAL properties (`idle-active`, `eof-reached`,
-         * `pause`) at the moment of use, and never from a JS flag: the PiP
-         * action's icon has to be true even when the app is paused and no
-         * JS is running.
-         */
-        private fun isPlaying(): Boolean {
-            // ONE owner: `PlaybackState`, which reads mpv's REAL
-            // properties. This used to read `playback-state`, a property
-            // mpv does NOT have, so the answer was always "not playing"
-            // and the PiP action's icon never changed.
-            return PlaybackState.isPlayingNow()
         }
 
         /**
@@ -765,6 +778,7 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             activity: Activity,
             chapterTitle: String? = null,
             progressPct: String? = null,
+            state: String = PlaybackState.live(),
         ): Boolean {
             // `return try`, not a bare `try`. A `try`/`catch` in
             // STATEMENT position is not this function's return value in
@@ -777,7 +791,23 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
                     // The ONE params builder: the same facts, the same
                     // rect, the same action — as the ones the library
                     // commits to the Activity outside the entry moment.
-                    val pipParams = buildCurrentPipParams(activity, chapterTitle, progressPct)
+                    //
+                    // The HOME path carries no title and no progress of its
+                    // own, so it uses the params the library ALREADY built
+                    // instead of building a second set. The build reads
+                    // several mpv properties over JNI and blocks until
+                    // mpv's core thread answers, and the entry path cannot
+                    // afford that latency: measured on emulator-5554 (API
+                    // 37) on 2026-11-06, building them twice made the
+                    // entry cost 0.1-2.3 s, and the Activity is only RESUMED
+                    // for a few hundred milliseconds — so 3 of 5 HOME
+                    // presses were REFUSED by the OS.
+                    val pipParams = buildCurrentPipParams(
+                        activity,
+                        chapterTitle,
+                        progressPct,
+                        state,
+                    )
                     // `enterPictureInPictureMode` ANSWERS whether the OS
                     // accepted the request, and the answer is the only
                     // authority on this.
@@ -816,25 +846,6 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             } catch (e: Exception) {
                 Log.w(TAG, "companion.restoreConsumerChrome: restoring the chrome view failed", e)
             }
-        }
-
-        /**
-         * Whether mpv currently has media loaded.
-         *
-         * Read live through [PlaybackHost] — never from a JS flag, which
-         * can be stale by the time the user presses HOME. The question is
-         * answered by mpv's REAL properties (`idle-active`, `eof-reached`,
-         * `pause`), and the vocabulary is the one the library has always
-         * published: `idle` and `stopped` mean no media, and `paused` and
-         * `playing` mean something is still loaded.
-         */
-        private fun isMediaLoaded(): Boolean {
-            // ONE owner: `PlaybackState`, which reads mpv's REAL
-            // properties. This used to read `playback-state`, a property
-            // mpv does NOT have — the read failed, and "not idle, not
-            // stopped" was therefore true for EVERY value, so the library
-            // thought media was always loaded.
-            return PlaybackState.hasMediaNow()
         }
 
         /**

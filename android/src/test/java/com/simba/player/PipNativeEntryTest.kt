@@ -179,7 +179,7 @@ class PipNativeEntryTest {
         // check always answered "media is loaded".
         assertTrue(
             "the media check must go through the one owner",
-            code.contains("PlaybackState.hasMediaNow()"),
+            code.contains("PlaybackState.hasMedia("),
         )
         assertFalse(
             "`playback-state` is not an mpv property - it must never be " +
@@ -188,7 +188,7 @@ class PipNativeEntryTest {
         )
         assertTrue(
             "the native entry must consult the media check",
-            leaveHintBody().contains("if (!isMediaLoaded())"),
+            leaveHintBody().contains("if (!PlaybackState.hasMedia(state))"),
         )
     }
 
@@ -198,7 +198,7 @@ class PipNativeEntryTest {
 
         val policy = body.indexOf("if (!pipAutoEnterForCompanion)")
         val alreadyInPip = body.indexOf("if (activity.isInPictureInPictureMode)")
-        val noMedia = body.indexOf("if (!isMediaLoaded())")
+        val noMedia = body.indexOf("if (!PlaybackState.hasMedia(state))")
         val chrome = body.indexOf("hideConsumerChrome()")
 
         assertTrue("the policy guard must be there", policy >= 0)
@@ -282,7 +282,7 @@ class PipNativeEntryTest {
         val body = leaveHintBody()
 
         val hide = body.indexOf("hideConsumerChrome()")
-        val ask = body.indexOf("enterPictureInPicture(activity)")
+        val ask = body.indexOf("enterPictureInPicture(activity, state = state)")
 
         assertTrue("the request path must hide the chrome", hide >= 0)
         assertTrue("the request path must ask for the window", ask >= 0)
@@ -313,7 +313,7 @@ class PipNativeEntryTest {
         // window at all is worse.
         assertTrue(
             "the request path must ask for the window",
-            body.contains("val entered = enterPictureInPicture(activity)"),
+            body.contains("val entered = enterPictureInPicture(activity, state = state)"),
         )
         assertFalse(
             "the ask must NOT be deferred to a draw callback - the entry " +
@@ -334,6 +334,57 @@ class PipNativeEntryTest {
             "the entry must not branch on the API level - one path, one " +
                 "timing, every API level",
             body.contains("VERSION_CODES.S"),
+        )
+    }
+
+    @Test
+    fun `the entry path reads the engine state ONCE, and commits NOTHING`() {
+        val body = leaveHintBody()
+        val entry = body.substringBefore("private fun commitPipParams(")
+
+        // Measured on emulator-5554 (API 37) on 2026-11-06: the HOME entry
+        // was FLAKY - 2 of 5 HOME presses opened a PiP window and the other
+        // 3 were REFUSED by the OS. The cause was the entry path's
+        // LATENCY: it read the engine's state FOUR times - the guard, then
+        // the params builder's `playing`, then its `autoEnter`, then the
+        // whole builder again for the entry - and every read is THREE mpv
+        // properties over JNI, each of which blocks until mpv's core thread
+        // answers.
+        //
+        // The Activity is only RESUMED for a few hundred milliseconds
+        // after the platform's request, so a path that costs 0.1-2.3 s
+        // succeeds only when it happens to be fast.
+        assertEquals(
+            "the entry path must read the engine state exactly ONCE - every " +
+                "read is three blocking mpv property reads",
+            1,
+            Regex("PlaybackState\\.live\\(\\)").findAll(entry).count(),
+        )
+        assertTrue(
+            "the guard must use the SAME read, not a second one",
+            entry.contains("if (!PlaybackState.hasMedia(state))"),
+        )
+        assertFalse(
+            "the entry path must NOT commit the params separately - " +
+                "`enterPictureInPictureMode(params)` carries them, and the " +
+                "extra round trip is what cost the entry its window",
+            entry.contains("commitPipParams("),
+        )
+
+        val builder = body
+            .substringAfter("private fun buildCurrentPipParams(")
+            .substringBefore("private fun enterPictureInPicture(")
+        assertTrue(
+            "the params builder must answer BOTH the play/pause icon and " +
+                "the auto-enter policy from the SAME state read",
+            builder.contains("playing = PlaybackState.isPlaying(state)") &&
+                builder.contains("autoEnter = PlaybackState.hasMedia(state)"),
+        )
+        assertFalse(
+            "the params builder must NOT read the state again when it is " +
+                "given one - that is the second and third of the four reads",
+            builder.contains("PlaybackState.isPlayingNow()") ||
+                builder.contains("PlaybackState.hasMediaNow()"),
         )
     }
 

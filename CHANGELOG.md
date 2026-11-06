@@ -1,4 +1,49 @@
 
+## [3.3.5] - 2026-11-06
+
+### Fixed
+
+- **The HOME path was FLAKY: 2 of 5 HOME presses opened NO PiP window at all.** The 3.3.4 release
+  restored the entry — the OS ask is back inside `onPictureInPictureRequested()` — but the entry
+  path still cost up to 2.3 s, and the Activity is only RESUMED for a few hundred milliseconds
+  after the platform's request. Measured on emulator-5554 (API 37) on 2026-11-06, on the npm 3.3.4
+  build:
+
+  ```
+  16:43:59.375  onPictureInPictureRequested: the platform asked the app to enter PiP
+  16:43:59.432  hideConsumerChrome: hid the chrome view ... visibility=8
+  16:43:59.805  commitPipParams: committed the PiP params   (373 ms)
+  16:44:01.003  the OS refused the PiP entry               (1.2 s later)
+  ```
+
+  **⇒ THE CAUSE: the entry path read the engine's state FOUR times and made TWO binder round
+  trips.** `PlaybackState.live()` reads three mpv properties over JNI — `idle-active`,
+  `eof-reached`, `pause` — and each of those blocks until mpv's core thread answers. The entry
+  path read it for the "is media loaded" guard, then again for the params builder's `playing`
+  flag, then again for its `autoEnter` policy, and then it built the params a SECOND time for
+  the entry itself.
+
+  **The fix:**
+  - the state is read **ONCE**, and that one read answers the guard, the play/pause icon and the
+    auto-enter policy;
+  - the params are built **ONCE**, and the separate `setPictureInPictureParams` round trip before
+    the entry is gone — `enterPictureInPictureMode(params)` carries them.
+
+  **⇒ twelve blocking mpv property reads become three, one params build becomes one, and two
+  binder round trips become one.** The state is still read LIVE at the moment of the entry: the
+  play/pause icon in the PiP action row is not a cached flag.
+
+### Not claimed
+
+- Whether the PiP window shows the app's chrome is **not** settled by this release, and this
+  release does not claim to settle it. Measured on 2026-11-06, on the npm 3.3.4 build: the PiP
+  window's **video layer is LIVE** — the frame advanced between two captures taken two minutes
+  apart — while its **UI layer is a FROZEN SNAPSHOT**, still showing the scrub row's `0:44 / 5:09`
+  from the moment of the entry. The window's draw counter did **not** move between the hide and
+  the entry (`6863 → 6863`): the hide and the entry run in the **same main-thread message**, so
+  no traversal can run between them, and the paused app never draws again. **The chrome-less
+  frame is never drawn — that is the measured cause, and it is a separate fix.**
+
 ## [3.3.4] - 2026-11-06
 
 ### Fixed
