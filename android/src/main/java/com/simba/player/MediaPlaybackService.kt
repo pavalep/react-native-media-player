@@ -8,8 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -20,8 +18,6 @@ import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.simba.player.mpv.MPVLib
-import java.io.File
-import java.net.URL
 
 /**
  * V20 Phase B: the foreground service that owns playback.
@@ -297,6 +293,14 @@ class MediaPlaybackService : Service() {
     private var currentArtist: String = ""
     private var currentAlbum: String = ""
     private var currentArtworkPath: String = ""
+
+    /**
+     * The artwork for the media notification.
+     *
+     * It owns the rules that keep the notification from taking the process
+     * down - see `NotificationArtwork` for the measurement.
+     */
+    private lateinit var notificationArtwork: NotificationArtwork
     private var currentPosition: Long = 0L
     private var currentDuration: Long = 0L
     private var isCurrentlyPlaying: Boolean = true
@@ -377,6 +381,7 @@ class MediaPlaybackService : Service() {
         instance = this
         notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
+        notificationArtwork = NotificationArtwork(resources)
         createMediaSession()
         Log.i(TAG, "MediaPlaybackService created (session owned by service)")
     }
@@ -397,6 +402,7 @@ class MediaPlaybackService : Service() {
         // onDestroy. Doing it in an Activity's is what tied the session's
         // lifetime to a window.
         stopTicker("service destroyed")
+        if (::notificationArtwork.isInitialized) notificationArtwork.release()
         releaseMediaSession()
         isRunning = false
         instance = null
@@ -585,7 +591,7 @@ class MediaPlaybackService : Service() {
         if (title.isNotBlank()) currentTitle = title
         currentArtist = artist
         currentAlbum = album
-        currentArtworkPath = artworkPath
+        setArtworkPath(artworkPath)
 
         val session = mediaSession ?: return
         val durationMs = enginePropertyMs("duration")
@@ -616,7 +622,7 @@ class MediaPlaybackService : Service() {
         currentTitle = extras?.getString(EXTRA_TITLE) ?: "Simba Player"
         currentArtist = extras?.getString(EXTRA_ARTIST) ?: ""
         currentAlbum = extras?.getString(EXTRA_ALBUM) ?: ""
-        currentArtworkPath = extras?.getString(EXTRA_ARTWORK_PATH) ?: ""
+        setArtworkPath(extras?.getString(EXTRA_ARTWORK_PATH) ?: "")
         currentPosition = extras?.getLong(EXTRA_POSITION_MS, 0L) ?: 0L
         currentDuration = extras?.getLong(EXTRA_DURATION_MS, 0L) ?: 0L
         isCurrentlyPlaying = extras?.getBoolean(EXTRA_IS_PLAYING, true) ?: true
@@ -638,7 +644,7 @@ class MediaPlaybackService : Service() {
         extras.getString(EXTRA_TITLE)?.let { currentTitle = it }
         extras.getString(EXTRA_ARTIST)?.let { currentArtist = it }
         extras.getString(EXTRA_ALBUM)?.let { currentAlbum = it }
-        extras.getString(EXTRA_ARTWORK_PATH)?.let { currentArtworkPath = it }
+        extras.getString(EXTRA_ARTWORK_PATH)?.let { setArtworkPath(it) }
         extras.getLong(EXTRA_POSITION_MS, -1L).let { if (it >= 0L) currentPosition = it }
         extras.getLong(EXTRA_DURATION_MS, -1L).let { if (it >= 0L) currentDuration = it }
         extras.getBoolean(EXTRA_IS_PLAYING, isCurrentlyPlaying)?.also { isCurrentlyPlaying = it }
@@ -691,14 +697,14 @@ class MediaPlaybackService : Service() {
             else -> ""
         }
 
-        val artwork: Bitmap? = loadArtworkBitmap(currentArtworkPath) ?: BitmapFactory.decodeResource(
-            resources,
-            android.R.drawable.ic_media_play,
-        )
+        // A FRESH bitmap for this build. The framework shares the icon
+        // bitmap it is handed, so handing it the same instance twice is
+        // what aborted the process - see `NotificationArtwork`.
+        val artworkBitmap = notificationArtwork.bitmapForNotification()
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setLargeIcon(artwork)
+            .setLargeIcon(artworkBitmap)
             .setContentTitle(currentTitle)
             .setContentText(subtitle)
             .setContentIntent(buildContentIntent(this))
@@ -750,29 +756,18 @@ class MediaPlaybackService : Service() {
         return builder.build()
     }
 
-    // ── Artwork Loading ────────────────────────────────────────────────────
+    // ── Artwork ────────────────────────────────────────────────────────────
 
-    private fun loadArtworkBitmap(path: String): Bitmap? {
-        if (path.isBlank()) return null
-        return try {
-            if (path.startsWith("http://") || path.startsWith("https://")) {
-                val url = URL(path)
-                val connection = url.openConnection()
-                connection.connectTimeout = 3000
-                connection.readTimeout = 5000
-                val inputStream = connection.getInputStream()
-                BitmapFactory.decodeStream(inputStream)
-            } else {
-                val file = File(path)
-                if (file.exists()) {
-                    BitmapFactory.decodeFile(file.absolutePath)
-                } else {
-                    null
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to load artwork: ${e.message}")
-            null
-        }
+    /**
+     * Point the notification at an artwork path.
+     *
+     * The artwork is told about the path HERE, in one place, so it can be
+     * fetched OFF the notification thread. Telling it in the notification
+     * builder instead would fetch the image while the notification is being
+     * built - once a second.
+     */
+    private fun setArtworkPath(path: String) {
+        currentArtworkPath = path
+        notificationArtwork.request(path)
     }
 }

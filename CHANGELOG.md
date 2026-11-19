@@ -1,4 +1,77 @@
 
+
+## [3.3.7] - 2026-11-19
+
+### Fixed
+
+- **The media notification could abort the process — the framework was handed the same bitmap twice.**
+  Playing a radio station on API 37 killed the app with an abort from the platform's own
+  file-descriptor sanitizer:
+
+  ```
+  Abort message: 'fdsan: failed to exchange ownership of file descriptor:
+    fd 223 is owned by unique_fd 0x79cc1c6e311c, was expected to be unowned'
+  ```
+
+  The stack is the notification build, not the player:
+
+  ```
+  MediaPlaybackService.buildNotification
+  MediaPlaybackService.handleStart
+  Notification$Builder.build
+  Notification.reduceImageSizes
+  Icon.scaleDownToAshmem
+  BitmapCache.getShared
+  Bitmap.asShared
+  Bitmap.createAshmemBitmap
+  ...
+  ashmem_create_region
+  ```
+
+  The fd table in the same tombstone holds TWO descriptors on the SAME ashmem region — fd 145
+  (unowned) and fd 223 (owned by unique_fd) — which is the framework in the middle of making a
+  shared copy of an icon bitmap whose pixels already lived in a shared region.
+
+  **⇒ THE CAUSE: the notification handed the framework a bitmap it had already been handed.** The
+  framework SHARES the icon bitmap it is given — `Icon.scaleDownToAshmem` turns it into an
+  ashmem-backed bitmap so the system UI can read it. The notification was rebuilt once a second, and
+  on every start it was built TWICE back to back — once inside `applyMetadata()` and once for
+  `startForeground()` — and BOTH builds handed over the SAME instance whenever the artwork could
+  not be loaded: the radio rows pass a REMOTE image URL, that fetch failed ("Failed to load
+  artwork" appeared once per second in logcat), and both builds fell back to
+  `BitmapFactory.decodeResource(resources, android.R.drawable.ic_media_play)` — the
+  RESOURCES-CACHED bitmap, one instance shared with every other user of that drawable.
+
+  **The fix:**
+  - a new owner, `NotificationArtwork`, hands the notification a FRESH copy on every build. The
+    bitmap it owns is never handed to the framework — only copies of it are — so the framework's
+    sharing can never touch the source;
+  - the fallback is now OUR copy of the drawable, not the Resources-cached instance;
+  - the artwork is fetched OFF the notification thread, once per artwork path. It used to be
+    fetched while the notification was being built — once a second, with a 3 s connect and a 5 s
+    read timeout, on the main thread.
+
+  The notification now shows the artwork a beat after the track starts (the fetch is asynchronous),
+  and the fallback path — the one the radio rows always took — is the one that is now safe.
+
+### Not claimed
+
+- This release does **not** claim the crash is gone. It was **intermittent**: the same station
+  played for the whole observation window on the re-test, with the process alive and the position
+  advancing (21947 → 22946 → 23850 → 24939 ms). What this release removes is the **mechanism**
+  that was measured — the framework being handed the same bitmap instance twice, and being handed
+  the Resources-cached bitmap at all. A platform `fdsan` abort is not something this library can
+  reproduce on demand, so the claim is about the construction, not about a reproduced crash.
+
+- This release does **not** fix the radio artwork FETCH. The radio rows pass a REMOTE image URL and
+  that fetch failed on device. The log line is now written once per artwork path instead of once
+  per second, but the image still may not arrive.
+
+- The artwork is fetched on a background thread, so the FIRST notification after a track starts
+  shows the fallback for up to one ticker tick (1 s) before the real artwork arrives.
+
+- iOS is untouched — this library ships Android only.
+
 ## [3.3.6] - 2026-11-06
 
 ### Fixed
