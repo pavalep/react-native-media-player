@@ -1,5 +1,18 @@
 
 
+## [3.4.1] - 2026-11-21
+
+### Added
+
+- **`LaunchParams.headers` — the in-window launch path can carry the request headers too.**
+
+  `useLaunchPlayback` is the library's own load half, and it is what a consumer that loads
+  into an already-open window uses. It had no way to say "fetch this file with these
+  headers", so a consumer whose video lane needed them could not pass them at all.
+
+  The headers ride the LOAD, like every other launch parameter: they are part of the file
+  being opened, not a property set before it.
+
 ## [3.4.0] - 2026-11-21
 
 ### Added

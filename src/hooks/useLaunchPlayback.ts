@@ -90,7 +90,9 @@ export function useLaunchPlayback(
       // `loadAndPlay` owns the title-then-load ordering now, shared
       // with `usePlayerActivity.openPlayer` so the two entry points
       // cannot drift into loading a file under the wrong title.
-      loadAndPlay(bridge, {uri, title, startPositionMs});
+      // The headers ride the LOAD. They are part of the file being
+      // opened, not a property set before it.
+      loadAndPlay(bridge, {uri, title, startPositionMs, headers: launchParams?.headers});
     } catch {
       // Bridge not present (jest/web) — ignore.
     }

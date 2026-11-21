@@ -110,6 +110,13 @@ export interface LaunchParams {
    * `loadFileWithRequestId`, which already exists for the same reason.
    */
   readonly requestId?: string;
+  /**
+   * HTTP request headers to send when fetching THIS file.
+   *
+   * They are per file: the native side turns them into mpv¤s per-file
+   * options, so they apply to this launch and to no later one.
+   */
+  readonly headers?: Record<string, string>;
 }
 
 /**
