@@ -36,6 +36,20 @@ object MPVLib {
 
     external fun nativeLoadFile(nativePtr: Long, path: String)
     external fun nativeLoadFileWithRequestId(nativePtr: Long, path: String, requestId: String)
+
+    /**
+     * Load a file with mpv PER-FILE options.
+     *
+     * `options` is mpv's `loadfile` options argument: a key/value list
+     * that mpv turns into file-local options, so the values apply to THIS
+     * file and to no other. It is the only way to send a request header
+     * with one stream without leaking it onto every later file.
+     *
+     * The string is built by `MpvFileOptions` - the format is mpv's, and
+     * mpv's two parsers do not agree on how a comma is escaped, so the
+     * format has exactly one owner.
+     */
+    external fun nativeLoadFileWithOptions(nativePtr: Long, path: String, options: String)
     external fun nativePlay(nativePtr: Long)
     external fun nativePause(nativePtr: Long)
     external fun nativeStop(nativePtr: Long)

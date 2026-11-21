@@ -548,7 +548,30 @@ Java_com_simba_player_mpv_MPVLib_nativeSurfaceChanged(
 
 // ── Playback Control ────────────────────────────────────────────────────────
 
-static void nativeLoadFileInternal(JNIEnv *env, jlong nativePtr, jstring path, jstring requestId) {
+// The PER-FILE options argument.
+//
+// mpv 0.41's `loadfile` command is
+//
+//     loadfile <url> [<flags> [<index> [<options>]]]
+//
+// and `<options>` is a key/value list that mpv turns into FILE-LOCAL
+// options: mpv's `player/command.c` (`cmd_loadfile`) turns every pair
+// into a playlist-entry param, and `player/loadfile.c`
+// (`load_per_file_options`) applies every param with
+// `M_SET_OPTION_FLAG_FILE_LOCAL`.
+//
+// That is the whole reason the options exist. A GLOBAL
+// `mpv_set_option_string("user-agent", ...)` would leak the header onto
+// every LATER file - the app's own music, a podcast, anything - and it
+// would be read when the NEXT stream opens, not the one it was set for.
+// The per-file form is the only one that means "this file".
+//
+// `flags` and `index` are passed explicitly because the options argument
+// is positional: they are mpv's own defaults ("replace" is the first
+// choice of the flags enum, and the index default is -1), so naming them
+// changes nothing and leaves the argument order unambiguous.
+static void nativeLoadFileInternal(JNIEnv *env, jlong nativePtr, jstring path,
+                                     jstring requestId, jstring options) {
     if (!path) {
         LOGE("nativeLoadFile rejected: path is null");
         return;
@@ -562,32 +585,47 @@ static void nativeLoadFileInternal(JNIEnv *env, jlong nativePtr, jstring path, j
     mpv_handle *mpv = lease.get();
     const char *utfPath = env->GetStringUTFChars(path, nullptr);
     const char *utfRequestId = requestId ? env->GetStringUTFChars(requestId, nullptr) : nullptr;
+    const char *utfOptions = options ? env->GetStringUTFChars(options, nullptr) : nullptr;
     if (utfRequestId && utfRequestId[0] != '\0') {
         enqueueLoadRequest({utfRequestId, utfPath});
     } else {
         clearActiveLoadRequest();
     }
-    const char *cmd[] = {"loadfile", utfPath, nullptr};
-    const int result = mpv_command(mpv, cmd);
+    int result;
+    if (utfOptions && utfOptions[0] != '\0') {
+        const char *cmd[] = {"loadfile", utfPath, "replace", "-1", utfOptions, nullptr};
+        result = mpv_command(mpv, cmd);
+    } else {
+        const char *cmd[] = {"loadfile", utfPath, nullptr};
+        result = mpv_command(mpv, cmd);
+    }
     if (result < 0 && utfRequestId && utfRequestId[0] != '\0') {
         dropLoadRequest(utfRequestId);
     }
-    LOGI("[PlaybackTrace][Native][loadFile] result=%d pathLength=%zu token=%s",
-         result, strlen(utfPath), utfRequestId && utfRequestId[0] != '\0' ? "present" : "none");
+    LOGI("[PlaybackTrace][Native][loadFile] result=%d pathLength=%zu token=%s options=%s",
+         result, strlen(utfPath), utfRequestId && utfRequestId[0] != '\0' ? "present" : "none",
+         utfOptions && utfOptions[0] != '\0' ? "present" : "none");
     if (utfRequestId) env->ReleaseStringUTFChars(requestId, utfRequestId);
+    if (utfOptions) env->ReleaseStringUTFChars(options, utfOptions);
     env->ReleaseStringUTFChars(path, utfPath);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_simba_player_mpv_MPVLib_nativeLoadFile(
     JNIEnv *env, jclass, jlong nativePtr, jstring path) {
-    nativeLoadFileInternal(env, nativePtr, path, nullptr);
+    nativeLoadFileInternal(env, nativePtr, path, nullptr, nullptr);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_simba_player_mpv_MPVLib_nativeLoadFileWithRequestId(
     JNIEnv *env, jclass, jlong nativePtr, jstring path, jstring requestId) {
-    nativeLoadFileInternal(env, nativePtr, path, requestId);
+    nativeLoadFileInternal(env, nativePtr, path, requestId, nullptr);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_simba_player_mpv_MPVLib_nativeLoadFileWithOptions(
+    JNIEnv *env, jclass, jlong nativePtr, jstring path, jstring options) {
+    nativeLoadFileInternal(env, nativePtr, path, nullptr, options);
 }
 
 extern "C" JNIEXPORT void JNICALL

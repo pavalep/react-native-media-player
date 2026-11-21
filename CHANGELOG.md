@@ -1,5 +1,46 @@
 
 
+## [3.4.0] - 2026-11-21
+
+### Added
+
+- **Per-file request headers — `openPlayer({headers})`.**
+  A stream can be told how to FETCH it, not only what to play. An IPTV playlist declares a
+  `User-Agent` and a `Referer` for the providers that check them, and until now the app
+  dropped them and asked for the stream without.
+
+  ```ts
+  await openPlayer({
+    uri: 'https://provider.example/stream.m3u8',
+    title: 'A channel',
+    type: 'video',
+    headers: {'User-Agent': 'Mozilla/5.0 ...', Referer: 'https://provider.example/'},
+  });
+  ```
+
+  The headers are PER FILE. mpv has no "send these headers with this one file" API; what it
+  has is `loadfile` per-file options, and that is what this uses — mpv applies every pair as
+  a file-local option (`M_SET_OPTION_FLAG_FILE_LOCAL`), so the headers apply to that load and
+  to no other. A global mpv option would have leaked the User-Agent onto every later file —
+  the app's own music, a podcast, anything.
+
+  Two parsers sit between the option string and mpv and they do not agree: the key/value list
+  takes a quoted value verbatim, while `http-header-fields` is a string LIST whose separator is
+  a comma. The format has ONE owner (`MpvFileOptions`), and the unit tests pin both layers.
+
+  The values are untrusted input if they came from a playlist a third party publishes, and they
+  end up in an HTTP request: the control characters are dropped next to the sink, so a value
+  cannot end a header and start another.
+
+  Both lanes carry them — the video lane through `loadFileWithHeaders`, the audio lane through
+  `startAudioPlayback({headersJson})` — and the headers ride the LOAD, not a property set
+  before it.
+
+### Changed
+
+- `openPlayer`'s `headers` is optional. A launch without one loads exactly as it did before:
+  the native side builds no options and issues the same `loadfile` it always did.
+
 ## [3.3.7] - 2026-11-19
 
 ### Fixed

@@ -3,6 +3,7 @@ import {
   applyStartPosition,
   type MpvPlayerModuleBridge,
 } from './MpvPlayerModule';
+import {encodeRequestHeaders} from './requestHeaders';
 
 /**
  * Feed a launch payload to mpv: title, file, resume position, play.
@@ -57,13 +58,31 @@ import {
  */
 export function loadAndPlay(
   bridge: MpvPlayerModuleBridge,
-  payload: { uri: string; title?: string; startPositionMs?: number },
+  payload: {
+    uri: string;
+    title?: string;
+    startPositionMs?: number;
+    /**
+     * HTTP request headers for THIS file only. They become mpv's
+     * per-file options, so they apply to this load and to no other.
+     */
+    headers?: Record<string, string>;
+  },
 ): void {
-  const {uri, title, startPositionMs = 0} = payload;
+  const {uri, title, startPositionMs = 0, headers} = payload;
   const startPositionSec = startPositionMs > 0 ? startPositionMs / 1000 : 0;
 
   applyForceMediaTitle(bridge, title);
   applyStartPosition(bridge, startPositionSec);
-  bridge.loadFile(uri);
+  // The headers ride the LOAD, not a property set before it. mpv applies
+  // per-file options to the file being loaded, and a global option would
+  // be read by the NEXT stream instead - so the header would land on the
+  // wrong file, or on every file after this one.
+  const headersJson = encodeRequestHeaders(headers);
+  if (headersJson) {
+    bridge.loadFileWithHeaders(uri, headersJson);
+  } else {
+    bridge.loadFile(uri);
+  }
   bridge.play();
 }

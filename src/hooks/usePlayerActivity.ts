@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { getMpvPlayerModule } from '../bridge/MpvPlayerModule';
 import { loadAndPlay } from '../bridge/loadAndPlay';
+import { encodeRequestHeaders } from '../bridge/requestHeaders';
 
 /**
  * Options accepted by `usePlayerActivity().openPlayer(opts)`. This is
@@ -46,6 +47,19 @@ export interface OpenPlayerOptions {
    */
   artist?: string;
   album?: string;
+  /**
+   * HTTP request headers to send when fetching THIS file.
+   *
+   * They are per-file: the native side turns them into mpv's per-file
+   * options, so they apply to this launch and to no later one. A stream
+   * that needs a `User-Agent` or a `Referer` gets one, and the app's own
+   * music is unaffected.
+   *
+   * The values are untrusted input if they came from a playlist a third
+   * party publishes; the native side drops the control characters next
+   * to the network request.
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -113,6 +127,7 @@ export function usePlayerActivity(): UsePlayerActivityResult {
 
         // Audio never touches a surface. See `OpenPlayerOptions.type`.
         if (opts.type === 'audio') {
+          const headersJson = encodeRequestHeaders(opts.headers);
           return bridge.startAudioPlayback({
             uri: opts.uri,
             title: opts.title,
@@ -126,6 +141,7 @@ export function usePlayerActivity(): UsePlayerActivityResult {
             ...(opts.artworkPath ? {artworkPath: opts.artworkPath} : {}),
             ...(opts.artist ? {artist: opts.artist} : {}),
             ...(opts.album ? {album: opts.album} : {}),
+            ...(headersJson ? {headersJson} : {}),
           });
         }
 
@@ -140,6 +156,7 @@ export function usePlayerActivity(): UsePlayerActivityResult {
           uri: opts.uri,
           title: opts.title,
           startPositionMs,
+          ...(opts.headers ? {headers: opts.headers} : {}),
         });
         return Promise.resolve(true);
       },

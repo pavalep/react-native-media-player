@@ -570,8 +570,12 @@ const theme = useTheme();
 | `usePlaybackHistory()` / `usePlaybackHistoryAs()` | The playback history. |
 | `useQueueSelection()` / `useQueueSelectedIndices()` | The selection store. |
 
-`openPlayer` accepts `{uri, title, type, startPositionMs?, artworkPath?, artist?, album?}`. The
-artwork, artist and album fields apply to the audio lane only.
+`openPlayer` accepts `{uri, title, type, startPositionMs?, artworkPath?, artist?, album?,
+headers?}`. The artwork, artist and album fields apply to the audio lane only.
+
+`headers` is a map of HTTP request headers to send when fetching THAT file — a `User-Agent`
+or a `Referer` that the source declared for the stream. They are per file: they apply to
+that launch and to no later one.
 
 The queue store's actions are `addToQueue`, `prependToQueue`, `removeFromQueue`,
 `removeFromQueueByIndex`, `reorderQueue`, `clearQueue`, `shuffleQueue`, `addToPlaybackHistory` and

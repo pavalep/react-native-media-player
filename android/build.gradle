@@ -215,6 +215,11 @@ dependencies {
     // pieces Robolectric can't simulate (ReactContext, DeviceEventManager
     // module, etc.).
     testImplementation("junit:junit:4.13.2")
+    // A REAL org.json for the JVM unit tests. Android ships one, but the
+    // mockable android.jar the unit tests run against has stubs for it, and
+    // `returnDefaultValues = true` would turn a parse into a silently empty
+    // result. The production code uses the org.json Android provides.
+    testImplementation("org.json:json:20231013")
     testImplementation("org.robolectric:robolectric:4.11.1")
     testImplementation("org.mockito:mockito-core:5.7.0")
     testImplementation("org.mockito.kotlin:mockito-kotlin:5.1.0")

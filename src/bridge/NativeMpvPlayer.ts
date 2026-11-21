@@ -68,6 +68,15 @@ export interface Spec extends TurboModule {
 
   // ── File loading ───────────────────────────────────────────────────────
   loadFile(path: string): void;
+  /**
+   * Load a file with HTTP request headers that apply to THIS file only.
+   *
+   * `headersJson` is a JSON object of header name to value, e.g.
+   * `{"User-Agent": "...", "Referer": "..."}`. The native side turns it
+   * into mpv's per-file option list, so the headers apply to this load
+   * and to no other.
+   */
+  loadFileWithHeaders(path: string, headersJson: string): void;
   loadFileWithRequestId(path: string, requestId: string): void;
   loadPlaylist(paths: ReadonlyArray<string>, startIndex: number): void;
   getFileInfo(): string;
@@ -223,6 +232,12 @@ export interface Spec extends TurboModule {
     startPositionMs?: number;
     /** Default true. Seek is applied regardless of `autoPlay`. */
     autoPlay?: boolean;
+    /**
+     * HTTP request headers for THIS file only, as a JSON object of
+     * header name to value. Same encoding as
+     * `loadFileWithHeaders`.
+     */
+    headersJson?: string;
   }): Promise<boolean>;
 
   /**

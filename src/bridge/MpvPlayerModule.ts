@@ -297,6 +297,17 @@ export interface MpvPlayerModuleBridge {
   // ── File loading ───────────────────────────────────────────────────────
   /** Load a media file by path / URI. */
   loadFile(path: string): void;
+  /**
+   * Load a media file with HTTP request headers that apply to THIS file
+   * only.
+   *
+   * `headersJson` is a JSON object of header name to value, e.g.
+   * `{"User-Agent": "...", "Referer": "..."}`. The native side turns it
+   * into mpv's per-file option list, so the headers apply to this load
+   * and to no other - which is the whole point: a global mpv option
+   * would leak the header onto every later file.
+   */
+  loadFileWithHeaders(path: string, headersJson: string): void;
   /** Load a media file with an attached request ID for traceability. */
   loadFileWithRequestId(path: string, requestId: string): void;
   /** Load a playlist of paths, starting at `startIndex` (default 0). */
@@ -464,6 +475,7 @@ export interface MpvPlayerModuleBridge {
     artworkPath?: string;
     startPositionMs?: number;
     autoPlay?: boolean;
+    headersJson?: string;
   }): Promise<boolean>;
   /** Stop playback and tear the foreground service down. Both lanes. */
   stopPlayback(): void;
@@ -618,6 +630,10 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
   // File loading
   loadFile: (_path: string) => {
     void _path;
+  },
+  loadFileWithHeaders: (_path: string, _headersJson: string) => {
+    void _path;
+    void _headersJson;
   },
   loadFileWithRequestId: (_path: string, _requestId: string) => {
     void _path;

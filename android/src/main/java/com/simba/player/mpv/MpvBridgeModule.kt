@@ -1976,6 +1976,44 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * Load a file with HTTP request headers that apply to THIS file only.
+     *
+     * The headers arrive as JSON (`{"User-Agent": "...", "Referer": "..."}`)
+     * so the JS->native boundary stays a plain string on both sides and
+     * neither side has to agree on a bespoke wire format.
+     *
+     * `MpvFileOptions` owns the mpv format: mpv's `loadfile` options
+     * argument is a key/value list, and mpv parses it in two layers with
+     * different escaping rules, so the format has one owner rather than
+     * one per layer.
+     */
+    @ReactMethod
+    @Override
+    override fun loadFileWithHeaders(path: String, headersJson: String) {
+        ensurePtr()
+        applyCacheWindow(baseCacheWindowSecs, "new load")
+        val resolvedPath = normalizeMpvInput(resolveContentUri(path))
+        val options = MpvFileOptions.buildLoadFileOptions(MpvFileOptions.parseHeaders(headersJson))
+        Log.i(
+            TAG,
+            "[PlaybackTrace][Bridge][loadFileWithHeaders] requested=$path resolved=$resolvedPath " +
+                "ptr=$nativePtr options=${if (options == null) "none" else "present"}"
+        )
+        emitLoadRequested(path)
+        try {
+            if (options == null) {
+                MPVLib.nativeLoadFile(nativePtr, resolvedPath)
+            } else {
+                MPVLib.nativeLoadFileWithOptions(nativePtr, resolvedPath, options)
+            }
+            Log.i(TAG, "[PlaybackTrace][Bridge][loadFileWithHeaders] native load returned")
+        } catch (e: Exception) {
+            Log.e(TAG, "[PlaybackTrace][Bridge][loadFileWithHeaders] native load threw: ${e.message}", e)
+            throw e
+        }
+    }
+
     @ReactMethod
     @Override
     override fun loadFileWithRequestId(path: String, requestId: String) {
@@ -2829,8 +2867,18 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         }
 
         val resolvedPath = normalizeMpvInput(resolveContentUri(uri))
+        // The same per-file header path as the video lane: mpv applies the
+        // options to THIS file only, so a stream that needs a User-Agent
+        // gets one without the next file inheriting it.
+        val fileOptions = MpvFileOptions.buildLoadFileOptions(
+            MpvFileOptions.parseHeaders(optString(options, "headersJson"))
+        )
         try {
-            MPVLib.nativeLoadFile(handle, resolvedPath)
+            if (fileOptions == null) {
+                MPVLib.nativeLoadFile(handle, resolvedPath)
+            } else {
+                MPVLib.nativeLoadFileWithOptions(handle, resolvedPath, fileOptions)
+            }
         } catch (e: Throwable) {
             Log.e(TAG, "[PlaybackTrace][Bridge][startAudioPlayback] nativeLoadFile failed for '$resolvedPath'", e)
             promise.reject("E_LOAD_FAILED", e.message ?: "mpv refused '$uri'", e)
