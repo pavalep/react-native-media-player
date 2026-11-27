@@ -589,7 +589,7 @@ export interface MpvPlayerModuleBridge {
   /** Get the current window screen brightness (0..1). Returns 1.0 for default. */
   getScreenBrightness(): number;
 
-  // ── Notification permission ────────────────────────────────────────────
+  // ── Notification permission & foreground media service ─────────────────
   /**
    * Request the `POST_NOTIFICATIONS` permission on Android 13+.
    * No-op on lower APIs. Uses the standard `PermissionsAndroid` flow.
@@ -597,6 +597,31 @@ export interface MpvPlayerModuleBridge {
   requestNotificationPermission(): void;
   /** Returns true when the `MediaPlaybackService` foreground notification is active. */
   isNotificationActive(): boolean;
+  /** Start the foreground MediaPlaybackService notification for audio or video playback. */
+  startNotification(
+    title: string,
+    artist: string,
+    album: string,
+    fileUri: string,
+    artworkPath: string,
+    mediaType: string,
+    position: number,
+    duration: number,
+  ): void;
+  /** Update metadata and playback state on the active MediaPlaybackService notification. */
+  updateNotification(
+    title: string,
+    artist: string,
+    album: string,
+    fileUri: string,
+    artworkPath: string,
+    mediaType: string,
+    position: number,
+    duration: number,
+    isPlaying: boolean,
+  ): void;
+  /** Stop the foreground MediaPlaybackService and dismiss the notification. */
+  stopNotification(): void;
 
   // ── Debug (V12 Phase 39) ───────────────────────────────────────────────
   /** Toggle verbose native logging (`msg-level=all`). */
@@ -859,6 +884,9 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
   // Notification
   requestNotificationPermission: () => {},
   isNotificationActive: () => false,
+  startNotification: () => {},
+  updateNotification: () => {},
+  stopNotification: () => {},
 
   // Debug
   setDebugLogging: (_enabled: boolean) => {

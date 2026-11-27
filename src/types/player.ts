@@ -330,6 +330,31 @@ export interface PlayerCommands {
   // Notification
   /** Request the `POST_NOTIFICATIONS` permission on Android 13+. */
   requestNotificationPermission(): void;
+  /** Start or refresh the foreground MediaPlaybackService notification. */
+  startNotification(opts: {
+    title: string;
+    artist?: string;
+    album?: string;
+    fileUri?: string;
+    artworkPath?: string;
+    mediaType?: 'audio' | 'video';
+    positionMs?: number;
+    durationMs?: number;
+  }): void;
+  /** Update metadata/state on the active foreground MediaPlaybackService notification. */
+  updateNotification(opts: {
+    title: string;
+    artist?: string;
+    album?: string;
+    fileUri?: string;
+    artworkPath?: string;
+    mediaType?: 'audio' | 'video';
+    positionMs?: number;
+    durationMs?: number;
+    isPlaying: boolean;
+  }): void;
+  /** Stop the foreground MediaPlaybackService and dismiss the notification. */
+  stopNotification(): void;
 
   // Playback launch
   /**
@@ -346,6 +371,9 @@ export interface PlayerCommands {
     title: string;
     type: 'video' | 'audio';
     startPositionMs?: number;
+    artist?: string;
+    album?: string;
+    artworkPath?: string;
   }): Promise<boolean>;
 
   // Generic property access (used by audioSettingsService, metadataService)
@@ -781,6 +809,39 @@ function buildCommands(): PlayerCommands {
       getMpvPlayerModule().requestNotificationPermission();
     },
 
+    startNotification: (opts) => {
+      dlog('commands.startNotification(', opts, ')');
+      getMpvPlayerModule().startNotification(
+        opts.title,
+        opts.artist ?? '',
+        opts.album ?? '',
+        opts.fileUri ?? '',
+        opts.artworkPath ?? '',
+        opts.mediaType ?? 'audio',
+        opts.positionMs ?? 0,
+        opts.durationMs ?? 0,
+      );
+    },
+
+    updateNotification: (opts) => {
+      getMpvPlayerModule().updateNotification(
+        opts.title,
+        opts.artist ?? '',
+        opts.album ?? '',
+        opts.fileUri ?? '',
+        opts.artworkPath ?? '',
+        opts.mediaType ?? 'audio',
+        opts.positionMs ?? 0,
+        opts.durationMs ?? 0,
+        opts.isPlaying,
+      );
+    },
+
+    stopNotification: () => {
+      dlog('commands.stopNotification()');
+      getMpvPlayerModule().stopNotification();
+    },
+
     openPlayer: async (opts) => {
       dlog('commands.openPlayer(', opts, ')');
       const bridge = getMpvPlayerModule();
@@ -790,6 +851,9 @@ function buildCommands(): PlayerCommands {
         return bridge.startAudioPlayback({
           uri: opts.uri,
           title: opts.title,
+          artist: opts.artist,
+          album: opts.album,
+          artworkPath: opts.artworkPath,
           startPositionMs,
           autoPlay: true,
         });
@@ -801,6 +865,20 @@ function buildCommands(): PlayerCommands {
         return false;
       }
       loadAndPlay(bridge, {uri: opts.uri, title: opts.title, startPositionMs});
+      try {
+        bridge.startNotification(
+          opts.title,
+          opts.artist ?? '',
+          opts.album ?? '',
+          opts.uri,
+          opts.artworkPath ?? '',
+          'video',
+          startPositionMs,
+          0,
+        );
+      } catch {
+        // Non-fatal if OS blocks foreground notification
+      }
       return true;
     },
 

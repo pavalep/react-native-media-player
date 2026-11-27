@@ -351,6 +351,25 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         }
 
         /**
+         * Notify JS when the user taps Next / Previous on the Android media
+         * notification, lock-screen widget, or Bluetooth/headset controls so
+         * JS-managed queues can advance even when libmpv holds a single track.
+         */
+        @JvmStatic
+        fun emitMediaSessionAction(action: String) {
+            val ctx = instance ?: return
+            val params = Arguments.createMap().apply {
+                putString("action", action)
+            }
+            try {
+                ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("onMediaSessionAction", params)
+            } catch (e: Exception) {
+                Log.w(TAG, "emitMediaSessionAction($action) threw", e)
+            }
+        }
+
+        /**
          * The Activity the PiP window belongs to: the one that asked for
          * it, or - when the platform entered PiP on its own - the Activity
          * React Native currently has.
@@ -3441,7 +3460,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * MediaSession metadata, the media type is inferred from the file extension).
      */
     @ReactMethod
-    fun startNotification(
+    @Override
+    override fun startNotification(
         title: String,
         artist: String,
         album: String,
@@ -3461,12 +3481,12 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             putExtra(com.simba.player.MediaPlaybackService.EXTRA_DURATION_MS, duration.toLong())
             putExtra(com.simba.player.MediaPlaybackService.EXTRA_IS_PLAYING, true)
         }
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            reactApplicationContext.startForegroundService(intent)
-        } else {
-            reactApplicationContext.startService(intent)
+        try {
+            androidx.core.content.ContextCompat.startForegroundService(reactApplicationContext, intent)
+            Log.i(TAG, "MediaPlaybackService started via bridge: $title")
+        } catch (e: Throwable) {
+            Log.e(TAG, "startNotification failed for '$title': ${e.message}", e)
         }
-        Log.i(TAG, "MediaPlaybackService started via bridge: $title")
     }
 
     /**
@@ -3474,7 +3494,8 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * Called periodically (every ~1s) while the service is running.
      */
     @ReactMethod
-    fun updateNotification(
+    @Override
+    override fun updateNotification(
         title: String,
         artist: String,
         album: String,
@@ -3495,7 +3516,11 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             putExtra(com.simba.player.MediaPlaybackService.EXTRA_DURATION_MS, duration.toLong())
             putExtra(com.simba.player.MediaPlaybackService.EXTRA_IS_PLAYING, isPlaying)
         }
-        reactApplicationContext.startService(intent)
+        try {
+            reactApplicationContext.startService(intent)
+        } catch (e: Throwable) {
+            Log.w(TAG, "updateNotification failed: ${e.message}")
+        }
     }
 
     /**
@@ -3503,12 +3528,17 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
      * Called when playback is explicitly ended (stop/destroy/reset).
      */
     @ReactMethod
-    fun stopNotification() {
+    @Override
+    override fun stopNotification() {
         val intent = Intent(reactApplicationContext, com.simba.player.MediaPlaybackService::class.java).apply {
             action = com.simba.player.MediaPlaybackService.ACTION_STOP
         }
-        reactApplicationContext.startService(intent)
-        Log.i(TAG, "MediaPlaybackService stopped via bridge")
+        try {
+            reactApplicationContext.startService(intent)
+            Log.i(TAG, "MediaPlaybackService stopped via bridge")
+        } catch (e: Throwable) {
+            Log.w(TAG, "stopNotification failed: ${e.message}")
+        }
     }
 
     @ReactMethod(isBlockingSynchronousMethod = true)

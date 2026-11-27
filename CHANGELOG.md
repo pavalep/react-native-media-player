@@ -1,5 +1,19 @@
 
 
+## [3.5.1] - 2026-11-27
+
+### Added
+
+- **Unified Audio, Video & Queue Media Notifications.**
+  Exposed `startNotification`, `updateNotification`, and `stopNotification` on the TurboModule spec (`NativeMpvPlayer.ts`) and `PlayerCommands`, and wired `commands.openPlayer()` so both audio and video playback start `MediaPlaybackService` with title, artist, album, and artwork metadata.
+- **MediaSession Queue Action Events (`onMediaSessionAction`).**
+  `MediaPlaybackService` now emits `onMediaSessionAction` (`"next"` / `"previous"`) to JS when Next/Previous is tapped from the Android notification shade, lock-screen widget, or Bluetooth/headset controls so JS-managed queues advance cleanly.
+
+### Fixed
+
+- **Android 14–17 Notification Tap Intent Resolution:** Updated `MediaPlaybackService.hostActivityIntent()` to resolve the launcher activity via `PackageManager.getLaunchIntentForPackage()` (falling back to `resolveActivity(..., 0)` without `MATCH_DEFAULT_ONLY`), eliminating `No launchable activity` errors and ensuring tapping the notification body opens the app.
+- **Safe Foreground Service Guard:** Wrapped `startNotification` / `updateNotification` / `stopNotification` service intents in `try/catch` so revoked notification/foreground permissions never crash playback.
+
 ## [3.5.0] - 2026-11-27
 
 ### Added

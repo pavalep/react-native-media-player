@@ -18,6 +18,7 @@ import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.simba.player.mpv.MPVLib
+import com.simba.player.mpv.MpvBridgeModule
 
 /**
  * V20 Phase B: the foreground service that owns playback.
@@ -227,16 +228,25 @@ class MediaPlaybackService : Service() {
          */
         private fun hostActivityIntent(context: Context): Intent? {
             val pm = context.packageManager
+            val resolvedIntent = try {
+                pm.getLaunchIntentForPackage(context.packageName)
+            } catch (e: Exception) {
+                Log.w(TAG, "getLaunchIntentForPackage(${context.packageName}) failed: ${e.message}")
+                null
+            }
+            if (resolvedIntent != null) {
+                return resolvedIntent.apply {
+                    flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+            }
+
             val launchIntent = Intent(Intent.ACTION_MAIN)
                 .addCategory(Intent.CATEGORY_LAUNCHER)
                 .setPackage(context.packageName)
             val className = try {
-                pm.resolveActivity(launchIntent, PackageManager.MATCH_DEFAULT_ONLY)
+                pm.resolveActivity(launchIntent, 0)
                     ?.activityInfo?.name
             } catch (e: Exception) {
-                // PackageManager can throw on a package that is mid-update
-                // or being read cross-process. Naming the cause beats a
-                // silent null: this is a real, reportable failure.
                 Log.w(TAG, "resolveActivity($launchIntent) failed: ${e.message}")
                 null
             }
@@ -441,12 +451,14 @@ class MediaPlaybackService : Service() {
             }
 
             override fun onSkipToNext() = command("onSkipToNext") {
+                MpvBridgeModule.emitMediaSessionAction("next")
                 MPVLib.nativePlaylistNext(ptr())
                 publishPlaybackState(playing = true)
                 startTicker()
             }
 
             override fun onSkipToPrevious() = command("onSkipToPrevious") {
+                MpvBridgeModule.emitMediaSessionAction("previous")
                 MPVLib.nativePlaylistPrev(ptr())
                 publishPlaybackState(playing = true)
                 startTicker()

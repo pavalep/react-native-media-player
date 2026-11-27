@@ -359,9 +359,31 @@ export interface Spec extends TurboModule {
   setScreenBrightness(value: number): void;
   getScreenBrightness(): number;
 
-  // ── Notification permission ────────────────────────────────────────────
+  // ── Notification permission & foreground media service ─────────────────
   requestNotificationPermission(): void;
   isNotificationActive(): boolean;
+  startNotification(
+    title: string,
+    artist: string,
+    album: string,
+    fileUri: string,
+    artworkPath: string,
+    mediaType: string,
+    position: number,
+    duration: number,
+  ): void;
+  updateNotification(
+    title: string,
+    artist: string,
+    album: string,
+    fileUri: string,
+    artworkPath: string,
+    mediaType: string,
+    position: number,
+    duration: number,
+    isPlaying: boolean,
+  ): void;
+  stopNotification(): void;
 
   // ── Debug (V12 Phase 39) ───────────────────────────────────────────────
   setDebugLogging(enabled: boolean): void;
