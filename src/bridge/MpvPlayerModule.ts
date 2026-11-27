@@ -1126,7 +1126,8 @@ export function subscribePlayerEvent<E extends PlayerEventName>(
     };
   }
   dlog('subscribePlayerEvent: subscribing to', event);
-  const subscription = emitter.addListener(event, handler);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const subscription = emitter.addListener(event, handler as (...args: any[]) => void);
   return () => {
     dlog('subscribePlayerEvent: unsubscribing from', event);
     subscription.remove();

@@ -1,10 +1,8 @@
-import type { ViewProps } from 'react-native';
-import type {
-  Double,
-  Float,
-  WithDefault,
-} from 'react-native/Libraries/Types/CodegenTypes';
-import codegenNativeComponent from 'react-native/Libraries/Utilities/codegenNativeComponent';
+import {
+  codegenNativeComponent,
+  type CodegenTypes,
+  type ViewProps,
+} from 'react-native';
 
 /**
  * Codegen spec for the native mpv video surface.
@@ -44,7 +42,7 @@ export interface NativeProps extends ViewProps {
    * once a real handle arrives, so an app that renders the view on first paint
    * does not have to wait for the bridge.
    */
-  nativePtr?: Double;
+  nativePtr?: CodegenTypes.Double;
 
   /**
    * Pause playback. Declarative: set it and the surface pauses, exactly like
@@ -54,10 +52,10 @@ export interface NativeProps extends ViewProps {
    * engine keeps running with no render target, which is the correct
    * configuration for mpv.
    */
-  paused?: WithDefault<boolean, false>;
+  paused?: CodegenTypes.WithDefault<boolean, false>;
 
   /** Mute. Mirrors `PlayerCommands.setMuted`. */
-  muted?: WithDefault<boolean, false>;
+  muted?: CodegenTypes.WithDefault<boolean, false>;
 
   /**
    * Playback volume, 0..100 - mpv's native range, matching the range
@@ -65,7 +63,7 @@ export interface NativeProps extends ViewProps {
    * system end to end, so a value read from the engine is a value you can hand
    * straight back to it.
    */
-  volume?: WithDefault<Float, 100>;
+  volume?: CodegenTypes.WithDefault<CodegenTypes.Float, 100>;
 
   /**
    * How the picture fills this view.
@@ -81,7 +79,7 @@ export interface NativeProps extends ViewProps {
    * size, `2` four times the size), so it is not a fit / fill / stretch enum
    * and is never sent one.
    */
-  resizeMode?: WithDefault<string, 'contain'>;
+  resizeMode?: CodegenTypes.WithDefault<string, 'contain'>;
 }
 
 export default codegenNativeComponent<NativeProps>('SimbaVideoView');

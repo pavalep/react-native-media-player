@@ -1,5 +1,11 @@
 
 
+## [3.5.2] - 2026-11-27
+
+### Fixed
+
+- **React Native 0.88+ / TypeScript 6 Compatibility:** Replaced deprecated deep imports (`react-native/Libraries/Types/CodegenTypes`, `react-native/Libraries/Utilities/codegenNativeComponent`) in `SimbaVideoViewNativeComponent.ts` with top-level `react-native` exports (`CodegenTypes`, `codegenNativeComponent`), and updated `subscribePlayerEvent` in `MpvPlayerModule.ts` for RN 0.88's strict `NativeEventEmitter.addListener` signature.
+
 ## [3.5.1] - 2026-11-27
 
 ### Added
