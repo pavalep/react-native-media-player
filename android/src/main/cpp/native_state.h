@@ -32,6 +32,45 @@ private:
     mpv_handle *handle_;
 };
 
+// ── Hardware-adaptive libmpv tuning (v3.5.0) ───────────────────────────────
+
+enum class DeviceTier : int {
+    Low = 0,
+    Mid = 1,
+    High = 2,
+};
+
+struct HardwareProfile {
+    int64_t totalRamMb = 0;
+    int cpuCores = 0;
+    int screenWidthPx = 0;
+    int screenHeightPx = 0;
+    int glEsMajor = 3;
+    bool isLowRam = false;
+    DeviceTier tier = DeviceTier::Mid;
+};
+
+const char *deviceTierName(DeviceTier tier);
+
+HardwareProfile detectHardwareProfile(
+    int64_t totalRamMbHint,
+    int cpuCoresHint,
+    int screenWidthPx,
+    int screenHeightPx,
+    int glEsMajor,
+    bool isLowRamHint);
+
+void applyHardwareTuning(mpv_handle *mpv, const HardwareProfile &profile, bool isPreInit);
+std::string hardwareProfileToJson(const HardwareProfile &profile);
+
+// ── Shared hardened JSON serializer ────────────────────────────────────────
+
+std::string jsonQuote(const char *value);
+std::string jsonQuote(const std::string &value);
+std::string jsonNode(const mpv_node *node);
+
+// ── Load request correlation queue ─────────────────────────────────────────
+
 struct PendingLoadRequest {
     std::string requestId;
     std::string resolvedPath;

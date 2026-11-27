@@ -1,5 +1,25 @@
 
 
+## [3.5.0] - 2026-11-27
+
+### Added
+
+- **Hardware-Adaptive C++ Libmpv Tuning Engine (`LOW` / `MID` / `HIGH` tiers).**
+  `MPVLib.nativeCreateWithHardwareInfo()` probes real Android hardware capabilities (physical RAM via `ActivityManager` + `sysconf(_SC_PHYS_PAGES)`, CPU core count, display resolution, OpenGL ES version, and `isLowRamDevice`) and tunes libmpv scalers (`scale`/`dscale`/`cscale`), `correct-downscaling`, `fbo-format` (`rgba8` vs `rgba16f`), `target-colorspace-hint`, `vd-lavc-threads`/`vd-lavc-fast`/`vd-lavc-skiploopfilter`, `framedrop=vo`, and demuxer RAM budgets (`32MiB`/`80MiB`/`150MiB`) automatically for each device class.
+- **Resilient Hardware Decoder Fallback (`hwdec=mediacodec,mediacodec-copy`).**
+  Prefers zero-copy MediaCodec Surface decoding and falls back cleanly to `mediacodec-copy` on devices/filters where zero-copy fails before ever dropping to CPU decode.
+- **Runtime Performance Profile API (`setPerformanceProfile` / `getHardwareProfile`).**
+  Exposed through the TurboModule spec (`NativeMpvPlayer.ts`) and `MpvPlayerModule` so apps can switch between `'auto' | 'battery-saver' | 'balanced' | 'high-quality'` at runtime.
+
+### Fixed
+
+- **Undefined Behavior in `nativeLoadPlaylist`:** Fixed `mpv_set_property("playlist-pos", MPV_FORMAT_INT64, &startIndex)` passing a 32-bit `jint*` instead of a 64-bit `int64_t*`.
+- **JNI Local Reference Table Overflow in `nativeLoadPlaylist`:** Added `env->DeleteLocalRef(jpath)` and null checks inside the playlist loop so loading 500+ item playlists never aborts ART.
+- **Uninitialized `pause` variable in `nativeTogglePlayPause`:** Initialized `int pause = 0;` and checked `mpv_get_property` return value.
+- **Unified Hardened JSON Serializer:** Consolidated duplicate JSON serializers across `property.cpp`, `event.cpp`, and `native_state.cpp` into one null-safe, control-character-escaping, `std::isfinite`-guarded implementation in `native_state.cpp`.
+- **Release Verbose Log Flood:** Changed default `mpv_request_log_messages` from `"v"` to `"error"` in release builds (dynamically toggleable via `setDebugLogging(true/false)` -> `nativeSetLogLevel`).
+- **JNI Thread-Attachment Leak & Handle Safety:** Replaced raw `getEnv()` in `main.cpp` with RAII `ScopedJniEnv` (auto-detaching attached threads), passed `mpv_handle*` explicitly to `eventLoop(mpv)`, added `GetStringUTFChars` null checks, and removed unconditional `LOGI` spam from `nativeGetPosition`/`nativeGetDuration`.
+
 ## [3.4.1] - 2026-11-21
 
 ### Added

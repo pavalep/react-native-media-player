@@ -367,6 +367,10 @@ export interface Spec extends TurboModule {
   setDebugLogging(enabled: boolean): void;
   dumpObservedProperties(): number;
 
+  // ── Hardware-adaptive performance tuning (v3.5.0) ──────────────────────
+  setPerformanceProfile(profile: string): void;
+  getHardwareProfile(): string;
+
   // ── Event emitter plumbing (React Native's NativeEventEmitter) ─────────
   //
   // React Native's `NativeEventEmitter` REQUIRES the native module to

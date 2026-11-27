@@ -2555,8 +2555,44 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
             return true
         }
         val caFilePath = prepareMpvCaBundle()
-        nativePtr = MPVLib.nativeCreate(caFilePath)
-        Log.i(TAG, "[PlaybackTrace][Bridge][initPlayer] nativeCreate returned ptr=$nativePtr")
+        val am = reactApplicationContext.getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+        val memInfo = android.app.ActivityManager.MemoryInfo()
+        val totalRamMb = try {
+            if (am != null) {
+                am.getMemoryInfo(memInfo)
+                memInfo.totalMem / (1024L * 1024L)
+            } else {
+                0L
+            }
+        } catch (_: Exception) {
+            0L
+        }
+        val isLowRam = try {
+            am?.isLowRamDevice == true
+        } catch (_: Exception) {
+            false
+        }
+        val glEsMajor = try {
+            val req = am?.deviceConfigurationInfo?.reqGlEsVersion ?: 0x30000
+            (req ushr 16).coerceAtLeast(2)
+        } catch (_: Exception) {
+            3
+        }
+        val cpuCores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        val dm = reactApplicationContext.resources?.displayMetrics
+        val screenWidthPx = dm?.widthPixels ?: 0
+        val screenHeightPx = dm?.heightPixels ?: 0
+
+        nativePtr = MPVLib.nativeCreateWithHardwareInfo(
+            caFilePath,
+            totalRamMb,
+            cpuCores,
+            screenWidthPx,
+            screenHeightPx,
+            glEsMajor,
+            isLowRam,
+        )
+        Log.i(TAG, "[PlaybackTrace][Bridge][initPlayer] nativeCreateWithHardwareInfo returned ptr=$nativePtr ramMb=$totalRamMb cores=$cpuCores screen=${screenWidthPx}x${screenHeightPx} gles=$glEsMajor lowRam=$isLowRam")
         if (nativePtr == 0L) {
             Log.e(TAG, "Failed to create mpv instance")
             return false
@@ -2602,11 +2638,37 @@ class MpvBridgeModule(reactContext: ReactApplicationContext) :
         debugLoggingEnabled = enabled
         if (nativePtr != 0L) {
             try {
+                MPVLib.nativeSetLogLevel(nativePtr, if (enabled) "v" else "error")
                 MPVLib.setPropertyString(nativePtr, "msg-level", if (enabled) "all" else "info")
                 Log.i(TAG, "[PlaybackTrace][Bridge][setDebugLogging] enabled=$enabled (mpv msg-level=${if (enabled) "all" else "info"})")
             } catch (e: Exception) {
                 Log.w(TAG, "[PlaybackTrace][Bridge][setDebugLogging] setPropertyString failed: ${e.message}", e)
             }
+        }
+    }
+
+    @ReactMethod
+    @Override
+    override fun setPerformanceProfile(profile: String) {
+        if (nativePtr == 0L) {
+            Log.w(TAG, "[PlaybackTrace][Bridge][setPerformanceProfile] ignored (not initialized)")
+            return
+        }
+        try {
+            MPVLib.nativeSetPerformanceProfile(nativePtr, profile)
+        } catch (e: Exception) {
+            Log.w(TAG, "[PlaybackTrace][Bridge][setPerformanceProfile] failed: ${e.message}", e)
+        }
+    }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    @Override
+    override fun getHardwareProfile(): String {
+        return try {
+            MPVLib.nativeGetHardwareProfile(nativePtr)
+        } catch (e: Exception) {
+            Log.w(TAG, "[PlaybackTrace][Bridge][getHardwareProfile] failed: ${e.message}", e)
+            "{\"tier\":\"mid\"}"
         }
     }
 

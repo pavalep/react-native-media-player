@@ -23,6 +23,31 @@ object MPVLib {
     /** Create mpv instance. Returns native pointer as Long. */
     external fun nativeCreate(caFilePath: String): Long
 
+    /**
+     * Create mpv instance with real Android hardware metrics (RAM, CPU cores,
+     * display resolution, GLES major version, low-RAM flag) so C++ applies the
+     * optimal libmpv scaling, FBO, decode-thread, and demuxer cache tier before
+     * `mpv_initialize`.
+     */
+    external fun nativeCreateWithHardwareInfo(
+        caFilePath: String,
+        totalRamMb: Long,
+        cpuCores: Int,
+        screenWidthPx: Int,
+        screenHeightPx: Int,
+        glEsMajor: Int,
+        isLowRam: Boolean,
+    ): Long
+
+    /** Dynamically switch the libmpv hardware performance profile ("auto" | "low" | "mid" | "high" | "battery-saver" | "balanced" | "high-quality"). */
+    external fun nativeSetPerformanceProfile(nativePtr: Long, profileName: String)
+
+    /** Return the active hardware profile as a JSON string. */
+    external fun nativeGetHardwareProfile(nativePtr: Long): String
+
+    /** Dynamically update libmpv log level ("error" | "warn" | "info" | "v"). */
+    external fun nativeSetLogLevel(nativePtr: Long, level: String)
+
     /** Destroy mpv instance. */
     external fun nativeDestroy()
 

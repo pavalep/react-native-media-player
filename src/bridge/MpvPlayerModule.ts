@@ -603,6 +603,24 @@ export interface MpvPlayerModuleBridge {
   setDebugLogging(enabled: boolean): void;
   /** Dump all observed mpv properties to logcat. Returns the count. */
   dumpObservedProperties(): number;
+
+  // ── Hardware-adaptive performance tuning (v3.5.0) ──────────────────────
+  /**
+   * Switch the native libmpv GPU/scaler/cache tier at runtime:
+   * `'auto' | 'low' | 'mid' | 'high' | 'battery-saver' | 'balanced' | 'high-quality'`.
+   */
+  setPerformanceProfile(
+    profile:
+      | 'auto'
+      | 'low'
+      | 'mid'
+      | 'high'
+      | 'battery-saver'
+      | 'balanced'
+      | 'high-quality',
+  ): void;
+  /** Return the active C++ hardware profile as a JSON string. */
+  getHardwareProfile(): string;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -847,6 +865,13 @@ const NOOP_BRIDGE: MpvPlayerModuleBridge = {
     void _enabled;
   },
   dumpObservedProperties: () => 0,
+
+  // Hardware-adaptive performance tuning
+  setPerformanceProfile: (_profile: string) => {
+    void _profile;
+  },
+  getHardwareProfile: () =>
+    '{"tier":"mid","totalRamMb":0,"cpuCores":0,"screenWidthPx":0,"screenHeightPx":0,"glEsMajor":3,"isLowRam":false}',
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -42,7 +42,8 @@ jmethodID g_mid_onError = nullptr;
 
 // ── Forward declarations ──────────────────────────────────────────────────
 
-void eventLoop();
+void eventLoop(mpv_handle *mpv);
+static HardwareProfile g_hardwareProfile{};
 
 static bool initializeMpv(mpv_handle *mpv) {
     if (!mpv) {
@@ -62,14 +63,19 @@ static bool initializeMpv(mpv_handle *mpv) {
     }
 
     LOGI("[PlaybackTrace][Native][initialize] mpv_initialize succeeded");
+#ifdef SIMBA_MPV_TRACE
     mpv_request_log_messages(mpv, "v");
-    LOGI("[PlaybackTrace][Native][initialize] requested mpv verbose logs");
+#else
+    // Avoid flooding mpv_wait_event with verbose log events in release builds.
+    // Runtime debugging can promote this via nativeSetLogLevel("v").
+    mpv_request_log_messages(mpv, "error");
+#endif
     g_initialized.store(true);
     g_running.store(true);
-    if (pthread_create(&g_eventThread, nullptr, [](void *) -> void * {
-            eventLoop();
+    if (pthread_create(&g_eventThread, nullptr, [](void *arg) -> void * {
+            eventLoop(static_cast<mpv_handle *>(arg));
             return nullptr;
-        }, nullptr) != 0) {
+        }, mpv) != 0) {
         LOGE("Failed to create mpv event thread");
         g_running.store(false);
         g_initialized.store(false);
@@ -96,6 +102,10 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
     }
     g_cls_MPVLib = static_cast<jclass>(env->NewGlobalRef(temp));
     env->DeleteLocalRef(temp);
+    if (!g_cls_MPVLib) {
+        LOGE("Failed to create GlobalRef for MPVLib");
+        return JNI_ERR;
+    }
 
     g_mid_onEvent = env->GetStaticMethodID(
         g_cls_MPVLib, "onNativeEvent",
@@ -149,15 +159,38 @@ static void callStaticJavaVoid(JNIEnv *env, jmethodID mid, ...) {
     va_end(args);
 }
 
-static JNIEnv *getEnv() {
-    JNIEnv *env = nullptr;
-    if (g_vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) == JNI_OK)
-        return env;
-    JavaVMAttachArgs args = {JNI_VERSION_1_6, nullptr, nullptr};
-    if (g_vm->AttachCurrentThread(&env, &args) == JNI_OK)
-        return env;
-    return nullptr;
-}
+// Scoped JNIEnv accessor that detaches automatically if it had to attach a
+// native thread, preventing JVM thread-table leaks.
+class ScopedJniEnv {
+public:
+    ScopedJniEnv() {
+        if (!g_vm) return;
+        const jint status = g_vm->GetEnv(reinterpret_cast<void **>(&env_), JNI_VERSION_1_6);
+        if (status == JNI_OK) {
+            return;
+        }
+        if (status == JNI_EDETACHED) {
+            JavaVMAttachArgs args = {JNI_VERSION_1_6, "mpv-jni-call", nullptr};
+            if (g_vm->AttachCurrentThread(&env_, &args) == JNI_OK) {
+                attached_ = true;
+            } else {
+                env_ = nullptr;
+            }
+        }
+    }
+
+    ~ScopedJniEnv() {
+        if (attached_ && g_vm) {
+            g_vm->DetachCurrentThread();
+        }
+    }
+
+    JNIEnv *get() const { return env_; }
+
+private:
+    JNIEnv *env_ = nullptr;
+    bool attached_ = false;
+};
 
 // ── Helper: flush queued mpv core work ──────────────────────────────────
 // Property writes (vo=null / wid=...) from other threads are processed
@@ -217,7 +250,8 @@ static void reportCommandFailure(const char *command, int result, const char *de
     LOGE("[PlaybackTrace][Native][command] '%s' failed: %s (code=%d)%s%s",
          command, reason, result,
          (detail && detail[0]) ? " - " : "", (detail && detail[0]) ? detail : "");
-    JNIEnv *env = getEnv();
+    ScopedJniEnv scopedEnv;
+    JNIEnv *env = scopedEnv.get();
     if (!env || !g_cls_MPVLib || !g_mid_onError) return;
     char message[192];
     snprintf(message, sizeof(message), "mpv command '%s' failed: %s%s%s",
@@ -257,8 +291,15 @@ static int runMpvCommand(mpv_handle *mpv, const char **args,
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-extern "C" JNIEXPORT jlong JNICALL
-Java_com_simba_player_mpv_MPVLib_nativeCreate(JNIEnv *env, jclass, jstring caFilePath) {
+static jlong nativeCreateInternal(
+    JNIEnv *env,
+    jstring caFilePath,
+    int64_t totalRamMbHint,
+    int cpuCoresHint,
+    int screenWidthPx,
+    int screenHeightPx,
+    int glEsMajor,
+    bool isLowRamHint) {
     std::unique_lock<std::shared_mutex> lifecycleLock(g_mpvLifecycleMutex);
     if (g_mpv) {
         LOGI("mpv instance already exists, returning existing");
@@ -273,24 +314,23 @@ Java_com_simba_player_mpv_MPVLib_nativeCreate(JNIEnv *env, jclass, jstring caFil
         return 0;
     }
 
-    // Set pre-init options (NOT wid — that requires the Surface and will be
-    // set in nativeAttachSurface before mpv_initialize).
     // Audio overlays do not mount a video surface. Keep video output disabled
     // until a surface is explicitly attached by MpvRenderView.
-    int optionResult = mpv_set_option_string(mpv, "vo", "null");
-    LOGI("[PlaybackTrace][Native][create] option vo=null result=%d", optionResult);
-    optionResult = mpv_set_option_string(mpv, "gpu-api", "opengl");
-    LOGI("[PlaybackTrace][Native][create] option gpu-api=opengl result=%d", optionResult);
-    optionResult = mpv_set_option_string(mpv, "hwdec", "mediacodec");
-    LOGI("[PlaybackTrace][Native][create] option hwdec=mediacodec result=%d", optionResult);
-    // Let mpv preserve the source transfer function and range instead of
-    // applying a blanket SDR conversion. This keeps SDR/HDR content neutral
-    // on devices that expose the required display metadata.
-    mpv_set_option_string(mpv, "video-output-levels", "auto");
-    mpv_set_option_string(mpv, "target-colorspace-hint", "yes");
-    mpv_set_option_string(mpv, "correct-downscaling", "yes");
-    optionResult = mpv_set_option_string(mpv, "audio-device-auto", "yes");
-    LOGI("[PlaybackTrace][Native][create] option audio-device-auto=yes result=%d", optionResult);
+    mpv_set_option_string(mpv, "vo", "null");
+    mpv_set_option_string(mpv, "gpu-api", "opengl");
+    mpv_set_option_string(mpv, "audio-device-auto", "yes");
+
+    // Hardware-adaptive tuning (v3.5.0): classify device by real RAM, CPU cores,
+    // display resolution, and GLES version so budget/low-GPU phones run smooth
+    // without OOM/throttling while flagship phones get cinema-grade shaders.
+    g_hardwareProfile = detectHardwareProfile(
+        totalRamMbHint,
+        cpuCoresHint,
+        screenWidthPx,
+        screenHeightPx,
+        glEsMajor,
+        isLowRamHint);
+    applyHardwareTuning(mpv, g_hardwareProfile, /*isPreInit=*/true);
 
     // Android libmpv builds do not consistently discover the platform trust
     // store. Supply the app-bundled Mozilla CA bundle while keeping TLS
@@ -298,7 +338,7 @@ Java_com_simba_player_mpv_MPVLib_nativeCreate(JNIEnv *env, jclass, jstring caFil
     if (caFilePath) {
         const char *caPath = env->GetStringUTFChars(caFilePath, nullptr);
         if (caPath && caPath[0] != '\0') {
-            optionResult = mpv_set_option_string(mpv, "tls-ca-file", caPath);
+            int optionResult = mpv_set_option_string(mpv, "tls-ca-file", caPath);
             LOGI("[PlaybackTrace][Native][create] option tls-ca-file=%s result=%d", caPath, optionResult);
             env->ReleaseStringUTFChars(caFilePath, caPath);
         } else {
@@ -308,95 +348,11 @@ Java_com_simba_player_mpv_MPVLib_nativeCreate(JNIEnv *env, jclass, jstring caFil
     } else {
         LOGE("[PlaybackTrace][Native][create] null CA bundle path; HTTPS validation may fail");
     }
-    optionResult = mpv_set_option_string(mpv, "tls-verify", "yes");
-    LOGI("[PlaybackTrace][Native][create] option tls-verify=yes result=%d", optionResult);
-    optionResult = mpv_set_option_string(mpv, "keep-open", "yes");
-    LOGI("[PlaybackTrace][Native][create] option keep-open=yes result=%d", optionResult);
-    optionResult = mpv_set_option_string(mpv, "pause", "no");
-    LOGI("[PlaybackTrace][Native][create] option pause=no result=%d", optionResult);
-
-    // ── Streaming / buffering tuning ────────────────────────────────────
-    // These are the same options used by desktop MPV configs to get
-    // YouTube/Netflix-class seek-bar buffered-range visualization and
-    // snappy re-seeks on slow network streams (archive.org HLS, etc.).
-    //
-    //   • cache=yes              : enable a RAM cache even for non-network
-    //                              sources (so seek-back is instant).
-    //   • cache-secs=300         : keep ~5 minutes of stream ahead of the
-    //                              playhead in RAM. Big enough to absorb a
-    //                              brief re-buffer without a spinner, small
-    //                              enough to stay under mobile RAM limits.
-    //
-    //                              This was 120 s, and 120 s is not enough to
-    //                              SEE. The buffered range a consumer draws
-    //                              is the span between the playhead and the
-    //                              end of the buffer, and the seek bar's thumb
-    //                              covers 3.04 % of the track (a 14 dp thumb on
-    //                              a 230 dp rail). On a feature-length film
-    //                              120 s is 2.44 % of the file — LESS than
-    //                              the thumb — so the thumb covered the whole
-    //                              visible band and the buffered indicator
-    //                              could not be seen at all. Measured on
-    //                              device (2026-10-20): track 690 px, band
-    //                              16 px, thumb half-width 21 px. 300 s is
-    //                              6.1 % of the same film, so the band
-    //                              clears the thumb.
-    //   • demuxer-max-bytes      : hard upper bound on the cache size in
-    //                              bytes (≈150 MB). Prevents OOM on large
-    //                              VOD files over HTTP.
-    //
-    //                              This is the SECOND bound on how far
-    //                              the buffered band can reach: 300 s of
-    //                              video only fits in 150 MB at ≤4 Mbit/s,
-    //                              so above that bitrate the byte cap
-    //                              binds first and the band is shorter
-    //                              than 300 s. The band was measured on
-    //                              device rather than assumed.
-    //   • demuxer-max-back-bytes : how far backwards the cache retains
-    //                              data (~75 MB). This is what makes
-    //                              "seek back 30 s" instantaneous.
-    //   • demuxer-readahead-secs : how many seconds of stream to prefetch
-    //                              ahead of the playhead.
-    //
-    //                              It is NOT independent of `cache-secs`.
-    //                              mpv computes the demuxer's read-ahead
-    //                              target as the MAXIMUM of the two —
-    //                              mpv `demux/demux.c`, `update_opts()`:
-    //
-    //                                  in->min_secs = opts->min_secs;   // readahead
-    //                                  if (use_cache)
-    //                                      in->min_secs = MPMAX(in->min_secs,
-    //                                                          opts->min_secs_cache);
-    //                                                                 // cache-secs
-    //
-    //                              `update_opts()` re-runs on EVERY config
-    //                              change, so the two must be raised AND
-    //                              lowered together. That is why the runtime
-    //                              memory-pressure trim in
-    //                              `MpvBridgeModule.onTrimMemory` writes
-    //                              BOTH — trimming only `cache-secs` would
-    //                              leave the read-ahead pinned and the trim
-    //                              would have no effect at all.
-    //
-    //                              The span between the playhead and the end
-    //                              of the buffer is exactly what a consumer
-    //                              paints as its buffered range, so this
-    //                              value is what makes that span visible.
-    //   • demuxer-termination-timeout : if a network read stalls, fail
-    //                              the demuxer so the player can recover
-    //                              instead of hanging forever.
-    //   • prefetch-playlist=yes  : proactively fetch the next playlist
-    //                              entry (HLS / DASH) to enable gapless.
-    mpv_set_option_string(mpv, "cache", "yes");
-    mpv_set_option_string(mpv, "cache-secs", "300");
-    mpv_set_option_string(mpv, "demuxer-max-bytes", "150MiB");
-    mpv_set_option_string(mpv, "demuxer-max-back-bytes", "75MiB");
-    mpv_set_option_string(mpv, "demuxer-readahead-secs", "300");
+    mpv_set_option_string(mpv, "tls-verify", "yes");
+    mpv_set_option_string(mpv, "keep-open", "yes");
+    mpv_set_option_string(mpv, "pause", "no");
     mpv_set_option_string(mpv, "demuxer-termination-timeout", "10");
     mpv_set_option_string(mpv, "prefetch-playlist", "yes");
-
-    // Initialize immediately so audio-only playback can load streams without
-    // waiting for a video surface. Video surfaces remain independently attachable.
 
     LOGI("[PlaybackTrace][Native][create] mpv_create succeeded handle=%p", mpv);
     g_mpv = mpv;
@@ -406,7 +362,90 @@ Java_com_simba_player_mpv_MPVLib_nativeCreate(JNIEnv *env, jclass, jstring caFil
     }
     LOGI("mpv instance created and initialized without a required surface");
     return reinterpret_cast<jlong>(mpv);
+}
 
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_simba_player_mpv_MPVLib_nativeCreate(JNIEnv *env, jclass, jstring caFilePath) {
+    return nativeCreateInternal(env, caFilePath, 0, 0, 0, 0, 3, false);
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_simba_player_mpv_MPVLib_nativeCreateWithHardwareInfo(
+    JNIEnv *env,
+    jclass,
+    jstring caFilePath,
+    jlong totalRamMb,
+    jint cpuCores,
+    jint screenWidthPx,
+    jint screenHeightPx,
+    jint glEsMajor,
+    jboolean isLowRam) {
+    return nativeCreateInternal(
+        env,
+        caFilePath,
+        static_cast<int64_t>(totalRamMb),
+        static_cast<int>(cpuCores),
+        static_cast<int>(screenWidthPx),
+        static_cast<int>(screenHeightPx),
+        static_cast<int>(glEsMajor),
+        isLowRam == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_simba_player_mpv_MPVLib_nativeSetPerformanceProfile(
+    JNIEnv *env, jclass, jlong nativePtr, jstring profileName) {
+    if (!profileName) return;
+    NativeMpvReadLease lease(nativePtr);
+    if (!lease.valid()) return;
+    mpv_handle *mpv = lease.get();
+    const char *utf = env->GetStringUTFChars(profileName, nullptr);
+    if (!utf) return;
+
+    HardwareProfile next = g_hardwareProfile;
+    if (strcmp(utf, "low") == 0 || strcmp(utf, "battery-saver") == 0) {
+        next.tier = DeviceTier::Low;
+    } else if (strcmp(utf, "mid") == 0 || strcmp(utf, "balanced") == 0) {
+        next.tier = DeviceTier::Mid;
+    } else if (strcmp(utf, "high") == 0 || strcmp(utf, "high-quality") == 0) {
+        next.tier = DeviceTier::High;
+    } else {
+        // "auto" — re-detect from hardware facts
+        next = detectHardwareProfile(
+            g_hardwareProfile.totalRamMb,
+            g_hardwareProfile.cpuCores,
+            g_hardwareProfile.screenWidthPx,
+            g_hardwareProfile.screenHeightPx,
+            g_hardwareProfile.glEsMajor,
+            g_hardwareProfile.isLowRam);
+    }
+    env->ReleaseStringUTFChars(profileName, utf);
+
+    g_hardwareProfile = next;
+    applyHardwareTuning(mpv, g_hardwareProfile, /*isPreInit=*/false);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_simba_player_mpv_MPVLib_nativeGetHardwareProfile(
+    JNIEnv *env, jclass, jlong nativePtr) {
+    NativeMpvReadLease lease(nativePtr);
+    if (!lease.valid()) {
+        const HardwareProfile fallback = detectHardwareProfile(0, 0, 0, 0, 3, false);
+        return env->NewStringUTF(hardwareProfileToJson(fallback).c_str());
+    }
+    return env->NewStringUTF(hardwareProfileToJson(g_hardwareProfile).c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_simba_player_mpv_MPVLib_nativeSetLogLevel(
+    JNIEnv *env, jclass, jlong nativePtr, jstring level) {
+    if (!level) return;
+    NativeMpvReadLease lease(nativePtr);
+    if (!lease.valid()) return;
+    mpv_handle *mpv = lease.get();
+    const char *utf = env->GetStringUTFChars(level, nullptr);
+    if (!utf) return;
+    mpv_request_log_messages(mpv, utf);
+    env->ReleaseStringUTFChars(level, utf);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -497,13 +536,13 @@ Java_com_simba_player_mpv_MPVLib_nativeAttachSurface(
         LOGI("Surface attached with global-ref wid");
 
         // Emit surfaceAttached event
-        JNIEnv* jniEnv = getEnv();
-        if (jniEnv && g_mid_onEvent) {
-            jstring jName = jniEnv->NewStringUTF("surfaceAttached");
-            jstring jPayload = jniEnv->NewStringUTF("{}");
-            callStaticJavaVoid(jniEnv, g_mid_onEvent, jName, jPayload);
-            jniEnv->DeleteLocalRef(jName);
-            jniEnv->DeleteLocalRef(jPayload);
+        if (env && g_mid_onEvent) {
+            jstring jName = env->NewStringUTF("surfaceAttached");
+            jstring jPayload = env->NewStringUTF("{}");
+            callStaticJavaVoid(env, g_mid_onEvent, jName, jPayload);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            if (jName) env->DeleteLocalRef(jName);
+            if (jPayload) env->DeleteLocalRef(jPayload);
         }
     } else {
         // ── Detach surface ─────────────────────────────────────────────
@@ -669,8 +708,10 @@ Java_com_simba_player_mpv_MPVLib_nativeTogglePlayPause(
     NativeMpvReadLease lease(nativePtr);
     if (!lease.valid()) return;
     mpv_handle *mpv = lease.get();
-    int pause;
-    mpv_get_property(mpv, "pause", MPV_FORMAT_FLAG, &pause);
+    int pause = 0;
+    if (mpv_get_property(mpv, "pause", MPV_FORMAT_FLAG, &pause) < 0) {
+        return;
+    }
     mpv_set_property_string(mpv, "pause", pause ? "no" : "yes");
 }
 
@@ -870,17 +911,22 @@ Java_com_simba_player_mpv_MPVLib_nativeLoadPlaylist(
     runMpvCommand(mpv, clearArgs, "playlist-clear", nullptr);
     jsize count = env->GetArrayLength(paths);
     for (jsize i = 0; i < count; i++) {
-        jstring jpath = (jstring)env->GetObjectArrayElement(paths, i);
+        jstring jpath = static_cast<jstring>(env->GetObjectArrayElement(paths, i));
+        if (!jpath) continue;
         const char *utfPath = env->GetStringUTFChars(jpath, nullptr);
-        const char *cmd[] = {"loadfile", utfPath, i == 0 ? "replace" : "append", nullptr};
-        int result = mpv_command(mpv, cmd);
-        if (result < 0) {
-            LOGE("playlist loadfile command failed at index %d: %s", static_cast<int>(i), mpv_error_string(result));
+        if (utfPath) {
+            const char *cmd[] = {"loadfile", utfPath, i == 0 ? "replace" : "append", nullptr};
+            int result = mpv_command(mpv, cmd);
+            if (result < 0) {
+                LOGE("playlist loadfile command failed at index %d: %s", static_cast<int>(i), mpv_error_string(result));
+            }
+            env->ReleaseStringUTFChars(jpath, utfPath);
         }
-        env->ReleaseStringUTFChars(jpath, utfPath);
+        env->DeleteLocalRef(jpath);
     }
     if (startIndex > 0) {
-        mpv_set_property(mpv, "playlist-pos", MPV_FORMAT_INT64, &startIndex);
+        int64_t pos = static_cast<int64_t>(startIndex);
+        mpv_set_property(mpv, "playlist-pos", MPV_FORMAT_INT64, &pos);
     }
 }
 
@@ -991,8 +1037,7 @@ Java_com_simba_player_mpv_MPVLib_nativeGetPosition(
     if (!lease.valid()) return 0;
     mpv_handle *mpv = lease.get();
     double pos = 0;
-    int result = mpv_get_property(mpv, "time-pos", MPV_FORMAT_DOUBLE, &pos);
-    LOGI("[PlaybackTrace][Native][getPosition] result=%d position=%f", result, pos);
+    mpv_get_property(mpv, "time-pos", MPV_FORMAT_DOUBLE, &pos);
     return pos;
 }
 
@@ -1003,7 +1048,6 @@ Java_com_simba_player_mpv_MPVLib_nativeGetDuration(
     if (!lease.valid()) return 0;
     mpv_handle *mpv = lease.get();
     double dur = 0;
-    int result = mpv_get_property(mpv, "duration", MPV_FORMAT_DOUBLE, &dur);
-    LOGI("[PlaybackTrace][Native][getDuration] result=%d duration=%f", result, dur);
+    mpv_get_property(mpv, "duration", MPV_FORMAT_DOUBLE, &dur);
     return dur;
 }

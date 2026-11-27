@@ -57,113 +57,6 @@ extern jmethodID g_mid_onError;
 static int64_t g_lastPositionForwardUs = 0;
 static int64_t g_lastCacheForwardUs = 0;
 
-// ── Helper: attach current thread to JVM and call static void method ────────
-
-static std::string jsonQuote(const char *value) {
-    std::string out;
-    out.push_back(34);
-    if (value) {
-        for (const unsigned char *p = reinterpret_cast<const unsigned char *>(value); *p; ++p) {
-            switch (*p) {
-                case 92:
-                    out.push_back(92);
-                    out.push_back(92);
-                    break;
-                case 34:
-                    out.push_back(92);
-                    out.push_back(34);
-                    break;
-                case 8:
-                    out.push_back(92);
-                    out.push_back('b');
-                    break;
-                case 12:
-                    out.push_back(92);
-                    out.push_back('f');
-                    break;
-                case 10:
-                    out.push_back(92);
-                    out.push_back('n');
-                    break;
-                case 13:
-                    out.push_back(92);
-                    out.push_back('r');
-                    break;
-                case 9:
-                    out.push_back(92);
-                    out.push_back('t');
-                    break;
-                default:
-                    if (*p < 0x20) {
-                        char escaped[7];
-                        out.push_back(92);
-                        snprintf(escaped, sizeof(escaped), "u%04x", *p);
-                        out += escaped;
-                    } else {
-                        out += static_cast<char>(*p);
-                    }
-            }
-        }
-    }
-    out.push_back(34);
-    return out;
-}
-
-static std::string jsonNode(const mpv_node *node) {
-    if (!node) return "null";
-
-    switch (node->format) {
-        case MPV_FORMAT_NONE:
-            return "null";
-        case MPV_FORMAT_STRING:
-            return jsonQuote(node->u.string);
-        case MPV_FORMAT_FLAG:
-            return node->u.flag ? "true" : "false";
-        case MPV_FORMAT_INT64: {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(node->u.int64));
-            return buf;
-        }
-        case MPV_FORMAT_DOUBLE: {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "%.6f", node->u.double_);
-            return buf;
-        }
-        case MPV_FORMAT_BYTE_ARRAY:
-            // Buffering properties are node/string/number values. Do not
-            // expose arbitrary binary data as malformed JSON.
-            return "null";
-        case MPV_FORMAT_NODE_ARRAY: {
-            std::string out = "[";
-            const mpv_node_list *list = node->u.list;
-            if (list) {
-                for (int i = 0; i < list->num; ++i) {
-                    if (i > 0) out += ",";
-                    out += jsonNode(&list->values[i]);
-                }
-            }
-            out += "]";
-            return out;
-        }
-        case MPV_FORMAT_NODE_MAP: {
-            std::string out = "{";
-            const mpv_node_list *list = node->u.list;
-            if (list) {
-                for (int i = 0; i < list->num; ++i) {
-                    if (i > 0) out += ",";
-                    out += jsonQuote(list->keys && list->keys[i] ? list->keys[i] : "");
-                    out += ":";
-                    out += jsonNode(&list->values[i]);
-                }
-            }
-            out += "}";
-            return out;
-        }
-        default:
-            return "null";
-    }
-}
-
 static thread_local JNIEnv *g_eventEnv = nullptr;
 static thread_local bool g_eventThreadAttached = false;
 
@@ -296,11 +189,11 @@ static void callJavaError(int code, const char *message, const char *requestId, 
     if (jRequestId) env->DeleteLocalRef(jRequestId);
 }
 
-static std::string currentMpvPath() {
-    if (!g_mpv) return {};
+static std::string currentMpvPath(mpv_handle *mpv) {
+    if (!mpv) return {};
     char *path = nullptr;
     std::string resolvedPath;
-    if (mpv_get_property(g_mpv, "path", MPV_FORMAT_STRING, &path) >= 0 && path) {
+    if (mpv_get_property(mpv, "path", MPV_FORMAT_STRING, &path) >= 0 && path) {
         resolvedPath = path;
         mpv_free(path);
     }
@@ -309,7 +202,8 @@ static std::string currentMpvPath() {
 
 // ── Event Loop ──────────────────────────────────────────────────────────────
 
-void eventLoop() {
+void eventLoop(mpv_handle *mpv) {
+    if (!mpv) return;
     TRACEI("Event loop started");
 
     // ── Why this drains instead of blocking ────────────────────────────────
@@ -338,7 +232,7 @@ void eventLoop() {
         // Sampled once per iteration (not per property) so a drain batch that
         // releases several coalesced property changes shares one clock read.
         const int64_t nowUs = nowMicros();
-        mpv_event *event = mpv_wait_event(g_mpv, 0);
+        mpv_event *event = mpv_wait_event(mpv, 0);
         if (!event) {
             LOGE("[PlaybackTrace][Native][eventLoop] mpv_wait_event returned null");
             continue;
@@ -346,7 +240,7 @@ void eventLoop() {
         if (event->event_id == MPV_EVENT_NONE) {
             // Queue is empty. Block until mpv has something for us; the
             // wake-up will also flush any coalesced property changes.
-            event = mpv_wait_event(g_mpv, -1);
+            event = mpv_wait_event(mpv, -1);
             if (!event) {
                 LOGE("[PlaybackTrace][Native][eventLoop] mpv_wait_event returned null");
                 continue;
@@ -365,12 +259,7 @@ void eventLoop() {
 
             case MPV_EVENT_FILE_LOADED: {
                 TRACEI("MPV_EVENT_FILE_LOADED");
-                char *path = nullptr;
-                std::string resolvedPath;
-                if (g_mpv && mpv_get_property(g_mpv, "path", MPV_FORMAT_STRING, &path) >= 0 && path) {
-                    resolvedPath = path;
-                    mpv_free(path);
-                }
+                const std::string resolvedPath = currentMpvPath(mpv);
                 const std::string payload = consumeFileLoadedPayload(resolvedPath);
                 LOGI("[PlaybackTrace][Native][fileLoaded] pathLength=%zu token=%s payloadLength=%zu",
                      resolvedPath.size(),
@@ -390,7 +279,7 @@ void eventLoop() {
                 LOGE("[PlaybackTrace][Native][eventLoop] MPV_EVENT_END_FILE reason=%d error=%d", prop ? prop->reason : -1, prop ? prop->error : -1);
                 const int reason = prop ? prop->reason : -1;
                 const int error = prop ? prop->error : -1;
-                const std::string resolvedPath = currentMpvPath();
+                const std::string resolvedPath = currentMpvPath(mpv);
                 const std::string requestId = activeLoadRequestId(resolvedPath);
                 const std::string payload = "{\"reason\":" + std::to_string(reason)
                     + ",\"error\":" + std::to_string(error)
@@ -494,8 +383,8 @@ void eventLoop() {
                 // messages are common during network playback and previously
                 // caused the JS controller to reload the stream mid-playback.
                 // Terminal failures are reported through MPV_EVENT_END_FILE.
-                if (log->level && strcmp(log->level, "fatal") == 0) {
-                    const std::string requestId = activeLoadRequestId(currentMpvPath());
+                if (log && log->level && strcmp(log->level, "fatal") == 0) {
+                    const std::string requestId = activeLoadRequestId(currentMpvPath(mpv));
                     // M5: mpv only promotes "fatal"-level log lines to a JS
                     // error. Fatal decoder/IO failures are not retryable
                     // without a different source, so we mark them
