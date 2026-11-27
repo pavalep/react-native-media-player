@@ -638,9 +638,25 @@ class MediaPlaybackService : Service() {
         currentPosition = extras?.getLong(EXTRA_POSITION_MS, 0L) ?: 0L
         currentDuration = extras?.getLong(EXTRA_DURATION_MS, 0L) ?: 0L
         isCurrentlyPlaying = extras?.getBoolean(EXTRA_IS_PLAYING, true) ?: true
+        val alreadyRunning = isRunning
         isRunning = true
         applyMetadata(currentTitle, currentArtist, currentAlbum, currentArtworkPath, "", "")
-        startForeground(NOTIFICATION_ID, buildNotification())
+        if (alreadyRunning) {
+            notificationManager.notify(NOTIFICATION_ID, buildNotification())
+        } else {
+            try {
+                startForeground(NOTIFICATION_ID, buildNotification())
+            } catch (e: Exception) {
+                // Android 12+ throws ForegroundServiceStartNotAllowedException when
+                // startForeground() is called while the app is backgrounded.
+                Log.w(
+                    TAG,
+                    "startForeground not allowed in current state; falling back to notify: ${e.message}",
+                )
+                isRunning = false
+                notificationManager.notify(NOTIFICATION_ID, buildNotification())
+            }
+        }
         // Phase C: the engine has already been handed the file by the
         // caller before this intent was built, so the ticker starts
         // against a live engine rather than an empty one.
